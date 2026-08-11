@@ -1,0 +1,43 @@
+sheet_name: 成交数据
+
+metadata:
+  batch_id: mendeley_hwfghkygy6_v1_shanghai_transactions
+  source_platform: lianjia_via_mendeley_hwfghkygy6
+  acquisition_method: open_research_repository
+  price_type: transaction
+  observation_type: individual
+  temporal_unit: deal_date
+  spatial_unit: point
+  unit: cny_per_m2
+  source_snapshot_date: 2025-11-03
+  dataset_url: https://data.mendeley.com/datasets/hwfghkygy6/1
+  dataset_doi: 10.17632/hwfghkygy6.1
+  license: CC BY 4.0
+
+columns:
+  city_key: city
+  district: district
+  community_name: community
+  deal_date: dealing_date
+  unit_price_cny_m2: "unit_price\n(yuan)"
+  total_price_10k_cny: "total_price\n(100 hundreds)"
+  building_area_m2: area (sqm)
+  lon: longitude
+  lat: latitude
+  bedroom_count: n_bedrooms
+  layout: 户型结构
+  floor_raw: 所在楼层
+  built_year: 建成年份
+  decoration: 装修
+  property_type: 房屋用途
+  source_url: 房源链接
+  source_page_id: 地址
+
+city_key_map:
+  上海: shanghai
+
+quality_flag_rules:
+  - source_column: district
+    operator: equals
+    value: 上海周边
+    flag: cross_city_record

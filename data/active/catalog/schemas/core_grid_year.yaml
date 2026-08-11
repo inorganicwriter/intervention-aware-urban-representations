@@ -1,0 +1,10 @@
+schema: core_grid_year_v1
+primary_key: [city_key, grid_id, year]
+fields:
+  city_key: {type: string, nullable: false, convention: lowercase_ascii}
+  grid_id: {type: string, nullable: false}
+  year: {type: int16, nullable: false}
+constraints:
+  unique_primary_key: true
+  canonical_crs: EPSG:4326
+  geometry_policy: geometry_is_stored_only_in_reference_grid_assets

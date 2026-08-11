@@ -1,0 +1,25 @@
+metadata:
+  batch_id: figshare_14398907_v1_beijing_2020_transactions
+  source_platform: lianjia_via_figshare_14398907
+  acquisition_method: open_research_repository
+  city_key: beijing
+  price_type: transaction
+  observation_type: individual
+  temporal_unit: month
+  spatial_unit: point
+  unit: cny_per_m2
+  source_snapshot_date: 2021-04-11
+  source_url: https://figshare.com/articles/dataset/Beijing_House_Price_csv/14398907
+
+columns:
+  source_record_id: OBJECTID
+  unit_price_cny_m2: UnitPrice
+  lon: WgsLng
+  lat: WgsLat
+
+date_parts:
+  deal_date:
+    year_column: DealYear
+    month_column: DealMonth
+    day: 1
+

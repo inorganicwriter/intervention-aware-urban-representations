@@ -1,0 +1,51 @@
+# ============================================================
+# Intervention-aware Urban Representation Learning
+# Python 3.11 (project production environment)
+#
+# This file provides the full environment suitable for
+# `pip install -r requirements.txt`.  For structured optional
+# dependencies (dev / spatial / collection / ml), see pyproject.toml
+# which is the authoritative dependency source.
+#
+# Install: pip install -r requirements.txt
+# ============================================================
+
+# ── Core (already verified) ─────────────────────────────────
+pandas>=2.2.0
+numpy>=2.0.0
+shapely>=2.0.0
+requests>=2.30.0
+pyproj>=3.7.0
+networkx>=3.0
+PyYAML>=6.0
+pyarrow>=17.0.0
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+openpyxl>=3.1.0
+xlrd>=2.0.1
+rdata>=1.0
+
+# ── Spatial data processing ────────────────────────────────
+geopandas>=1.0.0
+osmnx>=1.9.0
+
+# ── Remote sensing / GEE (optional but critical for VIIRS + Sentinel-2) ──
+earthengine-api>=0.1.400
+rasterio>=1.3.0
+
+# ── Street view ─────────────────────────────────────────────
+Pillow>=10.0.0
+
+# ── Deep learning (for CLIP/DINOv2 street view features) ────
+torch>=2.0.0
+# torchvision must match the installed torch build (e.g. +cu128 wheels from
+# https://download.pytorch.org/whl/cu128 for GPU builds)
+torchvision>=0.17.0
+open-clip-torch>=2.24.0
+
+# ── Testing ──────────────────────────────────────────────────
+pytest>=8.0.0
+
+# ── Browser automation (for housing_price_fetcher.py) ──────────
+playwright>=1.50.0
+playwright-stealth>=2.0.0

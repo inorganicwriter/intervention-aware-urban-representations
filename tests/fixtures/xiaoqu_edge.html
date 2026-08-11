@@ -1,0 +1,219 @@
+<!DOCTYPE html><html><head>
+  <meta http-equiv="Content-type" content="text/html;charset=UTF-8">
+  <meta name="ke-passport" content="LOGIN">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+  <meta name="renderer" content="webkit|ie-comp|ie-stand">
+  <meta name="format-detection" content="telephone=no">
+  <title>登录</title>
+  <link href="//s1.ljcdn.com/passport-web/assets/css/loginApp.ab9b8540691792615364ee8dd89f471f.css" rel="stylesheet">
+<style>.bk-captcha-btn {
+  width: 298px;
+  height: 42px;
+  line-height: 42px;
+  background-image: linear-gradient(180deg, #ffffff 0%, #f3f3f3 100%);
+  border: 1px solid #ccc;
+  border-radius: 2px;
+  min-width: 160px;
+  cursor: pointer;
+  opacity: 1;
+  padding: 0 46px;
+  box-sizing: border-box;
+  font-size: 14px;
+  text-align: center;
+}
+
+.bk-captcha-holder {
+  position: fixed;
+  _position: absolute;
+  z-index: 2147483647;
+  left: 0;
+  top: 0;
+  height: 100%;
+  width: 100%;
+  transition: opacity 0.5s;
+}
+.bk-captcha-holder.hide {
+  opacity: 0;
+  display: none;
+}
+
+.bk-captcha-holder .bk-captcha-ghost {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  _width: 2000px;
+  _height: 1000px;
+  background-color: black;
+  opacity: 0.6;
+}
+
+.bk-captcha-holder .bk-captcha-box {
+  width: 80%;
+  min-width: 230px;
+  max-width: 278px;
+  margin: auto auto;
+  background: #FCFCFC;
+  position: absolute;
+  top: 40%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  border-radius: 5px;
+  outline: none;
+  border: 1px solid #d1d1d1;
+}
+
+.bk-captcha-holder .bk-captcha-box .close-btn {
+  color: #cccccc;
+  margin: 9px;
+  line-height: 14px;
+  font-size: 18px;
+  position: absolute;
+  right: 0;
+  cursor: pointer;
+}
+
+.bk-captcha-holder .bk-captcha-box .title {
+  font-family: PingFangSC-Medium;
+  font-size: 22px;
+  color: #222222;
+  letter-spacing: -0.53px;
+  text-align: center;
+  line-height: 24px;
+  margin-top: 44px;
+}
+
+.bk-captcha-holder .bk-captcha-box .image-code-box {
+  width: 100%;
+  text-align: center;
+  margin-top: 23px;
+}
+
+.bk-captcha-holder .image-code-box .image-code {
+  width: 65%;
+  height: 60px;
+  cursor: pointer;
+}
+
+.bk-captcha-holder .image-code-box .tip {
+  display: inline-block;
+  font-family: PingFangSC-Regular;
+  font-size: 12px;
+  color: #999999;
+  letter-spacing: -0.07px;
+  line-height: 12px;
+  margin-top: 6px;
+  cursor: pointer;
+}
+
+.bk-captcha-holder .input-box {
+  position: relative;
+  width: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: row;
+  justify-content: center;
+  margin-bottom: 50px;
+}
+
+.bk-captcha-holder .input-box .input {
+  position: absolute;
+  width: 60%;
+  height: 100%;
+  outline: none;
+  bottom: 0;
+  border: none;
+  padding: 0;
+  z-index: -1;
+  opacity: 0;
+}
+
+.bk-captcha-holder .input-box div {
+  width: 44px;
+  height: 44px;
+  border-bottom: 2px solid #999999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+}
+
+.bk-captcha-holder .input-box div.on {
+  border-bottom: 2px solid #3072f6;
+}
+
+.bk-captcha-holder .input-box div.on::before {
+  float: right;
+  content: " ";
+  background-color: #3072f6;
+  letter-spacing: 0.88px;
+  width: 2px;
+  height: 26px;
+  animation: cursor-blinks 1.1s infinite steps(1, start);
+}
+
+@keyframes cursor-blinks {
+  0% {
+    opacity: 1;
+    display: block;
+  }
+
+  50% {
+    opacity: 0;
+    display: none;
+  }
+
+  100% {
+    opacity: 1;
+    display: block;
+  }
+}
+
+
+.bk-captcha-holder .input-box div:not(:last-child) {
+  margin-right: 15px;
+}
+
+.bk-captcha-holder .bk-captcha-toast {
+  color: #fff;
+  width: 146px;
+  height: 50px;
+  margin: auto auto;
+  position: absolute;
+  top: 55%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  border-radius: 5px;
+  outline: none;
+  background: #222222;
+  box-shadow: 0 5px 10px 0 rgba(0, 0, 0, 0.20);
+  text-align: center;
+  line-height: 50px;
+  transition: opacity 0.5s;
+  display: none;
+  opacity: 0;
+}
+</style><script src="https://dlswbr.baidu.com/heicha/mw/abclite-2011-s2.js" async=""></script><script src="https://file.ljcdn.com/nebula/marketing/jsencrypt.min_1681707491312.js" async=""></script></head>
+<body>
+<div id="mainApp"><div data-reactroot="" class="composer-app-wrapper"><div class="composer-app composer-new-app"><div id="login"><header class="wrapper-header"><div class="logo-login"><div class="default-logo"></div></div></header><div class="wrapper-content"><div class="bg"><div class="img default-img"></div></div><div class="wrapper-window-login"><div class="window-login"><div class="header-form-login"></div><div class="wrapper-form-login"><div class="tab-login"><p class="p-username"><!-- react-text: 52 -->用户<!-- /react-text --><!-- react-text: 51 -->登录<!-- /react-text --></p></div><div class="wrapper-form"><form class="ant-form ant-form-horizontal"><input type="text" class="ant-input text username" placeholder="请输入手机号" value="" id="username" data-__meta="[object Object]"><input type="password" class="ant-input text password" placeholder="请输入密码" value="" id="password" data-__meta="[object Object]"><div class="frame-area-msg"></div><button disabled="" type="submit" class="ant-btn btn-login ant-btn-primary"><span>登 录</span></button><a class="btn-switch" href="/login/phone-code">手机快捷登录</a><!-- react-empty: 48 --><div class="protocol-wrapper"><label class="ant-checkbox-wrapper"><span class="ant-checkbox"><input type="checkbox" class="ant-checkbox-input" value="on"><span class="ant-checkbox-inner"></span></span><span><span class="protocol-text"><!-- react-text: 61 -->我已阅读并同意<!-- /react-text --><a href="https://www.ke.com/zhuanti/protocol" target="_blank" rel="noopener noreferrer" class="protocol-link">贝壳隐私政策</a><!-- react-text: 63 -->及<!-- /react-text --><a href="https://www.ke.com/zhuanti/serviceProtocol" target="_blank" rel="noopener noreferrer" class="protocol-link">贝壳用户服务协议</a><!-- react-text: 65 -->未注册过的手机号，验证通过后自动注册贝壳账号<!-- /react-text --></span></span></label></div></form></div><div class="captcha-hidden" id="1783351320155"></div></div><div class="footer-form-login"><div class="area-help"><a href="/register?service=https://www.lianjia.com/user/checklogin?redirect=https%3A%2F%2Fbj.lianjia.com%2Fxiaoqu%2F&amp;account=customer">没有账号？点此注册</a><a href="/login/reset-pwd">忘记密码</a></div></div><!-- react-empty: 16 --></div></div></div><div class="wrapper-footer"><footer class="footer-login"><p>链家网（北京）科技有限公司 | 网络经营许可证 京ICP备16057509号-2</p><p><!-- react-text: 21 -->© Copyright©2010-<!-- /react-text --><!-- react-text: 22 -->2026<!-- /react-text --><!-- react-text: 23 --> 链家网<!-- /react-text --><a href="https://lianjia.com">Lianjia.com</a><!-- react-text: 25 -->版权所有<!-- /react-text --></p></footer></div></div></div></div></div>
+<div id="loginHolder" style="top: 0px; left: 0px; position: fixed; width: 0; height: 0; opacity: 0; z-index: -999; background-color: rgb(0, 0, 0);"><iframe src="/authentication/sdk/init?version=2.0" frameborder="0" style="filter:progid:DXImageTransform.Microsoft.Alpha(opacity:0);position:absolute;top:0px;left:0px;width:100%;height:100%;z-index:-1"></iframe></div>
+<script>
+  window.__INITIAL_STATE__ = {
+    frame: {
+      viewStyle: {},
+      adxDomain: "https:\/\/ex.ke.com\/",
+      endpoint: {
+        adxDomain: "https:\/\/ex.ke.com\/",
+        captchaDomain: "https:\/\/captcha.lianjia.com"
+      }
+    }
+  };
+  window.__PUBLIC_PATH__ = "\/\/s1.ljcdn.com\/passport-web\/";
+</script>
+<script src="//s1.ljcdn.com/captcha-js-sdk-v2/captcha.js?v=2"></script>
+<script src="//s1.ljcdn.com/risk-control/static/keRiskControl.js"></script>
+<script src="//s1.ljcdn.com/passport-web/assets/js/loginApp.d5361066f07fc2ddec0b.js"></script><div id="__login_captcha__"></div><div id="riskcaptcha"></div>
+
+
+</body></html>

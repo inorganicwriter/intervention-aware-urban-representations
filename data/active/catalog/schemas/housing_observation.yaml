@@ -1,0 +1,64 @@
+schema: housing_observation_v2
+description: Source-preserving contract for housing transactions, listings, snapshots, and indices.
+primary_key: [source_platform, source_record_id]
+
+acquisition_scope:
+  discovery: all_available_cities_years_and_records
+  filtering_stage: downstream_quality_and_causal_admission_only
+  raw_inputs: immutable
+
+required_columns:
+  - source_record_id
+  - source_platform
+  - acquisition_method
+  - batch_id
+  - city_key
+  - observation_type
+  - price_type
+  - temporal_unit
+  - source_snapshot_date
+  - deal_date
+  - unit_price_cny_m2
+  - total_price_10k_cny
+  - building_area_m2
+  - lon
+  - lat
+  - source_url
+  - raw_row_number
+  - quality_flags
+
+controlled_values:
+  acquisition_method: [licensed_export, platform_export, wayback_archive, official_open_data, open_research_repository, permitted_web_collection]
+  price_type: [transaction, listing, platform_estimate, index]
+  spatial_unit: [point, community, grid, district, city]
+  temporal_unit: [deal_date, snapshot, month, year, cross_section]
+  observation_type: [individual, community_statistic, grid_statistic, district_index, city_index]
+  unit: [cny_per_m2, ten_thousand_cny, index]
+
+semantic_requirements:
+  transaction:
+    required_any:
+      - [unit_price_cny_m2]
+      - [total_price_10k_cny, building_area_m2]
+    required: [deal_date]
+  listing:
+    required: [source_snapshot_date, unit_price_cny_m2]
+  platform_estimate:
+    required: [source_snapshot_date, unit_price_cny_m2]
+  index:
+    required: [source_snapshot_date]
+
+provenance_fields:
+  - source_file_sha256
+  - source_page_id
+  - source_snapshot_date
+  - raw_row_number
+  - pipeline_version
+  - import_manifest
+
+causal_restrictions:
+  - Never silently combine transaction, listing, estimate, and index prices.
+  - Never broadcast a cross-section or annual observation to unobserved months.
+  - Preserve acquisition time separately from the economic observation date.
+  - Donor selection may read treatment-preceding observations only.
+  - Website access requires platform permission and must not bypass access controls.

@@ -1,0 +1,14 @@
+{
+  "schema": "treatment_unit_list_v1",
+  "source": "outputs\\housing_did_spatial_feasibility\\treated_grid_registry.parquet",
+  "ordering": [
+    "opening_date",
+    "city_key",
+    "grid_id",
+    "station_event_id"
+  ],
+  "treatment_units": 5048,
+  "unique_city_grid": true,
+  "initial_queue_status": "pending",
+  "outcome_family_queue_rows": 20192
+}

@@ -1,0 +1,9 @@
+{
+  "schema": "counterfactual_grid_universe_v1",
+  "cities": 44,
+  "all_grids": 3839581,
+  "experimental_grids": 5048,
+  "nonexperimental_grids": 3834533,
+  "selection_performed": false,
+  "note": "known_station_contamination is an audit flag, not a silent prefilter"
+}

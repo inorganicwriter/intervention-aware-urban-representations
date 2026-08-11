@@ -1,0 +1,29 @@
+metadata:
+  batch_id: mendeley_wpv5zn9rxp_v1_chengdu_fang_transactions
+  source_platform: fang_via_mendeley_wpv5zn9rxp
+  acquisition_method: open_research_repository
+  city_key: chengdu
+  price_type: transaction
+  observation_type: individual
+  temporal_unit: month
+  spatial_unit: point
+  unit: cny_per_m2
+  source_snapshot_date: 2023-11-21
+  source_url: https://data.mendeley.com/datasets/wpv5zn9rxp/1
+  source_coordinate_crs: unresolved_mixed_or_misaligned_china_coordinates
+  coordinate_conversion_applied: false
+
+columns:
+  community_id: id
+  community_name: name
+  unit_price_cny_m2: price
+  building_area_m2: area
+  lon: longitude
+  lat: latitude
+  bedroom_count: room
+  built_year: construction
+
+date_formats:
+  deal_date:
+    source_column: time
+    format: "%Y%m"

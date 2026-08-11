@@ -1,0 +1,74 @@
+# Windows reserved device name (WSL artifact, cannot be git-tracked)
+nul
+
+# Secrets — NEVER commit
+config.yaml
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Data outputs (large, regeneratable)
+outputs/
+data/raw/
+data/labels/
+data/staging/
+data/curated/
+data/reference/
+data/panels/
+data/*.zip
+data/高德poi数据/
+data/catalog/snapshots/
+data/catalog/migrations/
+data/catalog/inventories/
+.runtime/
+cache
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Virtual env
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Temporary
+*.tmp
+*.log
+.tmp/
+tmp/
+.r-lib/
+
+# Generated causal/model releases
+data/causal/releases/
+data/model_inputs/
+
+# Actual on-disk layout (data/active, data/archive): only the small curated
+# catalog files and treatment lists are versioned; everything heavy or
+# regeneratable is ignored.
+data/archive/
+data/active/curated/
+data/active/labels/
+data/active/panels/
+data/active/reference/
+data/active/causal/accessibility_features/
+data/active/causal/feature_store/
+data/active/causal/formal_matching_inputs/
+data/active/causal/grid_universe/
+data/active/causal/transit_snapshots/
+data/active/causal/releases/
+data/active/catalog/snapshots/
+data/active/catalog/migrations/
+data/active/catalog/inventories/
+data/active/model_inputs/

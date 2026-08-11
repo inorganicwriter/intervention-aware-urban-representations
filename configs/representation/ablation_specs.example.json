@@ -1,0 +1,42 @@
+[
+  {
+    "name": "main",
+    "overrides": {"epochs": 100, "batch_size": 64, "use_images": false}
+  },
+  {
+    "name": "no_prediction_head",
+    "overrides": {"epochs": 100, "pred_weight": 0.0}
+  },
+  {
+    "name": "pure_prediction",
+    "overrides": {"epochs": 100, "pred_weight": 1.0}
+  },
+  {
+    "name": "no_representation_loss",
+    "overrides": {"epochs": 100, "rep_alpha": 0.0}
+  },
+  {
+    "name": "conditioned_opening_year",
+    "overrides": {"epochs": 100, "conditioning": "opening_year"}
+  },
+  {
+    "name": "images_meanmax_pool",
+    "overrides": {"epochs": 100, "use_images": true, "image_pooling": "meanmax"}
+  },
+  {
+    "name": "no_se_shrinkage",
+    "overrides": {"epochs": 100, "se_shrinkage": false}
+  },
+  {
+    "name": "neg_queue_2048",
+    "overrides": {"epochs": 100, "queue_size": 2048}
+  },
+  {
+    "name": "learnable_temperature",
+    "overrides": {"epochs": 100, "learnable_temperature": true}
+  },
+  {
+    "name": "uncertainty_weighted",
+    "overrides": {"epochs": 100, "uncertainty_weighted": true}
+  }
+]

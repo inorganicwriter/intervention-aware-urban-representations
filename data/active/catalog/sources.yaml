@@ -1,0 +1,59 @@
+version: 1
+updated: 2026-07-13
+sources:
+  gadm:
+    provider: GADM
+    asset_type: administrative_boundary
+    native_crs: EPSG:4326
+    license_review_required: true
+  amap_transit:
+    provider: Amap
+    asset_type: metro_station
+    native_crs: GCJ-02
+    canonical_crs: EPSG:4326
+  openstreetmap:
+    provider: OpenStreetMap contributors
+    asset_type: transit_and_road_network
+    license: ODbL
+    native_crs: EPSG:4326
+  wikipedia:
+    provider: Wikipedia
+    asset_type: metro_station_metadata
+  wikidata:
+    provider: Wikidata
+    asset_type: metro_station_metadata
+    license: CC0
+  gee_viirs:
+    provider: Google Earth Engine / NASA VIIRS VNP46A2.002
+    product_id: NASA/VIIRS/002/VNP46A2
+    asset_type: night_lights
+  gee_sentinel2:
+    provider: Google Earth Engine / Copernicus Sentinel-2
+    asset_type: remote_sensing_index
+  worldpop:
+    provider: WorldPop
+    asset_type: population
+  amap_poi_archive:
+    provider: Amap historical archive
+    asset_type: point_of_interest
+    access_and_license_review_required: true
+  nbs_70city:
+    provider: National Bureau of Statistics of China
+    asset_type: housing_price_index
+  lianjia_purchased:
+    provider: purchased secondary-market dataset
+    asset_type: housing_transaction
+    redistribution_prohibited_until_reviewed: true
+  internet_archive_wayback:
+    provider: Internet Archive snapshots of Lianjia, Beike and Anjuke
+    asset_type: historical_housing_page
+    usage: academic_research_only
+  anjuke_cross_section:
+    provider: Anjuke-derived external dataset
+    asset_type: housing_listing_and_aoi
+    redistribution_prohibited_until_reviewed: true
+  baidu_aoi:
+    provider: Baidu Maps-derived AOI dataset
+    asset_type: community_polygon
+    native_crs: provider_dependent
+    license_review_required: true

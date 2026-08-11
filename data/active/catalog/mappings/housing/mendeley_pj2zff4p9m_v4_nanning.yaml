@@ -1,0 +1,21 @@
+sheet_name: HOUSING PRICE
+
+metadata:
+  batch_id: mendeley_pj2zff4p9m_v4_nanning_2018_community_prices
+  source_platform: lianjia_fang_anjuke_via_mendeley_pj2zff4p9m
+  acquisition_method: open_research_repository
+  city_key: nanning
+  price_type: platform_estimate
+  observation_type: community_statistic
+  temporal_unit: year
+  spatial_unit: community_point
+  unit: cny_per_m2
+  source_snapshot_date: 2018-12-31
+  source_url: https://data.mendeley.com/datasets/pj2zff4p9m/4
+
+columns:
+  community_name: CN
+  unit_price_cny_m2: AHP
+  lon: LONG
+  lat: LAT
+

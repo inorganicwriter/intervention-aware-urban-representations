@@ -1,0 +1,288 @@
+version: 4
+updated: 2026-07-23
+canonical_key:
+  grid_year: [city_key, grid_id, year]
+  crs: EPSG:4326
+datasets:
+  metro_station_sources_v1:
+    layer: raw
+    path: data/archive/raw/transit/{source}/{city_key}
+    sources: [amap_transit, openstreetmap, wikipedia, wikidata]
+    coverage: {cities: 44}
+    status: complete
+  city_boundaries_v1:
+    layer: reference
+    path: data/active/reference/boundaries
+    source: gadm
+    spatial_unit: city
+    coverage: {cities: 44, temporal: static}
+    status: complete
+  city_grids_500m_v1:
+    layer: reference
+    path: data/active/reference/grids
+    source: city_boundaries_v1
+    primary_key: [city_key, grid_id]
+    spatial_unit: 500m_grid
+    coverage: {cities: 44, rows: 3839581}
+    status: complete
+  metro_treatment_v1:
+    layer: curated
+    path: data/active/curated/treatment
+    sources: [amap_transit, openstreetmap, wikipedia, wikidata]
+    primary_key: [city_key, grid_id, year]
+    coverage: {cities: 44, years: [2010, 2025], rows: 61433296}
+    status: complete_with_source_uncertainty
+  viirs_grid_month:
+    layer: curated
+    path: data/active/curated/viirs/monthly
+    source: gee_viirs
+    source_product: NASA/VIIRS/002/VNP46A2
+    primary_key: [city_key, grid_id, year, month]
+    coverage: {cities: 44, months: 6864}
+    spatial_aggregation: center_in_cell_mean
+    provenance_fields: [valid_days_mean, source_point_count]
+    quality: {duplicate_rows: 0}
+    status: complete
+  viirs_grid_year:
+    layer: curated
+    path: data/active/curated/viirs_annual_aggregated
+    source: viirs_grid_month
+    source_product: NASA/VIIRS/002/VNP46A2
+    primary_key: [city_key, grid_id, year]
+    coverage: {cities: 44, years: [2012, 2024]}
+    spatial_aggregation: monthly_grid_mean_annual_mean
+    provenance_fields: [months_available, mean_valid_days, total_source_points, avg_rad_sd]
+    quality: {duplicate_rows: 0}
+    status: complete
+  sentinel2_grid_year:
+    layer: curated
+    path: data/active/curated/sentinel2
+    source: gee_sentinel2
+    primary_key: [city_key, grid_id, year]
+    coverage: {cities: 44, years: [2014, 2024], rows: 36832130}
+    spatial_aggregation: reduceRegions_mean_per_grid
+    quality: {duplicate_rows: 0}
+    status: complete
+  population_grid_year:
+    layer: curated
+    path: data/active/curated/population
+    sources: [worldpop_gee, worldpop_r2024b]
+    source_years: {worldpop_gee: [2010, 2014], worldpop_r2024b: [2015, 2024]}
+    source_transition: {year: 2015, note: product jump accepted by design, grid_level_ratios_range_250x}
+    primary_key: [city_key, grid_id, year]
+    coverage: {cities: 44, years: [2010, 2024], rows: 53214235}
+    quality: {duplicate_rows: 0}
+    status: complete
+  poi_grid_year_v1:
+    layer: curated
+    path: data/active/curated/poi
+    source: amap_poi_archive
+    primary_key: [city_key, grid_id, year]
+    coverage: {cities: 44, years: [2012, 2024], city_years: 572, rows: 14394715}
+    breaks: {2018: source_and_taxonomy_change, 2019: vendor_level_shift}
+    status: complete_with_documented_breaks
+  road_network_grid_v1:
+    layer: curated
+    path: data/active/curated/road_network
+    source: openstreetmap
+    primary_key: [city_key, grid_id]
+    coverage: {cities: 44, temporal: 2026_cross_section, rows: 3839581}
+    status: complete_cross_section
+  location_features:
+    layer: curated
+    path: data/active/curated/location_features
+    source: city_centers
+    primary_key: [city_key, grid_id]
+    coverage: {cities: 44, rows: 3839581}
+    variables: [dist_main_km, dist_nearest_subcentre_km, dist_nearest_centre_km]
+    method: utm_planar_distance_from_composite_centres
+    quality: {duplicate_rows: 0}
+    status: complete
+  accessibility_features:
+    layer: causal
+    path: data/active/causal/accessibility_features
+    source: [canonical_station_events, wikidata_adjacency]
+    primary_key: [treatment_order]
+    coverage: {treated_grids: 5048}
+    variables:
+      - dist_nearest_station_m
+      - stations_500m / stations_800m / stations_1500m
+      - lines_in_1500m
+      - network_closeness
+      - is_transfer_station
+      - is_terminal_station
+      - is_new_line / is_extension
+      - stations_opened_same_month
+    method: wikidata_p197_graph_pre_treatment_snapshot
+    quality: {duplicate_rows: 0}
+    status: complete
+  wikidata_adjacency:
+    layer: reference
+    path: data/active/reference/transit/wikidata_adjacency.parquet
+    source: wikidata_sparql_p197
+    primary_key: [station_entity_id, adj_station_entity_id, city_key]
+    coverage: {cities: 44, edges: 19602}
+    status: complete
+  transit_snapshots:
+    layer: causal
+    path: data/active/causal/transit_snapshots
+    source: [canonical_station_events, wikidata_adjacency]
+    primary_key: [city_key, grid_id, opening_month]
+    coverage: {cities: 44, snapshots: 482, treated_months: 5048}
+    variables:
+      - dist_nearest_station_m
+      - stations_500m / stations_800m / stations_1500m
+      - lines_in_1500m
+      - network_closeness
+    method: per_opening_month_pre_treatment_snapshot_all_grids
+    quality: {duplicate_rows: 0}
+    status: complete
+  housing_raw_sources:
+    layer: raw
+    path: data/archive/raw/housing
+    classes:
+      platform_exports: data/raw/housing/platform_exports
+      web_archives: data/raw/housing/web_archives
+      open_data: data/raw/housing/open_data
+      spatial_support: data/raw/housing/spatial_support
+    inventory: outputs/housing_acquisition/housing_raw_inventory.csv
+    migration_manifest: outputs/housing_acquisition/housing_raw_path_migration.csv
+    coverage: {files: 1710, bytes: 2210944189}
+    quality: {sha256_complete: true, source_filenames_modified: false}
+    status: organized_and_audited
+  nbs_hpi_city_year_v1:
+    layer: label
+    path: data/active/labels/housing/city_hpi/hpi_city_yearly.parquet
+    source: nbs_70city
+    spatial_unit: city
+    coverage: {cities: 37, years: [2021, 2026]}
+    deprecated_expanded_asset: data/labels/housing/city_hpi/all_cities_hpi_yearly.parquet
+    status: city_level_valid_expanded_grid_assets_deprecated
+  housing_community_registry_v1:
+    layer: reference
+    path: data/active/reference/housing/community_registry.parquet
+    sources: [lianjia_purchased, anjuke_cross_section, internet_archive_wayback, beijing_independent_aoi]
+    primary_key: [community_id]
+    coverage: {cities: 44, rows: 166079, unique_keys: 166079, spatially_located: 160279, unlocated_wayback_independent: 5800}
+    status: complete_with_unlocated_independent_communities
+  housing_community_aoi_v1:
+    layer: reference
+    path: data/active/reference/housing/community_aoi.parquet
+    sources: [beijing_independent_aoi, anjuke_boundary, transaction_hull, calibrated_buffer]
+    primary_key: [aoi_variant, community_id]
+    coverage: {cities: 44, rows: 351081, primary_aois: 160279, admitted_aois: 351077}
+    crs: EPSG:4326
+    metric_processing: city_specific_utm
+    quality: {invalid_geometries: 0, duplicate_keys: 0, primary_outside_reference_grid: 1}
+    status: complete_with_explicit_exclusion
+  housing_community_grid_bridge_v1:
+    layer: reference
+    path: data/active/reference/housing/community_grid_bridge.parquet
+    source: housing_community_aoi_v1
+    primary_key: [aoi_variant, community_id, grid_id]
+    coverage: {cities: 44, rows: 1156224, admitted_aoi_variants: 351077}
+    spatial_aggregation: aoi_grid_intersection_area_weight
+    quality: {duplicate_keys: 0, maximum_weight_sum_error: 4.441e-16, minimum_admitted_raw_coverage: 0.9999978}
+    status: complete
+  housing_observations_v1:
+    layer: curated
+    path: data/active/curated/housing/housing_observations
+    sources: [lianjia_purchased, internet_archive_wayback, anjuke_cross_section, open_research]
+    primary_key: [observation_id]
+    status: complete_source_preserving
+  housing_grid_month_v1:
+    layer: panel
+    path: data/active/panels/housing_grid_month
+    primary_key: [city_key, grid_id, observed_month]
+    partitioning: city_file_with_source_companion
+    coverage: {cities: 44}
+    status: complete
+  housing_grid_quarter_v1:
+    layer: panel
+    path: data/active/panels/housing_grid_quarter
+    primary_key: [city_key, grid_id, observed_quarter]
+    partitioning: city_file_with_source_companion
+    coverage: {cities: 44}
+    status: complete
+  housing_grid_year_v1:
+    layer: panel
+    path: data/active/panels/housing_grid_year
+    primary_key: [city_key, grid_id, observed_year]
+    partitioning: city_file_with_source_companion
+    coverage: {cities: 44}
+    status: complete
+  canonical_metro_station_events_v1:
+    layer: reference
+    path: data/active/reference/transit/canonical_station_events.parquet
+    source: wikidata_direct_P1619
+    primary_key: [station_event_id]
+    coverage: {cities: 44, years: [1966, 2025], rows: 6288, affecting_observed_housing_grids_1500m: 6047}
+    quality: {duplicate_keys: 0, missing_year_imputation: false, city_first_line_fallback: false}
+    status: complete_for_pre_estimation_review
+  canonical_metro_station_events_resolved_v2:
+    layer: reference
+    path: data/active/reference/transit/canonical_station_events_resolved.parquet
+    sources: [canonical_metro_station_events_v1, station_issue_resolution_v1]
+    primary_key: [station_event_id]
+    coverage: {cities: 44, rows: 5615, primary_design_excluded_events: 26}
+    quality: {duplicate_keys: 0, unresolved_spatial_issues: 0, reviewed_decisions: 58}
+    status: complete_for_ddr001_spatial_design
+  competing_transit_events_v1:
+    layer: reference
+    path: data/active/reference/transit/competing_transit_events.parquet
+    source: station_issue_resolution_v1
+    primary_key: [station_event_id]
+    coverage: {rows: 2, modes: [yunba, tram]}
+    status: complete_for_temporal_risk_set_design
+  excluded_station_events_v1:
+    layer: reference_audit
+    path: data/active/reference/transit/excluded_station_events.csv
+    source: station_issue_resolution_v1
+    coverage: {rows: 68, outside_active_city_universe: 18, merged_duplicates: 22, primary_design_excluded: 26, competing_events: 2}
+    status: complete
+  lianjia_transaction_grid_year_v1:
+    layer: label
+    path: data/active/labels/housing/transaction_price/lianjia
+    source: lianjia_purchased
+    primary_key: [city_key, grid_id, year]
+    coverage: {cities: 22, rows: 211337}
+    variants: [nearest_grid, aoi_buffer]
+    status: blocked_pending_explicit_variant_policy
+  wayback_housing_grid_year_v1:
+    layer: label
+    path: data/active/labels/housing/historical_snapshot/wayback
+    source: internet_archive_wayback
+    primary_key: [city_key, grid_id, year]
+    coverage: {cities: 42, rows: 11922}
+    status: usable_with_caveats
+  anjuke_listing_grid_v1:
+    layer: label
+    path: data/active/labels/housing/listing_price/anjuke
+    source: anjuke_cross_section
+    primary_key: [city_key, grid_id]
+    coverage: {cities: 43, rows: 63997, temporal: cross_section}
+    status: complete_cross_section
+  causal_response_artifact_v1:
+    layer: causal_release
+    path: data/active/causal/releases/{release_id}/response_artifact.parquet
+    primary_key: [treatment_order, outcome_family, outcome, event_time, specification_id]
+    expected_rows_per_treatment: 27
+    production_contract:
+      treatment_rows: 5048
+      outcome_family_tasks: 20192
+      immutable_release: true
+      source_hashes_required: true
+      partial_release_for_training: false
+    publisher: scripts/causal_r/build_response_artifact.py
+    status: code_complete_awaiting_production_run
+  intervention_pretraining_dataset_v1:
+    layer: model_input_release
+    path: data/model_inputs/{dataset_id}
+    primary_unit_key: [treatment_order]
+    target_key: [treatment_order, outcome_family, outcome, event_time, specification_id]
+    feature_timing: opening_year_minus_1_2_3
+    split_unit: city_key
+    normalization: fit_train_cities_only
+    outputs: [unit_features.parquet, response_targets.parquet, sample_index.parquet, normalization.json, manifest.json]
+    publisher: scripts/causal_r/build_pretraining_dataset.py
+    status: code_complete_awaiting_response_release

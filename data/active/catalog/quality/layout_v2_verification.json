@@ -1,0 +1,10 @@
+{
+  "verified_at_utc": "2026-07-13T16:14:55.134660+00:00",
+  "snapshot": "data/catalog/snapshots/pre_layout_v2_20260713_files.csv",
+  "checked_files": 2896,
+  "missing_files": [],
+  "size_changed": [],
+  "broken_legacy_links": [],
+  "canonical_layers": {},
+  "ok": true
+}

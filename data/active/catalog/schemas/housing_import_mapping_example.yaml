@@ -1,0 +1,49 @@
+schema: housing_import_mapping_v1
+# Optional for Excel workbooks; defaults to the first sheet.
+sheet_name: Sheet1
+metadata:
+  batch_id: example_authorized_export_2026_07
+  source_platform: example_provider
+  acquisition_method: licensed_export
+  price_type: transaction
+  observation_type: individual
+  temporal_unit: deal_date
+  spatial_unit: point
+  unit: cny_per_m2
+  source_snapshot_date: '2026-07-22'
+
+# Keys are canonical housing_observation_v2 fields; values are input columns.
+columns:
+  source_record_id: record_id
+  city_key: city
+  district: district
+  community_name: community
+  deal_date: deal_date
+  unit_price_cny_m2: unit_price
+  total_price_10k_cny: total_price
+  building_area_m2: area_m2
+  lon: longitude
+  lat: latitude
+  layout: layout
+  built_year: built_year
+  source_url: source_url
+
+# Optional: construct a canonical date when the source stores separate parts.
+# The importer uses the first day when only year/month precision is available;
+# temporal_unit must preserve that precision explicitly.
+date_parts:
+  deal_date:
+    year_column: deal_year
+    month_column: deal_month
+    day: 1
+
+city_key_map:
+  北京: beijing
+  上海: shanghai
+
+# Optional source-preserving flags. Rules mark rows but never delete them.
+quality_flag_rules:
+  - source_column: district
+    operator: equals
+    value: 示例跨城区域
+    flag: cross_city_record

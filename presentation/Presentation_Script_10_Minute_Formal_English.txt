@@ -1,0 +1,253 @@
+LEARNING HOW CITIES RESPOND
+10-MINUTE BILINGUAL PRESENTATION SCRIPT
+Speaker: Sirun Li | Mentor: Yunhan Zheng
+
+USAGE NOTE
+Speak only the English paragraphs. The Chinese text is for preparation and comprehension and is not included in the timing.
+
+使用说明
+现场只讲英文段落。中文仅用于准备和理解，不计入十分钟时长。
+
+Target pace: about 140 to 145 English words per minute, with a short pause at each slide change.
+
+建议语速：每分钟约 140 至 145 个英文单词，每次换页时短暂停顿。
+
+TERMINOLOGY
+treated grid = 处理网格
+donor grid = 候选对照网格
+response label = 响应标签
+generalized synthetic control, or GSC = 广义合成控制
+Matrix Completion = 矩阵补全
+representation = 表征
+embedding = 嵌入向量
+
+PRONUNCIATION GUIDE
+GSC: say “G-S-C”
+POI: say “P-O-I”
+Mahalanobis: “mah-ha-LAN-oh-bis”
+ReLU: “REE-loo”
+NaN: say “N-A-N”
+
+NUMBER GUIDE
+5,048: “five thousand and forty-eight”
+7,671: “seven thousand six hundred and seventy-one”
+136,296: “one hundred and thirty-six thousand two hundred and ninety-six”
+239,591: “two hundred and thirty-nine thousand five hundred and ninety-one”
+3,771,800: “three million seven hundred and seventy-one thousand eight hundred”
+
+
+SLIDE 1 | TITLE | about 0:25
+
+Good morning. My name is Sirun Li, and my mentor is Yunhan Zheng. This project is called “Learning How Cities Respond.” Its main idea is simple. Two places should be considered similar when they respond similarly to the same intervention, not only when they look similar before it.
+
+中文：大家早上好。我叫 Sirun Li，我的导师是 Yunhan Zheng。这个项目名为“Learning How Cities Respond”。核心思想很简单：判断两个地区是否相似，不应只看干预前是否相像，还应看它们面对同一种干预时是否产生相似响应。
+
+
+SLIDE 2 | RESEARCH QUESTION | about 0:55
+
+This study asks two linked questions. First, how does a new metro station change nearby urban activity? Second, can pre-opening conditions predict which places will respond in similar ways?
+
+中文：本研究回答两个相互关联的问题。第一，新地铁站开通后，会如何改变周边城市活动？第二，能否利用开通前的地区特征，预测哪些地区会产生相似的响应？
+
+The study covers 44 Chinese metro cities and station openings from 2010 to 2025. The outcomes include points of interest, or POI, night lights, population, and housing prices.
+
+中文：研究覆盖中国 44 个地铁城市以及 2010 至 2025 年间的地铁站开通事件。结果变量包括兴趣点，也就是 POI、夜间灯光、人口和房价。
+
+The spatial unit is a fixed 500-meter by 500-meter grid. A treated grid contains the coordinates of a station. Treatment is the official opening of that station. I exclude the partial opening month. The next complete month, or the next complete year for annual data, is event time one.
+
+中文：空间单元是固定的 500 米乘 500 米网格。只要某个网格包含地铁站坐标，它就是处理网格。Treatment 定义为该地铁站正式开通。由于开通当月只受到部分处理，我将其排除。对月度数据而言，下一个完整月份是事件时间 1；对年度数据而言，下一个完整年份是事件时间 1。
+
+
+SLIDE 3 | RESEARCH WORKFLOW | about 0:40
+
+The project has three steps, and I will present them in the same order.
+
+中文：整个项目分为三个步骤，我也会按照这一顺序进行汇报。
+
+Step one is matching. I define treated grids and donor grids, then compare them using only pre-opening information. Step two is counterfactual estimation. I estimate what would have happened without the station opening and convert each estimated response into a label.
+
+中文：第一步是匹配。我首先定义处理网格和候选对照网格，并且只使用地铁开通前的信息进行比较。第二步是反事实估计。我估计如果地铁站没有开通，处理网格原本会如何变化，并将每一个估计响应转化为标签。
+
+Step three is representation learning. I train an encoder so that places with similar response labels become close in the learned space. Therefore, the credibility of the causal design must be established before evaluating the embedding.
+
+中文：第三步是表征学习。我训练一个编码器，使响应标签相似的地区在学习空间中更加接近。因此，在评价 embedding 之前，必须先确认因果设计和响应标签是否可信。
+
+
+SLIDE 4 | DATA | about 0:50
+
+This table organizes each variable by spatial and temporal unit, coverage, frequency, source, and role in the research design.
+
+中文：这张表按照时空单元、覆盖范围、数据频率、来源，以及它在研究设计中的作用，对每个变量进行了整理。
+
+Housing prices and night lights are available monthly, and I also create annual summaries for common model inputs. POI and population are annual. Sentinel-2 provides measures of vegetation and built-up land. Station-opening records define treatment timing.
+
+中文：房价和夜间灯光具有月度数据，我同时构造年度汇总，以形成统一的模型输入。POI 和人口是年度数据。Sentinel-2 提供植被和建成区指标。地铁站开通记录用于确定 treatment 的发生时间。
+
+These datasets use different units, so their row counts should not be added together. The POI archive contains about 14.39 million rows. The formal annual housing input contains 239,591 grid-year observations. The frozen donor universe contains about 3.77 million grids. These figures describe source panels or candidate grids, not the final model sample.
+
+中文：这些数据使用不同统计单位，因此不能简单相加。POI 档案约有 1,439 万行；正式年度房价输入包含 239,591 个网格年度观测；冻结后的候选对照总体约有 377 万个网格。这些数字反映的是原始面板规模或候选网格规模，而不是最终模型样本量。
+
+
+SLIDE 5 | WHY THREE TIME POINTS? | about 0:55
+
+The three model time points are not three monthly observations. They are three comparable pre-opening summaries: three years, two years, and one year before opening.
+
+中文：模型中的三个时点并不是三个月度观测，而是三个可比较的开通前汇总期，分别对应开通前三年、前两年和前一年。
+
+For monthly housing and night-light data, I summarize complete 12-month blocks. Lag two and lag three are used to calculate the matching distance. Lag one is excluded from matching and reserved for pre-treatment validation. For annual POI and population data, I use the three pre-opening years directly.
+
+中文：对于月度房价和夜间灯光数据，我将数据汇总为完整的 12 个月区间。Lag 2 和 Lag 3 用于计算匹配距离，Lag 1 不参与匹配，而是保留为 treatment 前的验证期。对于年度 POI 和人口数据，我直接使用开通前三年的数据。
+
+This design harmonizes monthly and annual sources, prevents post-treatment leakage, creates a fixed 27-dimensional input, and provides an honest held-out pre-treatment check. The post-opening response labels still retain their monthly or annual horizons.
+
+中文：这种设计能够统一月度和年度数据，避免 treatment 后信息泄漏，形成固定的 27 维输入，并提供一个独立的 treatment 前检验。地铁开通后的响应标签仍然保留各自的月度或年度时间窗口。
+
+
+SLIDE 6 | FULL POPULATION AND CURRENT USE | about 1:00
+
+The full research population and the current partial release are different quantities and should not be mixed.
+
+中文：完整研究总体和当前阶段性版本代表不同层次的数量，不能混在一起解释。
+
+The full population contains 44 cities, 5,048 treated grids, and 5,048 station events. Each grid can produce up to 27 labels: 12 for POI, three for population, six for night lights, and six for housing. The full label skeleton therefore contains 136,296 possible rows.
+
+中文：完整总体包括 44 个城市、5,048 个处理网格和 5,048 个地铁站开通事件。每个网格最多可生成 27 个标签，其中 POI 有 12 个、人口有 3 个、夜间灯光有 6 个、房价有 6 个。因此，完整的标签骨架共有 136,296 个潜在行。
+
+The current release is much smaller. Only 388 grids have at least one available response label, producing 7,671 labels. Of these, 7,668 are eligible for training. Three population labels produced by Matrix Completion are available but excluded by the current training mask. The final representation dataset contains 387 units.
+
+中文：当前版本的规模小得多。只有 388 个网格至少拥有一个可用响应标签，共生成 7,671 个标签。其中 7,668 个可进入训练。另有 3 个人口标签由 Matrix Completion 产生，目前被训练掩码排除。因此，最终表征数据包含 387 个 units。
+
+In short, 5,048 is the full treated population; 388 is the currently labeled subset; 7,671 is the available label count; and 7,668 is the training-row count.
+
+中文：简而言之，5,048 是完整处理总体，388 是当前拥有标签的网格子集，7,671 是可用标签总数，7,668 是实际进入训练的行数。
+
+
+SLIDE 7 | MATCHING DESIGN | about 0:55
+
+In step one, each treated grid is compared with eligible donor grids. The main design excludes grids near other station events, using a one-kilometer buffer. After these restrictions, the frozen donor universe contains 3,771,800 grids.
+
+中文：第一步中，每个处理网格都要与符合条件的候选对照网格进行比较。主要设计使用 1 公里缓冲区，排除靠近其他地铁站开通事件的网格。经过这些限制后，冻结的候选对照总体包含 3,771,800 个网格。
+
+I use one-to-one Mahalanobis-distance matching with replacement. Only pre-opening variables enter the match. Lag two and lag three define the distance, while lag one is held out.
+
+中文：我使用允许重复匹配的一对一 Mahalanobis 距离匹配。匹配过程只使用地铁开通前的变量。Lag 2 和 Lag 3 用于定义匹配距离，Lag 1 则被保留。
+
+The search uses same-city donors first, followed by a standardized cross-city search if needed. A pair passes only when three measures remain below placebo-based thresholds: training distance, held-out root mean square gap, and held-out maximum gap. Failed pairs are routed to GSC.
+
+中文：匹配首先在同一城市内寻找候选对照。如果同城匹配失败，再进行标准化的跨城市搜索。只有当训练距离、保留期均方根差距和保留期最大差距都低于基于安慰剂匹配得到的阈值时，匹配才通过。未通过的网格会转入 GSC。
+
+
+SLIDE 8 | MATCHING EVIDENCE | about 0:45
+
+This figure summarizes a completed pilot cohort of 600 treated grids. Among them, 308 passed with a same-city control and 79 passed with a cross-city control. In total, 387 pairs were accepted, while 213 grids were routed to GSC.
+
+中文：这张图总结了一个已经完成的 600 个处理网格示范批次。其中 308 个通过同城匹配，79 个通过跨城市匹配，总计 387 对匹配通过；另外 213 个网格被转入 GSC。
+
+The right panel divides each quality measure by its placebo threshold. Values below one pass. All accepted pairs remain below one for all three measures.
+
+中文：右图将每个质量指标除以对应的安慰剂阈值。比值低于 1 表示通过。所有被接受的匹配对在三个指标上都低于 1。
+
+A conventional before-and-after standardized-mean-difference table has not yet been exported. I therefore report the quality gates and held-out pre-fit evidence that are currently available, rather than presenting a diagnostic that has not been produced.
+
+中文：目前还没有导出传统的匹配前后标准化均值差异表。因此，我只报告现阶段真实存在的质量门槛和保留期拟合证据，而不会展示尚未生成的诊断结果。
+
+
+SLIDE 9 | COUNTERFACTUAL METHODS AND LABELS | about 0:55
+
+Step two estimates the untreated counterfactual for each treated grid.
+
+中文：第二步为每个处理网格估计未接受 treatment 时的反事实结果。
+
+For an accepted pair, the response label is the treated grid’s change from its baseline minus the matched control grid’s change from its baseline. Each label is indexed by grid, outcome, and time horizon.
+
+中文：对于通过匹配的处理对，响应标签等于处理网格相对自身基线的变化，减去匹配对照网格相对自身基线的变化。每个标签都对应一个具体网格、结果变量和时间窗口。
+
+When fixed-pair matching is not credible, I use generalized synthetic control, or GSC. GSC estimates the untreated path with unit effects, time effects, and interactive factors. Cross-validation selects the factor rank, and 200 bootstrap draws estimate uncertainty.
+
+中文：当固定匹配对不够可信时，我使用广义合成控制，也就是 GSC。GSC 通过个体效应、时间效应和交互因子估计未处理路径。因子秩由交叉验证选择，并通过 200 次 bootstrap 抽样估计不确定性。
+
+If GSC also fails, Matrix Completion is the low-rank fallback. This routing keeps difficult cases visible. Every successful estimate becomes one response-label row with a recorded method and specification.
+
+中文：如果 GSC 也失败，则使用 Matrix Completion 作为低秩回退方法。这套路由机制能够保留困难样本，而不是让它们直接消失。每一个成功估计都会形成一条响应标签，并记录所用方法和设定。
+
+
+SLIDE 10 | EVENT TIME AND CAUSAL CHECKS | about 0:50
+
+For monthly outcomes, I exclude the opening month. The key horizons are months one, three, six, twelve, eighteen, and twenty-four. For annual outcomes, I exclude the opening year and use the next three complete years.
+
+中文：对于月度结果，我排除地铁开通当月，并使用开通后的第 1、3、6、12、18 和 24 个月作为关键时间窗口。对于年度结果，我排除开通年份，并使用之后三个完整年份。
+
+The matching design includes a genuine pre-fit check. Lag one is not used to select the donor grid, so it tests the selected pair on unseen pre-treatment information. GSC also records pre-treatment fit.
+
+中文：匹配设计包含一个真正独立的拟合前检验。Lag 1 不参与候选对照选择，因此能够使用未参与匹配的 treatment 前信息检验所选匹配对。GSC 同样会记录 treatment 前拟合情况。
+
+However, this partial release does not yet include a formal cohort event study or parallel-trend figure. The current plots should therefore be read as preliminary response-label paths, not as a completed pooled causal estimate. That formal test is required before making strong causal claims.
+
+中文：但是，当前阶段性版本还没有正式的 cohort event study 或平行趋势图。因此，目前的图只能理解为初步响应标签路径，而不能视为已经完成的汇总因果估计。在提出较强因果结论之前，必须完成这项正式检验。
+
+
+SLIDE 11 | CURRENT RESPONSE PATHS | about 0:45
+
+These panels show descriptive mean response labels from the current release.
+
+中文：这三张图展示了当前版本中响应标签的描述性平均路径。
+
+The POI-count response is positive on average and rises over the first three complete years. The population response is smaller, and its interval includes zero at several horizons. The night-light path also has wide intervals.
+
+中文：POI 数量的平均响应为正，并且在开通后的前三个完整年份中上升。人口响应更小，而且多个时间窗口的区间包含 0。夜间灯光路径同样具有较宽的区间。
+
+The shaded areas are grid-bootstrap intervals for the available labels. They are descriptive and should not be read as pooled causal confidence intervals.
+
+中文：阴影区域表示基于现有网格标签进行 bootstrap 得到的区间。它们是描述性区间，不能解释为汇总因果效应的置信区间。
+
+Housing is not shown beside the other outcomes. Although the annual housing input contains 239,591 grid-year observations, strict treated-and-control coverage currently produces only one usable grid and six labels. The current limit is label construction and panel coverage, not the amount of raw housing data collected.
+
+中文：房价没有与其他结果并列展示。虽然年度房价输入包含 239,591 个网格年度观测，但严格要求处理网格和冻结对照网格同时具有完整覆盖后，目前只有 1 个可用网格和 6 个标签。因此，当前限制来自标签构造和面板覆盖，而不是原始房价数据收集量不足。
+
+
+SLIDE 12 | REPRESENTATION MODEL | about 0:45
+
+Only after defining the response labels do I train the representation model.
+
+中文：只有在响应标签定义完成后，我才训练表征模型。
+
+The input contains 27 pre-opening values: nine variables across three lags. A small multilayer encoder with batch normalization, ReLU, and dropout produces a 128-dimensional embedding.
+
+中文：模型输入包含 27 个开通前数值，也就是 9 个变量乘以 3 个 lag。一个包含 batch normalization、ReLU 和 dropout 的小型多层编码器会生成 128 维 embedding。
+
+The target is a sparse response vector across outcomes and horizons. If two grids have similar causal response vectors, their embeddings should be close, even when their original features differ. Separate prediction heads estimate response magnitudes for housing, night lights, population, and POI.
+
+中文：模型目标是由不同结果变量和时间窗口组成的稀疏响应向量。如果两个网格具有相似的因果响应向量，那么即使它们的原始特征不同，它们的 embedding 也应该彼此接近。模型还使用独立预测头，分别估计房价、夜间灯光、人口和 POI 的响应幅度。
+
+
+SLIDE 13 | LOSS, TRAINING, AND BASELINES | about 0:55
+
+The representation loss has two parts. The alignment term links embedding similarity to response similarity. The distance term preserves differences in response magnitude. An additional prediction loss trains the outcome-specific heads.
+
+中文：表征损失包含两个部分。Alignment 项将 embedding 相似度与响应相似度对应起来；distance 项用于保留响应幅度差异；额外的 prediction loss 用于训练各结果变量的预测头。
+
+The completed 30-epoch run was stable. Training loss fell from 0.229 to 0.153, while validation loss fell from 0.214 to 0.200, with no NaN values. Test total loss was 0.0799. Representation loss was 0.0886, prediction loss was 0.0713, and nearest-neighbor correlation at five was 0.0004.
+
+中文：已经完成的 30 个 epoch 训练过程保持稳定。训练损失从 0.229 降至 0.153，验证损失从 0.214 降至 0.200，全程没有 NaN。测试集总损失为 0.0799，表征损失为 0.0886，预测损失为 0.0713，nearest-neighbor correlation at five 为 0.0004。
+
+These results show stable optimization, but they do not yet show useful transfer. The test set contains only five units. The random-correlation baseline is zero, but raw-feature nearest neighbors, direct Ridge or MLP prediction, and leave-one-city-out transfer have not yet been run. These comparisons are required before evaluating practical value.
+
+中文：这些结果说明优化过程稳定，但还不能证明模型具有有效的迁移能力。测试集目前只有 5 个 units。随机相关基线为 0，但基于原始特征的最近邻、直接 Ridge 或 MLP 预测，以及留一城市迁移实验尚未运行。在评价模型的实际价值之前，必须完成这些比较。
+
+
+SLIDE 14 | CONCLUSION | about 0:45
+
+To conclude, the project has defined a clear target effect for metro openings and frozen the treated and donor universe. It also provides an auditable counterfactual routing system, 7,671 response labels, and a completed 30-epoch run.
+
+中文：总的来说，本项目已经明确了地铁开通的目标效应，并建立了冻结的处理和候选对照总体、可审计的反事实方法路由、7,671 个响应标签，以及一次完整的 30-epoch 训练结果。
+
+The next milestone is scientific validation, not simply more training. I need to finish the counterfactual queues, produce formal event-study and parallel-trend checks, resolve the housing-coverage problem, run fair baselines, and test leave-one-city-out transfer on a larger sample.
+
+中文：下一阶段的重点是科学验证，而不只是增加训练轮数。我需要完成反事实任务队列，生成正式的 event-study 和平行趋势检验，解决房价覆盖问题，运行公平的 baseline，并在更大样本上检验留一城市迁移能力。
+
+The main claim should be made only when both components are credible: the causal response labels and the cross-city prediction. Thank you for listening.
+
+中文：只有当因果响应标签和跨城市预测这两个部分都足够可信时，才能提出项目的核心结论。谢谢大家。
+
+
+END

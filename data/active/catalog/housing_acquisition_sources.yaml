@@ -1,0 +1,241 @@
+schema: housing_acquisition_sources_v1
+reviewed_on: 2026-07-22
+
+sources:
+  - source_id: mendeley_hwfghkygy6_v1
+    title: Social Reproduction Data
+    url: https://data.mendeley.com/datasets/hwfghkygy6/1
+    doi: 10.17632/hwfghkygy6.1
+    license: CC BY 4.0
+    access: public_download
+    acquired: true
+    role: primary_transaction_outcome
+    coverage: Shanghai, individual transactions with dates and coordinates
+    limitation: One city; source rows require quality flags before causal admission
+
+  - source_id: figshare_26968507_v1
+    title: china house price
+    url: https://figshare.com/articles/dataset/china_house_price/26968507
+    doi: 10.6084/m9.figshare.26968507.v1
+    license: CC BY 4.0
+    access: public_download
+    acquired: true
+    role: city_level_auxiliary_covariate
+    coverage: 365 cities, annual observations from 2015 through 2023
+    limitation: Annual city level; cannot serve as a monthly 500 m grid outcome
+
+  - source_id: mendeley_pj2zff4p9m_v4
+    title: Dataset on Price and basic information of residential units in Nanning
+    url: https://data.mendeley.com/datasets/pj2zff4p9m/4
+    doi: 10.17632/pj2zff4p9m.4
+    license: CC BY 4.0
+    access: public_download
+    acquired: true
+    role: spatial_cross_section_and_covariate
+    coverage: Nanning, 2517 residential communities with 2018 average price and coordinates
+    limitation: Cross-sectional 2018 listing-based community averages; not a monthly causal outcome
+
+  - source_id: figshare_14398907_v1
+    title: Beijing House Price.csv
+    url: https://figshare.com/articles/dataset/Beijing_House_Price_csv/14398907
+    doi: 10.6084/m9.figshare.14398907.v1
+    license: CC BY 4.0
+    access: public_download
+    acquired: true
+    role: supplemental_monthly_transaction_points
+    coverage: Beijing, 70843 records from January through September 2020 with coordinates
+    limitation: Deal date has month precision only; overlap with purchased Lianjia must be audited before fusion
+
+  - source_id: mendeley_wpv5zn9rxp_v1
+    title: Does restricting private school enrollment increase the public school district housing premium? Evidence from the Chengdu real estate market
+    url: https://data.mendeley.com/datasets/wpv5zn9rxp/1
+    doi: 10.17632/wpv5zn9rxp.1
+    license: CC BY 4.0
+    access: public_download
+    acquired: true
+    role: supplemental_monthly_transaction_points
+    coverage: Chengdu, 21400 priced records from 2016-07 through 2021-02; community coordinates and month-precision selling time
+    limitation: 2230 rows are flagged as duplicate transaction keys and excluded from usable coverage; 317 additional rows lack selling month and price; coordinate CRS is unresolved and blocks 500 m grid assignment
+
+  - source_id: mendeley_52kj9yzx5j_v2
+    title: How the rise in commodity house prices curbs the spatial agglomeration of the financial industry in developing countries
+    url: https://data.mendeley.com/datasets/52kj9yzx5j/2
+    doi: 10.17632/52kj9yzx5j.2
+    license: CC BY 4.0
+    access: public_download
+    acquired: true
+    role: early_city_level_auxiliary_growth_rates
+    coverage: 182 source cities and 35 research cities, annual observations from 2006 through 2013
+    limitation: Contains real housing-price growth rates, not price levels; city level only
+
+  - source_id: mendeley_d6m65pyyxd_v2
+    title: "Extrapolative Households and Strategic Firms: Evidence from China's Land and Housing Market"
+    url: https://data.mendeley.com/datasets/d6m65pyyxd/2
+    doi: 10.17632/d6m65pyyxd.2
+    license: CC BY 4.0
+    access: public_download
+    acquired: true
+    role: methodological_benchmark_only
+    coverage: Released files contain large anonymized monthly new-house and resale-house panels
+    limitation: City mappings, calendar mappings, community names, addresses, and coordinates are absent; the data cannot be assigned to named research cities or 500 m grids
+
+  - source_id: cran_hgwrr_0.6-2
+    title: Wuhan Second-hand House Price and POI Data
+    url: https://cran.r-project.org/package=hgwrr
+    doi: 10.32614/CRAN.package.hgwrr
+    license: GPL (>= 2)
+    access: public_download
+    acquired: true
+    role: spatial_cross_section_and_matching_covariate
+    coverage: Wuhan, 19599 second-hand property observations at 776 communities in 2018 with coordinates
+    limitation: Year-only cross-section; the source does not distinguish completed transactions from listings and cannot serve as a monthly outcome
+
+  - source_id: geodoi_geodb_2018_04_08_v1
+    title: Housing Price Quarterly Change Dataset in Nanjing Townhouse Level (2009-2017)
+    url: https://www.geodoi.ac.cn/weben/geodoi.aspx?Id=913
+    doi: 10.3974/geodb.2018.04.08.V1
+    access: public_repository_download
+    acquired: true
+    role: quarterly_community_outcome_candidate
+    coverage: Nanjing, 4560 communities and 150480 community-quarter rows from 2009 Q1 through 2017 Q1; sale price, sale count, rent, and lease count
+    limitation: Quarterly rather than monthly; coordinate columns are geographic degrees but the source does not declare the CRS; 8825 low sale-price rows are retained with quality flags
+
+  - source_id: geodoi_geodb_2019_04_17_v1
+    title: Housing Price Dataset of Yangtze River Delta Region (2008-2018)
+    url: https://www.geodoi.ac.cn/weben/geodoi.aspx?Id=1270
+    doi: 10.3974/geodb.2019.04.17.V1
+    access: public_repository_download
+    acquired: true
+    role: annual_city_and_county_auxiliary_panel
+    coverage: 41 cities and 327 districts/counties in the Yangtze River Delta, 2008 through 2018; 14 research cities mapped by province-city pair
+    limitation: Annual aggregates cannot serve as a monthly 500 m grid outcome
+
+  - source_id: geodoi_geodb_2024_08_07_v1
+    title: Spatial Dataset of House Price and Its Influencing Factors in Wuhan City (2019)
+    url: https://geodoi.ac.cn/WebCn/geodoi.aspx?Id=3648
+    doi: 10.3974/geodb.2024.08.07.V1
+    access: public_repository_download
+    acquired: true
+    role: model_derived_spatial_auxiliary
+    coverage: Wuhan, 2019 TD-GNNWR estimated house-price raster and 1 km grid regression coefficients
+    limitation: Model predictions and coefficients rather than observed transactions or listings; cross-sectional only
+
+  - source_id: cran_gistools_1.0-2_whdata
+    title: Wuhan house-price spatial example data in GISTools
+    url: https://cran.r-project.org/package=GISTools
+    license: GPL
+    access: public_download
+    acquired: true
+    role: provenance_unresolved_spatial_cross_section
+    coverage: Wuhan, 974 spatial units with average house-price and built-environment attributes
+    limitation: Package documentation does not identify observation year or exact price semantics; excluded from formal coverage until resolved
+
+  - source_id: github_shiqinhuo_wuhan_house_price_crawler_master
+    title: Wuhan Donghu High-tech and Qiaokou second-hand listing snapshots
+    url: https://github.com/ShiqinHuo/wuhan_house_price_crawler
+    access: public_repository_files
+    acquired: true
+    role: quarantined_listing_snapshot
+    coverage: Wuhan, 7609 asking-price rows in two narrow submarkets; 2019 repository snapshot inferred from activity metadata
+    limitation: No explicit license, coordinates, or observation dates; narrow nonrepresentative coverage; excluded from formal coverage
+
+  - source_id: tianjin_zhao_et_al_2022_transactions
+    title: Determinants of the heavily right-tailed residential housing price in Tianjin
+    url: https://pmc.ncbi.nlm.nih.gov/articles/PMC9042043/
+    access: author_request_candidate
+    acquired: false
+    role: high_priority_transaction_candidate
+    coverage: Tianjin, 41908 completed second-hand transactions in 1850 communities from 2014-10-01 through 2018-05-11
+    limitation: Article is open access but no row-level supplementary data file was found
+
+  - source_id: changsha_feng_et_al_2024_transactions
+    title: Air Pollution and the Effects on House Prices - A Push for Sustainability
+    url: https://doi.org/10.1080/08965803.2024.2344999
+    access: cnopendata_or_author_request
+    acquired: false
+    role: high_priority_transaction_candidate
+    coverage: Changsha, previously owned dwelling transactions from 2016-01 through 2021-12 with transaction attributes and GCJ-02 coordinates
+    limitation: The paper identifies CnOpenData as the source; no open row-level replication file was found
+
+  - source_id: qiu_et_al_2026_national_transactions
+    title: Information disclosure and property value in China
+    url: https://doi.org/10.1016/j.chieco.2026.102673
+    access: author_request_candidate
+    acquired: false
+    role: high_priority_multi_city_transaction_candidate
+    coverage: 938543 housing transactions in China from 2012 through 2022 with monthly community-level analysis and geographic coordinates
+    limitation: Published article reports the panel but no public replication file or city list was found
+
+  - source_id: shen_zhao_pang_2024_transactions
+    title: Local Housing Market Sentiments and Returns - Evidence from China
+    url: https://doi.org/10.1007/s11146-022-09933-w
+    access: author_request_candidate
+    acquired: false
+    role: multi_city_monthly_index_or_transaction_candidate
+    coverage: 18 major Chinese cities, monthly second-hand housing data from 2016-01 through 2020-10
+    limitation: No public replication file was found; the article may only support release of derived monthly indices rather than row-level transactions
+
+  - source_id: figshare_29210301_v1
+    title: Natural Attraction and Driving Forces - Shenzhen supplementary files
+    url: https://figshare.com/articles/dataset/29210301
+    doi: 10.6084/m9.figshare.29210301
+    license: CC BY 4.0
+    access: public_download
+    acquired: true
+    role: rejected_metadata_only_candidate
+    coverage: Shenzhen study metadata and a source-description appendix
+    limitation: Public files contain no row-level housing observations; appendix states that price data came from the commercial CityRE database
+
+  - source_id: figshare_24173928
+    title: Housing Price in Beijing
+    url: https://figshare.com/articles/dataset/Housing_Price_in_Beijing/24173928
+    doi: 10.6084/m9.figshare.24173928
+    license: CC BY 4.0
+    access: metadata_only_no_files
+    acquired: false
+    role: rejected_metadata_only_candidate
+    coverage: Describes Beijing Lianjia transactions mainly from 2011 through 2017
+    limitation: Figshare record currently exposes metadata but no downloadable files
+
+  - source_id: macrodatas_1147472462
+    title: 中国21万个小区-二手房挂牌数据（2007-2023.2）
+    url: https://www.macrodatas.cn/article/1147472462
+    access: paid_membership
+    acquired: false
+    role: candidate_monthly_listing_panel
+    coverage: 2,375,956 community-month rows, 121 cities, 2007-01 through 2023-02
+    limitation: Listing rather than transaction prices; purchase and license confirmation required
+
+  - source_id: cnopendata_second_hand_housing
+    title: 中国二手房交易和挂牌数据
+    url: https://www.cnopendata.com/data/chinese-second-hand-housing-transaction.html
+    access: token_and_quote
+    acquired: false
+    role: candidate_transaction_and_listing_supplement
+    coverage: More than 90 cities; advertised transaction updates through 2024-11
+    limitation: Full access requires a token, quote, and license confirmation
+
+  - source_id: cityre_credata
+    title: 禧泰全国城市房产市场数据库
+    url: https://www.cityre.cn/credata
+    access: enterprise_quote
+    acquired: false
+    role: candidate_longitudinal_transaction_and_monthly_market_panel
+    coverage: Nationwide housing market history since 2003 and monthly resale indicators since 2005
+    limitation: Commercial access and an explicit research-use license are required
+
+  - source_id: lianjia_public_web
+    title: 链家公开网页
+    url: https://www.lianjia.com/robots.txt
+    access: web_collection_disallowed
+    acquired: false
+    role: none_without_written_permission
+    limitation: robots.txt disallows automated crawling; no crawler is launched
+
+  - source_id: anjuke_public_web
+    title: 安居客公开网页
+    url: https://www.anjuke.com/
+    access: web_collection_not_approved
+    acquired: false
+    role: none_without_written_permission
+    limitation: Automated access controls are present; no bypass or crawler is launched

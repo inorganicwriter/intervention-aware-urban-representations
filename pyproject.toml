@@ -1,0 +1,91 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "urban-intervention"
+version = "0.1.0"
+description = "Intervention-aware urban research data pipelines"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=2.0",
+  "pandas>=2.2",
+  "pyarrow>=17.0",
+  "PyYAML>=6.0",
+  "requests>=2.30",
+  "shapely>=2.0",
+]
+
+[project.scripts]
+urban-spatial-donor-audit = "urban_intervention.causal.spatial_donors:main"
+urban-resolve-stations = "urban_intervention.interventions.transit.station_resolution:main"
+urban-train-representation = "urban_intervention.representation.cli:main"
+urban-run-ablation = "urban_intervention.representation.ablation_cli:main"
+urban-build-model-card = "urban_intervention.representation.model_card_cli:main"
+urban-export-embeddings = "urban_intervention.representation.export:main"
+urban-summarize-runs = "urban_intervention.representation.summarize:main"
+
+[project.optional-dependencies]
+spatial = ["geopandas>=1.0", "osmnx>=1.9", "pyproj>=3.7", "rasterio>=1.3"]
+collection = [
+  "beautifulsoup4>=4.12",
+  "lxml>=5.0",
+  "openpyxl>=3.1",
+  "playwright>=1.50",
+  "rdata>=1.0",
+  "xlrd>=2.0.1",
+]
+ml = ["torch>=2.0", "torchvision>=0.17", "open-clip-torch>=2.24"]
+dev = [
+  "mypy>=1.8",
+  "pytest>=8.0",
+  "ruff>=0.4",
+  "beautifulsoup4>=4.12",
+  "earthengine-api>=0.1.400",
+  "geopandas>=1.0",
+  "lxml>=5.0",
+  "networkx>=3.0",
+  "openpyxl>=3.1",
+  "osmnx>=1.9",
+  "pillow>=10.0",
+  "playwright>=1.50",
+  "playwright-stealth>=2.0",
+  "pyproj>=3.7",
+  "rasterio>=1.3",
+  "rdata>=1.0",
+  "torchvision>=0.17",
+  "xlrd>=2.0.1",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+exclude = [".git", "__pycache__", ".pytest_cache", ".r-lib", ".runtime"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "SIM"]
+# Long lines are formatting-only; the codebase is ruff-formatted and the
+# remaining over-length lines are long strings/urls that should not be split.
+ignore = ["E501"]
+# Scripts use the standard sys.path.insert-then-import bootstrap; the imports
+# are intentionally not at the top of the module.
+[tool.ruff.lint.per-file-ignores]
+"scripts/*" = ["E402", "N806", "N816"]
+"src/*" = ["N806", "N816"]
+# Historical one-off collection script with deliberately compact style.
+"scripts/collection/amap_transit_fetcher.py" = ["E701", "E702", "B015", "B018"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+exclude = ["scripts/collection/", "scripts/causal_r/"]

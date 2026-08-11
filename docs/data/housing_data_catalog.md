@@ -1,0 +1,54 @@
+# Housing raw-data catalog
+
+Updated: 2026-07-22
+
+The canonical outcome panel is documented in
+[`housing_price_panel.md`](housing_price_panel.md). This catalog describes
+immutable inputs; inclusion in raw storage does not imply causal admissibility.
+
+## Source inventory
+
+| Class | Canonical path | Source role | Raw files | Notes |
+|---|---|---|---:|---|
+| Platform export | `platform_exports/lianjia/purchased_transactions/` | transaction and listing records | 16 | Original Chinese workbooks and documentation preserved |
+| Platform export | `platform_exports/anjuke/cross_section/` | listing/community cross-section | 281 | 140-city source filenames preserved |
+| Web archive | `web_archives/wayback/` | historical transaction/listing snapshots | 515 | inventories, manifests, parsed pages, and retained HTML |
+| Open data | `open_data/datasets/` | repository research datasets | 205 | download package and extracted contents remain together |
+| Import batch | `open_data/import_batches/` | explicit raw-to-schema mappings | 6 | source attachment plus mapping YAML |
+| Spatial support | `spatial_support/community_aoi/` | community polygons | 125 | shapefile components are indivisible source bundles |
+| Spatial support | `spatial_support/grid_price_2023_05/` | May 2023 grid-price cross-section | 561 | 93 city folders with source-native names |
+
+Counts describe the organized raw tree. The authoritative file-level inventory,
+including byte size and SHA-256, is
+[`../../outputs/housing_acquisition/housing_raw_inventory.csv`](../../outputs/housing_acquisition/housing_raw_inventory.csv).
+
+## Economic interpretation
+
+| Source | Observation unit | Time coverage | Default use |
+|---|---|---|---|
+| Purchased Lianjia bundle | property transaction/listing | approximately 2008–2023 | primary historical price observations |
+| Anjuke cross-section | listing/community | recent cross-section | spatial anchor and auxiliary price observation |
+| Wayback Lianjia/Beike/Anjuke | archived page observation | approximately 2012–2024 | historical price observations with archive provenance |
+| Repository datasets | dataset-specific | dataset-specific | admitted only after source-specific semantic audit |
+| May 2023 grid price | source grid | 2023-05 | cross-sectional price observation |
+| Community AOI | polygon | static/unknown snapshot | spatial linkage only, not a price outcome |
+
+Listings and transactions remain separate observations in the observation layer;
+the panel does not discard either solely because of price stage. HPI and other
+city-level indices are contextual variables and are not expanded into independent
+500 m outcomes.
+
+## Provenance rules
+
+- Source-owned filenames and archive-internal paths are unchanged.
+- Provider release labels such as `v4` remain part of external dataset identity.
+- Project-owned paths use lowercase ASCII `snake_case`.
+- Parsed and standardized artifacts belong in `data/archive/staging/housing/`.
+- Model-ready observations and aggregates belong in `data/active/curated/housing/` and
+  `data/active/panels/housing_*`.
+- Path changes are traceable through
+  `outputs/housing_acquisition/housing_raw_path_migration.csv`.
+
+See [`housing_raw_naming.md`](housing_raw_naming.md) for the complete naming
+contract and [`housing_acquisition_contract.md`](housing_acquisition_contract.md)
+for admission and acquisition requirements.

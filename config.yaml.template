@@ -1,0 +1,18 @@
+# API Keys (copy to config.yaml if you do not use environment variables).
+# config.yaml is gitignored. Do not commit real keys.
+#
+# Preferred environment variables:
+#   AMAP_API_KEYS="key1,key2,key3"
+#   AMAP_API_KEY="key1"              # legacy single-key fallback
+#   BAIDU_STREETVIEW_AK="..."
+
+amap:
+  web_api_keys: []                     # 高德 Web API Keys (https://console.amap.com)
+  # web_api_key: ""                    # legacy single-key format
+
+baidu:
+  streetview_ak: ""                    # 百度地图全景 API Key
+
+gee:
+  project_id: ""                       # GEE Cloud Project ID
+  project_name: ""

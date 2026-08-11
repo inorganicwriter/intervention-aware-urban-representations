@@ -1,0 +1,13 @@
+[
+  {"name": "t_0.03", "overrides": {"temperature": 0.03}},
+  {"name": "t_0.07", "overrides": {"temperature": 0.07}},
+  {"name": "t_0.15", "overrides": {"temperature": 0.15}},
+  {"name": "rep_0.25", "overrides": {"rep_alpha": 0.25}},
+  {"name": "rep_0.75", "overrides": {"rep_alpha": 0.75}},
+  {"name": "lr_3e-4", "overrides": {"learning_rate": 0.0003}},
+  {"name": "lr_1e-3", "overrides": {"learning_rate": 0.001}},
+  {"name": "emb_64", "overrides": {"embedding_dim": 64}},
+  {"name": "emb_256", "overrides": {"embedding_dim": 256}},
+  {"name": "dropout_0.0", "overrides": {"dropout": 0.0}},
+  {"name": "dropout_0.3", "overrides": {"dropout": 0.3}}
+]

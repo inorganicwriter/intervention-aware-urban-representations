@@ -87,6 +87,7 @@ def _run_epoch(
     queue: EmbeddingQueue | None = None,
     se_shrinkage: bool = True,
     learnable_temperature: bool = False,
+    eval_k: int = 5,
 ) -> dict[str, float]:
     if is_training:
         model.train()
@@ -117,6 +118,7 @@ def _run_epoch(
             images = batch.get("images")
             image_mask = batch.get("image_mask")
             conditioning_tokens = batch.get("conditioning_tokens")
+            station_tokens = batch.get("station_tokens")
             if images is not None:
                 images = images.to(device)
             if image_mask is not None:
@@ -125,7 +127,9 @@ def _run_epoch(
                 conditioning_tokens = conditioning_tokens.to(device)
 
             embedding, predictions = model(
-                features, images, image_mask, conditioning_tokens=conditioning_tokens
+                features, images, image_mask,
+                conditioning_tokens=conditioning_tokens,
+                station_tokens=station_tokens,
             )
             temperature_t = model.temperature() if learnable_temperature else temperature
             queue_state = queue.labeled_state() if queue is not None else None
@@ -229,7 +233,7 @@ def _run_epoch(
                 "prediction": float(full_losses["prediction"].item()),
             }
         )
-        result.update(_evaluate_retrieval(val_emb, val_resp, val_mask, k=5))
+        result.update(_evaluate_retrieval(val_emb, val_resp, val_mask, k=eval_k))
 
     return result
 
@@ -255,13 +259,18 @@ def _collect_pool(
             images = batch.get("images")
             image_mask = batch.get("image_mask")
             conditioning_tokens = batch.get("conditioning_tokens")
+            station_tokens = batch.get("station_tokens")
             if images is not None:
                 images = images.to(device)
             if image_mask is not None:
                 image_mask = image_mask.to(device)
             if conditioning_tokens is not None:
                 conditioning_tokens = conditioning_tokens.to(device)
-            embedding, _ = model(feat, images, image_mask, conditioning_tokens=conditioning_tokens)
+            embedding, _ = model(
+                feat, images, image_mask,
+                conditioning_tokens=conditioning_tokens,
+                station_tokens=station_tokens,
+            )
             embeddings.append(embedding.cpu())
             features.append(feat.cpu())
             responses.append(resp.cpu())
@@ -528,6 +537,7 @@ def train_representation(
     max_images_per_grid: int = 4,
     image_pooling: str = "max",
     conditioning: str | None = None,
+    station_attributes_path: Path | None = None,
     se_shrinkage: bool = True,
     queue_size: int = 0,
     learnable_temperature: bool = False,
@@ -573,6 +583,7 @@ def train_representation(
         max_images_per_grid=max_images_per_grid,
         load_images=use_images,
         only_training_mask=True,
+        station_attributes_path=station_attributes_path,
     )
     val_ds = RepresentationDataset(
         model_inputs_dir,
@@ -580,6 +591,7 @@ def train_representation(
         max_images_per_grid=max_images_per_grid,
         load_images=use_images,
         only_training_mask=True,
+        station_attributes_path=station_attributes_path,
     )
     test_ds = RepresentationDataset(
         model_inputs_dir,
@@ -587,6 +599,7 @@ def train_representation(
         max_images_per_grid=max_images_per_grid,
         load_images=use_images,
         only_training_mask=True,
+        station_attributes_path=station_attributes_path,
     )
     split_sizes = {"train": len(train_ds), "validation": len(val_ds), "test": len(test_ds)}
     too_small = {name: size for name, size in split_sizes.items() if size < 2}
@@ -734,6 +747,7 @@ def train_representation(
             is_training=False,
             se_shrinkage=se_shrinkage,
             learnable_temperature=learnable_temperature,
+            eval_k=eval_k,
         )
 
         # Step the schedule only when this epoch actually performed optimizer
@@ -849,6 +863,7 @@ def train_representation(
         is_training=False,
         se_shrinkage=se_shrinkage,
         learnable_temperature=learnable_temperature,
+        eval_k=eval_k,
     )
     test_report = {k: round(v, 6) if isinstance(v, float) else v for k, v in test_metrics.items()}
     (output_dir / "test_metrics.json").write_text(
@@ -900,8 +915,16 @@ def _append_run_record(
     headline test metrics and the chance-level baselines, so every run is
     self-describing and comparable without loading the full report.
     """
+    # The digest covers only the reproducibility-relevant configuration:
+    # created_utc, the absolute model_inputs_dir and the device are run
+    # metadata, not hyperparameters, so identical configurations hash equal.
+    hash_config = {
+        key: value
+        for key, value in training_config.items()
+        if key not in {"created_utc", "model_inputs_dir", "device", "runtime"}
+    }
     config_digest = hashlib.sha256(
-        json.dumps(training_config, sort_keys=True, ensure_ascii=False, default=str).encode()
+        json.dumps(hash_config, sort_keys=True, ensure_ascii=False, default=str).encode()
     ).hexdigest()
     best_val = min((entry["val_total"] for entry in history), default=None)
     record: dict[str, object] = {

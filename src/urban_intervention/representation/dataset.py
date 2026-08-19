@@ -71,6 +71,7 @@ class GridSample:
     final_training_mask: bool
     quality_grade: str
     conditioning_token: int = 0
+    station_token: int = 0
     image_paths: list[str] = field(default_factory=list)
 
 
@@ -107,6 +108,7 @@ class RepresentationDataset(torch.utils.data.Dataset[GridSample]):
         max_images_per_grid: int = 4,
         load_images: bool = False,
         only_training_mask: bool = False,
+        station_attributes_path: Path | str | None = None,
     ):
         root = Path(model_inputs_dir)
         self.root = root
@@ -124,6 +126,43 @@ class RepresentationDataset(torch.utils.data.Dataset[GridSample]):
         self._validate()
         self._build_feature_columns()
         self._build_response_tensor()
+        self._station_tokens: dict[int, int] = {}
+        if station_attributes_path is not None:
+            attributes = pd.read_parquet(station_attributes_path)
+            required_attr = {
+                "treatment_order",
+                "is_transfer_at_opening",
+                "is_new_line_opening",
+                "is_extension_opening",
+                "is_terminal_at_opening",
+            }
+            if not required_attr.issubset(attributes.columns):
+                raise ValueError(
+                    f"Station attributes lack columns: {sorted(required_attr - set(attributes.columns))}"
+                )
+            attr_frame = attributes[list(required_attr)].copy()
+            for column in (
+                "is_transfer_at_opening",
+                "is_new_line_opening",
+                "is_extension_opening",
+                "is_terminal_at_opening",
+            ):
+                attr_frame[column] = (
+                    pd.to_numeric(attr_frame[column], errors="coerce").fillna(0).astype(int)
+                )
+            attr_frame["_code"] = (
+                attr_frame["is_transfer_at_opening"] * 8
+                + attr_frame["is_new_line_opening"] * 4
+                + attr_frame["is_extension_opening"] * 2
+                + attr_frame["is_terminal_at_opening"]
+            )
+            self._station_tokens = dict(
+                zip(
+                    attr_frame["treatment_order"].astype(int),
+                    attr_frame["_code"].astype(int),
+                    strict=False,
+                )
+            )
 
         if split is not None:
             mask = self.sample_index["split"].eq(split)
@@ -328,6 +367,7 @@ class RepresentationDataset(torch.utils.data.Dataset[GridSample]):
             final_training_mask=bool(rec["final_training_mask"]),
             quality_grade=str(rec["quality_grade"]),
             conditioning_token=conditioning_token,
+            station_token=self._station_tokens.get(order, 0),
             image_paths=self._get_image_paths(order),
         )
 
@@ -397,6 +437,9 @@ def collate_samples(
         "response_se": torch.stack([s.response_se for s in samples]),
         "conditioning_tokens": torch.tensor(
             [s.conditioning_token for s in samples], dtype=torch.long
+        ),
+        "station_tokens": torch.tensor(
+            [s.station_token for s in samples], dtype=torch.long
         ),
         "final_training_mask": torch.tensor(
             [s.final_training_mask for s in samples], dtype=torch.bool

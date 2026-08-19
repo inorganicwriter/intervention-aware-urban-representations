@@ -30,7 +30,18 @@ for (order in orders) {
       )
     }
   )
-  write_grid_control_result(result, output)
+  if (identical(result$status, "matched")) {
+    write_grid_control_result(result, output)
+  } else {
+    # Round-4 failure: never overwrite the same-city durable
+    # control_record.csv.  A later phase-1 re-run with reuse_durable would
+    # otherwise resurrect this failure into the control queue.  The
+    # cross-city attempt is recorded separately for audit.
+    record <- control_design_record(result)
+    record[, donor_scope := "all_city_standardized"]
+    dir.create(output, recursive = TRUE, showWarnings = FALSE)
+    fwrite(record, file.path(output, "cross_city_attempt.csv"), bom = TRUE)
+  }
   cat("Cross-city control design", order, "status", result$status, "\n")
   flush.console()
 }

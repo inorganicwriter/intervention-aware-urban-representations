@@ -323,6 +323,11 @@ def main() -> int:
     parser.add_argument("--start-order", type=int, default=1)
     parser.add_argument("--end-order", type=int)
     parser.add_argument("--max-units", type=int, default=1)
+    parser.add_argument(
+        "--orders",
+        help="Comma-separated treatment orders to process (mutually exclusive "
+        "with --start-order/--end-order ranges)",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--retry", action="store_true")
     parser.add_argument(
@@ -354,11 +359,20 @@ def main() -> int:
     statuses = queue["status"].astype("string")
     eligible_statuses = ["pending", "running"]
     if args.retry:
-        eligible_statuses.extend(["matched", "gsc_pending", "error"])
-    mask = (queue["treatment_order"] >= args.start_order) & statuses.isin(eligible_statuses)
-    if args.end_order is not None:
-        mask &= queue["treatment_order"] <= args.end_order
-    indices = queue.index[mask][: args.max_units]
+        eligible_statuses.extend(["matched", "gsc_pending", "not_matched", "error"])
+    if args.orders is not None:
+        orders = sorted({int(value) for value in args.orders.split(",") if value.strip()})
+        if not orders:
+            parser.error("--orders must contain at least one treatment order")
+        if args.start_order != 1 or args.end_order is not None:
+            parser.error("--orders is mutually exclusive with --start-order/--end-order")
+        mask = (queue["treatment_order"].isin(orders)) & statuses.isin(eligible_statuses)
+        indices = queue.index[mask]
+    else:
+        mask = (queue["treatment_order"] >= args.start_order) & statuses.isin(eligible_statuses)
+        if args.end_order is not None:
+            mask &= queue["treatment_order"] <= args.end_order
+        indices = queue.index[mask][: args.max_units]
     selected = [int(index) for index in indices]
     if args.dry_run:
         for index in selected:

@@ -571,30 +571,32 @@ def build_response_frame(
     cross_city = artifact.get("donor_scope", pd.Series(index=artifact.index, dtype="object")).eq(
         "all_city_standardized"
     )
+    # Same-city-first quality ordering: any same-city path ranks above any
+    # cross-city path (matched > GSC > MC within each scope).
     artifact["quality_grade"] = np.select(
         [
             matched & same_city,
-            matched & cross_city,
             gsc & artifact["method"].astype("string").str.contains("same_city", na=False),
-            gsc & artifact["method"].astype("string").str.contains("all_city", na=False),
             mc
             & mc_minimal_pre_support
             & artifact["method"].astype("string").str.contains("same_city", na=False),
+            mc & artifact["method"].astype("string").str.contains("same_city", na=False),
+            matched & cross_city,
+            gsc & artifact["method"].astype("string").str.contains("all_city", na=False),
             mc
             & mc_minimal_pre_support
             & artifact["method"].astype("string").str.contains("all_city", na=False),
-            mc & artifact["method"].astype("string").str.contains("same_city", na=False),
             mc & artifact["method"].astype("string").str.contains("all_city", na=False),
             artifact["task_status"].eq("skipped"),
         ],
         [
             "matched_same_city_pass",
-            "matched_cross_city_pass",
             "gsc_same_city_pass",
-            "gsc_cross_city_pass",
             "mc_same_city_minimal_pre_support",
-            "mc_cross_city_minimal_pre_support",
             "mc_same_city_pass",
+            "matched_cross_city_pass",
+            "gsc_cross_city_pass",
+            "mc_cross_city_minimal_pre_support",
             "mc_cross_city_pass",
             "unavailable",
         ],
@@ -611,6 +613,14 @@ def build_response_frame(
         artifact.get("holdout_max_abs_threshold"),
     )
     artifact["design_pass"] = matched | gsc | (mc & mc_estimator_proof)
+    # Same-city-first main-specification marker: 1 for any same-city donor
+    # scope, 0 for cross-city.  Cross-city labels are kept and trained on;
+    # this column only distinguishes them in every downstream view.
+    artifact["main_spec"] = (
+        artifact.get("donor_scope", pd.Series(index=artifact.index, dtype="object"))
+        .eq("same_city")
+        .astype(int)
+    )
     artifact["uncertainty_available"] = (
         _finite(artifact["standard_error"])
         & _finite(artifact["confidence_lower"])

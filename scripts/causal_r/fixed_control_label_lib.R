@@ -47,18 +47,34 @@ did_regression <- function(treated_values, control_values, pre_count) {
 }
 
 monthly_fixed_control_labels <- function(target, control_city_key, control_grid_id,
-                                         family, root = project_root()) {
+                                         family, root = project_root(),
+                                         window = 1L, price_measure = "median") {
+  window <- as.integer(window)
+  if (window < 1L || window > 6L) stop("window must be in 1..6 months")
   horizons <- c(1L, 3L, 6L, 12L, 18L, 24L)
+  # Observation-window semantics: the event-period value at horizon h is the
+  # mean over months [max(1, h-window+1), h] after opening (window=1 keeps
+  # the single-month specification; window=3/6 are the W=3/W=6 robustness
+  # views).  The window never reaches into the pre-opening months.
+  window_starts <- pmax(1L, horizons - window + 1L)
+  post_leads <- sort(unique(unlist(Map(
+    function(start, end) seq.int(start, end), window_starts, horizons
+  ))))
   calendar <- monthly_event_calendar(
-    target$opening_month_date, lag = 36L, leads = horizons,
+    target$opening_month_date, lag = 36L, leads = post_leads,
     anticipation_months = complete_estimator_spec()$timing$main_anticipation_months
   )
   baseline_months <- tail(calendar$pre_months, 12L)
   months <- c(baseline_months, calendar$post_months)
-  treated <- read_city_monthly_outcome(target$city_key, family, months, root)[
+  strict_viirs <- family != "viirs"
+  treated <- read_city_monthly_outcome(target$city_key, family, months, root,
+                                       price_measure = price_measure,
+                                       strict = strict_viirs)[
     grid_id == target$grid_id
   ]
-  control <- read_city_monthly_outcome(control_city_key, family, months, root)[
+  control <- read_city_monthly_outcome(control_city_key, family, months, root,
+                                       price_measure = price_measure,
+                                       strict = strict_viirs)[
     grid_id == control_grid_id
   ]
   outcome <- complete_estimator_spec()$families[[family]][[1L]]
@@ -69,20 +85,27 @@ monthly_fixed_control_labels <- function(target, control_city_key, control_grid_
   control_baseline <- finite_mean_with_minimum(
     control[month %in% baseline_months, get(outcome)], minimum_baseline
   )
+  lead_to_month <- setNames(
+    as.IDate(calendar$post_months), as.character(post_leads)
+  )
   result <- data.table(
     outcome = outcome, event_time = horizons,
-    period = calendar$post_months
+    period = as.IDate(lead_to_month[as.character(horizons)])
   )
-  result <- merge(
-    result,
-    treated[, .(period = month, treated_post = get(outcome))],
-    by = "period", all.x = TRUE
-  )
-  result <- merge(
-    result,
-    control[, .(period = month, control_post = get(outcome))],
-    by = "period", all.x = TRUE
-  )
+  window_mean <- function(month_table, leads) {
+    months_in <- as.IDate(lead_to_month[as.character(sort(unique(leads)))])
+    values <- month_table[month %in% months_in, get(outcome)]
+    values <- values[is.finite(values)]
+    if (!length(values)) NA_real_ else mean(values)
+  }
+  result[, `:=`(
+    treated_post = vapply(horizons, function(h) {
+      window_mean(treated, max(1L, h - window + 1L):h)
+    }, numeric(1L)),
+    control_post = vapply(horizons, function(h) {
+      window_mean(control, max(1L, h - window + 1L):h)
+    }, numeric(1L))
+  )]
   result[, `:=`(
     treated_baseline = treated_baseline,
     control_baseline = control_baseline,
@@ -100,19 +123,22 @@ monthly_fixed_control_labels <- function(target, control_city_key, control_grid_
   # particular) omit intermediate months entirely, so the outcome vectors must
   # be aligned to the full calendar sequence with NA placeholders before any
   # positional indexing; otherwise regression_beta/se/p silently shift across
-  # months.
+  # months.  The regression diagnostics keep single-month alignment at each
+  # horizon endpoint; only the causal label uses the observation window.
   reg_all_months <- c(baseline_months, calendar$post_months)
   calendar_frame <- data.table(month = reg_all_months, reg_position = seq_along(reg_all_months))
   treated_full <- merge(
     calendar_frame,
-    read_city_monthly_outcome(target$city_key, family, reg_all_months, root)[
+    read_city_monthly_outcome(target$city_key, family, reg_all_months, root,
+                              price_measure = price_measure, strict = strict_viirs)[
       grid_id == target$grid_id
     ],
     by = "month", all.x = TRUE
   )[order(reg_position)]
   control_full <- merge(
     calendar_frame,
-    read_city_monthly_outcome(control_city_key, family, reg_all_months, root)[
+    read_city_monthly_outcome(control_city_key, family, reg_all_months, root,
+                              price_measure = price_measure, strict = strict_viirs)[
       grid_id == control_grid_id
     ],
     by = "month", all.x = TRUE
@@ -169,21 +195,34 @@ annual_fixed_control_labels <- function(target, control_city_key, control_grid_i
       label_available = is.finite(treated_change) & is.finite(control_change)
     )]
 
-    # Regression-based DiD for each horizon
+    # Regression-based DiD for each horizon.  Like the monthly branch above,
+    # the annual vectors must be aligned to the full calendar-year skeleton
+    # with NA placeholders: if a year in pre_years/post_years is absent from
+    # the annual panel, positional indexing would silently shift the window
+    # (e.g. opening-4 missing but opening+1 present), and the is.finite guard
+    # would pass on misaligned data.
     pre_years <- seq.int(
       baseline_year - 3L, baseline_year
     )
     all_years <- c(pre_years, post_years)
-    treated_full <- read_city_annual_family(target$city_key, family, root)[
-      grid_id == target$grid_id & year %in% all_years
-    ][order(year)]
-    control_full <- read_city_annual_family(control_city_key, family, root)[
-      grid_id == control_grid_id & year %in% all_years
-    ][order(year)]
+    year_frame <- data.table(year = all_years, reg_position = seq_along(all_years))
+    treated_full <- merge(
+      year_frame,
+      read_city_annual_family(target$city_key, family, root)[
+        grid_id == target$grid_id & year %in% all_years
+      ],
+      by = "year", all.x = TRUE
+    )[order(reg_position)]
+    control_full <- merge(
+      year_frame,
+      read_city_annual_family(control_city_key, family, root)[
+        grid_id == control_grid_id & year %in% all_years
+      ],
+      by = "year", all.x = TRUE
+    )[order(reg_position)]
     tv <- treated_full[, get(outcome)]
     cv <- control_full[, get(outcome)]
     pre_n <- length(pre_years)
-    post_idx <- seq.int(pre_n + 1L, length(all_years))
     result[, c("regression_beta", "regression_se", "regression_p", "regression_nobs") := {
       post_i <- match(year, all_years)
       if (all(is.finite(tv[1:post_i])) && all(is.finite(cv[1:post_i]))) {
@@ -200,13 +239,17 @@ annual_fixed_control_labels <- function(target, control_city_key, control_grid_i
 
 fixed_control_labels <- function(treatment_order, control_city_key,
                                  control_grid_id, family,
-                                 root = project_root()) {
+                                 root = project_root(), window = 1L,
+                                 price_measure = "median") {
   requested_order <- as.integer(treatment_order)
   target <- read_treatments(root)[treatment_order == requested_order]
   if (nrow(target) != 1L) stop("Treatment order is not unique")
   assert_choice(family, names(complete_estimator_spec()$families), "family")
   result <- if (family %in% c("housing", "viirs")) {
-    monthly_fixed_control_labels(target, control_city_key, control_grid_id, family, root)
+    monthly_fixed_control_labels(
+      target, control_city_key, control_grid_id, family, root,
+      window = window, price_measure = price_measure
+    )
   } else {
     annual_fixed_control_labels(target, control_city_key, control_grid_id, family, root)
   }

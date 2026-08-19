@@ -7,11 +7,12 @@ source(file.path("scripts", "causal_r", "complete_estimators_lib.R"))
 
 args <- commandArgs(trailingOnly = TRUE)
 causal_run_id <- Sys.getenv("MIT_CAUSAL_RUN_ID", unset = "")
-if (length(args) < 3L || length(args) > 9L) {
+if (length(args) < 3L || length(args) > 10L) {
   stop(paste(
     "Usage: run_complete_mc.R CITY COHORT OUTCOME_FAMILY",
     "[SIGNATURE=auto] [FREQUENCY=annual] [ANTICIPATION_MONTHS=6]",
-    "[TREATMENT_ORDER] [DONOR_SCOPE=same_city] [RUN_MODE=production]"
+    "[TREATMENT_ORDER] [DONOR_SCOPE=same_city] [RUN_MODE=production]",
+    "[PRICE_MEASURE=median]"
   ))
 }
 city_key <- args[[1L]]
@@ -24,9 +25,11 @@ treatment_order <- if (length(args) >= 7L) as.integer(args[[7L]]) else NULL
 requested_treatment_order <- treatment_order
 donor_scope <- if (length(args) >= 8L) args[[8L]] else "same_city"
 run_mode <- if (length(args) >= 9L) args[[9L]] else "production"
+price_measure <- if (length(args) >= 10L) args[[10L]] else "median"
 assert_choice(frequency, c("annual", "monthly"), "frequency")
 assert_choice(donor_scope, c("same_city", "all_city_standardized"), "donor_scope")
 assert_choice(run_mode, c("production", "smoke_test"), "run_mode")
+assert_choice(price_measure, c("median", "hedonic"), "price_measure")
 if (frequency == "monthly") {
   assert_choice(outcome_family, c("housing", "viirs"), "monthly outcome_family")
 }
@@ -60,10 +63,14 @@ scope_annual_outcomes <- function(donors) {
 
 scope_monthly_outcomes <- function(donors, months) {
   if (donor_scope == "same_city") {
-    return(read_city_monthly_outcome(city_key, outcome_family, months))
+    return(read_city_monthly_outcome(city_key, outcome_family, months,
+                             price_measure = price_measure,
+                             strict = outcome_family != "viirs"))
   }
   rbindlist(lapply(scope_cities(donors), function(city) {
-    read_city_monthly_outcome(city, outcome_family, months)
+    read_city_monthly_outcome(city, outcome_family, months,
+                          price_measure = price_measure,
+                          strict = outcome_family != "viirs")
   }), use.names = TRUE)
 }
 
@@ -250,25 +257,49 @@ run_one_outcome <- function(outcome) {
     stop("MC estimation data failed to mask treated post-period outcomes")
   }
 
-  selection_fit <- fect(
-    Y ~ D, data = estimation_data, index = c("mc_unit_id", "time_id"),
-    method = spec$mc$estimator,
-    force = spec$mc$force, CV = spec$mc$CV,
-    criterion = spec$mc$criterion, nlambda = spec$mc$nlambda,
-    cv.method = spec$mc$cv_method, cv.nobs = spec$mc$cv_nobs,
-    cv.donut = spec$mc$cv_donut, cv.buffer = spec$mc$cv_buffer,
-    se = FALSE,
-    parallel = spec$mc$parallel, cores = spec$mc$cores,
-    min.T0 = spec$mc$min.T0, normalize = FALSE,
-    seed = 20260725
+  # Lambda selection (CV) depends almost entirely on the donor pool: one
+  # treated unit out of up to 2,001 rows shifts the chosen lambda negligibly.
+  # Cache the selected lambda per (city, cohort, family, scope) so a cohort
+  # with many treated grids pays the CV cost once instead of per unit.
+  .staging_root <- .resolve_path(
+    "OUTPUT_COMPLETE_STAGING_DIR", project_root(),
+    "outputs", "complete_estimators", "staging"
   )
-  if (!inherits(selection_fit, "fect") ||
-      !identical(selection_fit$method, "mc") ||
-      length(selection_fit$lambda.cv) != 1L ||
-      !is.finite(selection_fit$lambda.cv) || selection_fit$lambda.cv <= 0) {
-    stop("MC selection stage did not choose one finite positive lambda")
+  lambda_cache_dir <- file.path(.staging_root, "mc_lambda_cache")
+  dir.create(lambda_cache_dir, recursive = TRUE, showWarnings = FALSE)
+  lambda_cache_path <- file.path(
+    lambda_cache_dir,
+    paste0(city_key, "__", cohort, "__", outcome_family, "__", donor_scope, ".rds")
+  )
+  selected_lambda <- NULL
+  if (file.exists(lambda_cache_path)) {
+    cached <- readRDS(lambda_cache_path)
+    if (is.numeric(cached) && length(cached) == 1L && is.finite(cached) && cached > 0) {
+      selected_lambda <- cached
+    }
   }
-  selected_lambda <- as.numeric(selection_fit$lambda.cv)
+  if (is.null(selected_lambda)) {
+    selection_fit <- fect(
+      Y ~ D, data = estimation_data, index = c("mc_unit_id", "time_id"),
+      method = spec$mc$estimator,
+      force = spec$mc$force, CV = spec$mc$CV,
+      criterion = spec$mc$criterion, nlambda = spec$mc$nlambda,
+      cv.method = spec$mc$cv_method, cv.nobs = spec$mc$cv_nobs,
+      cv.donut = spec$mc$cv_donut, cv.buffer = spec$mc$cv_buffer,
+      se = FALSE,
+      parallel = spec$mc$parallel, cores = spec$mc$cores,
+      min.T0 = spec$mc$min.T0, normalize = FALSE,
+      seed = 20260725
+    )
+    if (!inherits(selection_fit, "fect") ||
+        !identical(selection_fit$method, "mc") ||
+        length(selection_fit$lambda.cv) != 1L ||
+        !is.finite(selection_fit$lambda.cv) || selection_fit$lambda.cv <= 0) {
+      stop("MC selection stage did not choose one finite positive lambda")
+    }
+    selected_lambda <- as.numeric(selection_fit$lambda.cv)
+    saveRDS(selected_lambda, lambda_cache_path)
+  }
   fit <- fect(
     Y ~ D, data = estimation_data, index = c("mc_unit_id", "time_id"),
     method = spec$mc$estimator, force = spec$mc$force,
@@ -399,6 +430,7 @@ run_one_outcome <- function(outcome) {
     se = spec$mc$se, inference = spec$mc$inference, nboots = run_nboots,
     run_mode = run_mode,
     production_eligible = run_mode == "production",
+    price_measure = price_measure,
     donor_admission_uses_post_outcome = FALSE,
     treated_post_outcome_mask = "treated_pre_mean_before_mc_cv_and_fit",
     opening_period_excluded = as.character(design$opening_period_excluded),

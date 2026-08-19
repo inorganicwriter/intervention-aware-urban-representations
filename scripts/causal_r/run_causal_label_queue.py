@@ -28,6 +28,9 @@ from urban_intervention.data.paths import (  # noqa: E402
     CAUSAL_DIR,
     OUTPUT_CONTROL_TASKS_DIR,
     OUTPUT_FIXED_CONTROL_DIR,
+    PANEL_HOUSING_MONTHLY_DIR,
+    POI_DIR,
+    POPULATION_DIR,
     R_LIB_DIR,
     TREATMENT_UNIT_LIST,
     collection_script,
@@ -181,6 +184,13 @@ def run(
     environment = os.environ.copy()
     if R_LIB.is_dir():
         environment["R_LIBS_USER"] = str(R_LIB)
+    # The queue's Python subprocesses (e.g. ensure_viirs_monthly_cache.py)
+    # import project modules from src/; without this, an uninstalled checkout
+    # fails every VIIRS cache materialisation with ModuleNotFoundError, which
+    # used to masquerade as "monthly_viirs_cache_unavailable" failures.
+    environment["PYTHONPATH"] = os.pathsep.join(
+        filter(None, [str(ROOT / "src"), str(ROOT / "scripts"), environment.get("PYTHONPATH", "")])
+    )
     if environment_overrides:
         environment.update(environment_overrides)
     return subprocess.run(
@@ -205,6 +215,57 @@ def family_signature(row: pd.Series, support: pd.DataFrame) -> str:
         and bool(target.iloc[0][f"{family}_complete"])
     ]
     return "+".join(sorted(names))
+
+
+# Panels are read once per (city, family) into a set of grids with any
+# observed value; the R estimators are only worth invoking when the grid
+# actually appears in the family's panel.
+_FAMILY_SUPPORT_CACHE: dict[tuple[str, str], set[str]] = {}
+
+
+def _family_observed_grids(city: str, family: str) -> set[str]:
+    key = (city, family)
+    if key in _FAMILY_SUPPORT_CACHE:
+        return _FAMILY_SUPPORT_CACHE[key]
+    grids: set[str] = set()
+    if family == "housing":
+        path = PANEL_HOUSING_MONTHLY_DIR / f"{city}.parquet"
+        if path.is_file():
+            frame = pq.read_table(
+                path, columns=["grid_id", "log_price_raw_median"]
+            ).to_pandas()
+            grids = set(
+                frame.loc[frame["log_price_raw_median"].notna(), "grid_id"].astype(str)
+            )
+    elif family in {"poi", "population"}:
+        directory = POI_DIR if family == "poi" else POPULATION_DIR
+        candidates = sorted(directory.glob(f"{city}*"))
+        if candidates:
+            frame = pd.read_parquet(candidates[0])
+            value_columns = [
+                column
+                for column in frame.columns
+                if column not in {"city_key", "grid_id", "year"}
+            ]
+            if value_columns:
+                mask = frame[value_columns].notna().any(axis=1)
+                grids = set(frame.loc[mask, "grid_id"].astype(str))
+    _FAMILY_SUPPORT_CACHE[key] = grids
+    return grids
+
+
+def family_has_observed_support(row: pd.Series) -> bool:
+    """True when the grid appears in the family panel with any observation.
+
+    VIIRS is not pre-screened: the monthly partitions cover every grid, so
+    the check would never fire there.  For the other families this turns
+    no-data tasks into an instant skip instead of a ~3-minute GSC/MC run
+    that must fail.
+    """
+    family = str(row.outcome_family)
+    if family == "viirs":
+        return True
+    return str(row.grid_id) in _family_observed_grids(str(row.city_key), family)
 
 
 def task_directory(order: int, family: str) -> Path:
@@ -425,6 +486,17 @@ def run_cross_city_matching(
                 "log": completed.stdout,
             },
         )
+    attempt_path = task_root / f"{order:05d}" / "cross_city_attempt.csv"
+    if attempt_path.exists():
+        attempt = pd.read_csv(attempt_path).iloc[0]
+        return (
+            False,
+            pd.Series(dtype=object),
+            {
+                "reason": str(attempt.get("failure_reason", "cross_city_not_matched")),
+                "record_status": str(attempt.get("status")),
+            },
+        )
     record_path = task_root / f"{order:05d}" / "control_record.csv"
     if not record_path.exists():
         return (
@@ -505,6 +577,8 @@ def run_frozen_control(
             str(control.control_grid_id),
             family,
             str(output),
+            str(_LABEL_WINDOW),
+            _PRICE_MEASURE,
         ],
         {"MIT_CAUSAL_RUN_ID": run_id},
     )
@@ -714,38 +788,11 @@ def ensure_cross_city_viirs(row: pd.Series) -> tuple[bool, list[str]]:
     return True, logs
 
 
-def run_gsc(row: pd.Series) -> tuple[bool, list[pd.DataFrame], dict[str, object]]:
-    same_ok, same_labels, same_details = run_gsc_scope(row, "same_city")
-    if same_ok:
-        return same_ok, same_labels, same_details
-    cache_logs: list[str] = []
-    if str(row.outcome_family) == "viirs":
-        cached, cache_logs = ensure_cross_city_viirs(row)
-        if not cached:
-            return (
-                False,
-                [],
-                {
-                    "reason": "cross_city_monthly_viirs_cache_unavailable",
-                    "same_city_failure": same_details,
-                    "cache_logs": cache_logs,
-                },
-            )
-    cross_ok, cross_labels, cross_details = run_gsc_scope(row, "all_city_standardized")
-    if cross_ok:
-        cross_details["same_city_failure"] = same_details
-        cross_details["cache_logs"] = cache_logs
-        return True, cross_labels, cross_details
-    return (
-        False,
-        [],
-        {
-            "reason": "same_and_cross_city_xu_gsc_failed",
-            "same_city_failure": same_details,
-            "cross_city_failure": cross_details,
-            "cache_logs": cache_logs,
-        },
-    )
+def read_estimator_manifest(path: Path) -> dict[str, str]:
+    manifest = pd.read_csv(path)
+    if set(manifest.columns) != {"field", "value"} or manifest["field"].duplicated().any():
+        raise ValueError(f"Malformed estimator manifest: {path}")
+    return dict(zip(manifest["field"].astype(str), manifest["value"].astype(str), strict=False))
 
 
 def mc_output(row: pd.Series, outcome: str, donor_scope: str = "same_city") -> Path:
@@ -776,13 +823,6 @@ def mc_family_run_output(row: pd.Series, donor_scope: str = "same_city") -> Path
         else "outcome_only_prepath_mc_all_city"
     )
     return STAGING / "matrix_completion_runs" / str(row.city_key) / cohort / tag / signature
-
-
-def read_estimator_manifest(path: Path) -> dict[str, str]:
-    manifest = pd.read_csv(path)
-    if set(manifest.columns) != {"field", "value"} or manifest["field"].duplicated().any():
-        raise ValueError(f"Malformed estimator manifest: {path}")
-    return dict(zip(manifest["field"].astype(str), manifest["value"].astype(str), strict=False))
 
 
 def run_mc_scope(
@@ -966,37 +1006,6 @@ def run_mc_scope(
     )
 
 
-def run_mc(row: pd.Series) -> tuple[bool, list[pd.DataFrame], dict[str, object]]:
-    same_ok, same_labels, same_details = run_mc_scope(row, "same_city")
-    if same_ok:
-        return same_ok, same_labels, same_details
-    if str(row.outcome_family) == "viirs":
-        cached, cache_logs = ensure_cross_city_viirs(row)
-        if not cached:
-            return (
-                False,
-                [],
-                {
-                    "reason": "cross_city_monthly_viirs_cache_unavailable",
-                    "same_city_failure": same_details,
-                    "cache_logs": cache_logs,
-                },
-            )
-    cross_ok, cross_labels, cross_details = run_mc_scope(row, "all_city_standardized")
-    if cross_ok:
-        cross_details["same_city_failure"] = same_details
-        return True, cross_labels, cross_details
-    return (
-        False,
-        [],
-        {
-            "reason": "same_and_cross_city_mc_failed",
-            "same_city_failure": same_details,
-            "cross_city_failure": cross_details,
-        },
-    )
-
-
 def write_task(
     row: pd.Series,
     labels: Iterable[pd.DataFrame],
@@ -1124,8 +1133,25 @@ def run_mc_stage(
                 atomic_csv(queue, FAMILY_QUEUE)
                 return
 
-    # Round 5: cross-city GSC
-    cross_gsc_ok, cross_gsc_labels, cross_gsc_details = run_gsc_scope(row, "all_city_standardized")
+    # Round 5: cross-city GSC.  The cross-city estimator reads VIIRS
+    # partitions for every donor city, so materialise the window across all
+    # donor cities first (the same-city rounds only need the target city).
+    if str(row.outcome_family) == "viirs":
+        cached, cache_logs = ensure_cross_city_viirs(row)
+        if not cached:
+            cross_gsc_ok, cross_gsc_labels, cross_gsc_details = (
+                False,
+                [],
+                {"reason": "cross_city_viirs_cache_unavailable", "log": "\n".join(cache_logs)},
+            )
+        else:
+            cross_gsc_ok, cross_gsc_labels, cross_gsc_details = run_gsc_scope(
+                row, "all_city_standardized"
+            )
+    else:
+        cross_gsc_ok, cross_gsc_labels, cross_gsc_details = run_gsc_scope(
+            row, "all_city_standardized"
+        )
     if cross_gsc_ok:
         selected_method = str(cross_gsc_details["selected_method"])
         write_task(row, cross_gsc_labels, "gsc_labelled", selected_method, cross_gsc_details)
@@ -1137,7 +1163,8 @@ def run_mc_stage(
         atomic_csv(queue, FAMILY_QUEUE)
         return
 
-    # Round 6: cross-city MC
+    # Round 6: cross-city MC (VIIRS cache already materialised in round 5
+    # for the same donor scope, so no repeated materialisation here).
     cross_mc_ok, cross_mc_labels, cross_mc_details = run_mc_scope(row, "all_city_standardized")
     if cross_mc_ok:
         selected_method = str(cross_mc_details["selected_method"])
@@ -1220,12 +1247,23 @@ def process_one(
         ]
         atomic_csv(queue, FAMILY_QUEUE)
         return
-    if str(row.status) in {"mc_pending", "mc_running"}:
+    if not family_has_observed_support(row):
+        # The grid has no observation anywhere in this family's panel: GSC
+        # and MC cannot estimate anything and would only fail after minutes
+        # of R work.  Skip immediately with a dedicated reason.
+        queue.loc[index, ["status", "selected_method", "failure_reason"]] = [
+            "skipped",
+            pd.NA,
+            "family_no_observed_support",
+        ]
+        atomic_csv(queue, FAMILY_QUEUE)
+        return
+    if str(row.status) in {"mc_pending", "mc_running"} and phase in {"all", "mc"}:
         run_mc_stage(queue, index, row, control_queue, control_queue_path)
         return
     if (
         str(control.status) == "gsc_pending" or str(row.status) in {"gsc_pending", "gsc_running"}
-    ) and not (phase == "matching" and retry_matching):
+    ) and phase != "matching":
         queue.loc[index, "status"] = "gsc_running"
         atomic_csv(queue, FAMILY_QUEUE)
         if row.outcome_family == "viirs":
@@ -1346,6 +1384,7 @@ def eligible_indices(
     max_tasks: int,
     retry_matching: bool = False,
     retry_skipped: bool = False,
+    orders: set[int] | None = None,
 ) -> pd.Index:
     statuses = {
         "matching": {"pending", "matching_running"},
@@ -1364,9 +1403,12 @@ def eligible_indices(
         statuses.add("gsc_pending")
     if retry_skipped:
         statuses.add("skipped")
-    mask = (queue["treatment_order"] >= start_order) & queue["status"].isin(statuses)
-    if end_order is not None:
-        mask &= queue["treatment_order"] <= end_order
+    if orders is not None:
+        mask = queue["treatment_order"].isin(orders) & queue["status"].isin(statuses)
+    else:
+        mask = (queue["treatment_order"] >= start_order) & queue["status"].isin(statuses)
+        if end_order is not None:
+            mask &= queue["treatment_order"] <= end_order
     if family is not None:
         mask &= queue["outcome_family"].eq(family)
     return queue.index[mask][:max_tasks]
@@ -1377,6 +1419,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--start-order", type=int, default=1)
     parser.add_argument("--end-order", type=int)
+    parser.add_argument(
+        "--orders",
+        help="Comma-separated treatment orders to process (mutually exclusive "
+        "with --start-order/--end-order ranges)",
+    )
     parser.add_argument("--max-tasks", type=int, default=1)
     parser.add_argument("--family", choices=sorted(OUTCOMES))
     parser.add_argument("--phase", choices=("matching", "gsc", "mc", "all"), default="all")
@@ -1385,6 +1432,20 @@ def main() -> int:
         type=int,
         default=6,
         help="Anticipation window in months (main=6; sensitivity 0/12)",
+    )
+    parser.add_argument(
+        "--price-measure",
+        choices=("median", "hedonic"),
+        default="median",
+        help="Housing price measure for monthly families (hedonic = Lianjia "
+        "quality-adjusted panel; defaults to the unified median measure)",
+    )
+    parser.add_argument(
+        "--window",
+        type=int,
+        default=1,
+        help="Observation-window width in months for monthly fixed-control "
+        "labels (1 = single-month specification; 3/6 = robustness views)",
     )
     parser.add_argument("--retry-matching", action="store_true")
     parser.add_argument(
@@ -1408,6 +1469,9 @@ def main() -> int:
     )
     args = parser.parse_args()
     _ANTICIPATION_MONTHS = args.anticipation_months
+    global _PRICE_MEASURE, _LABEL_WINDOW
+    _PRICE_MEASURE = args.price_measure
+    _LABEL_WINDOW = args.window
 
     has_shard = args.shard_id is not None and args.shard_count is not None
     if bool(args.shard_id is not None) != bool(args.shard_count is not None):
@@ -1471,15 +1535,23 @@ def main() -> int:
             sync_unit_queue(int(order), queue, control_queue, unit_queue_path=unit_queue)
         print("Synchronized terminal family rows into the treatment-unit queue")
         return 0
+    orders_set: set[int] | None = None
+    if args.orders is not None:
+        orders_set = {int(value) for value in args.orders.split(",") if value.strip()}
+        if not orders_set:
+            parser.error("--orders must contain at least one treatment order")
+        if args.start_order != 1 or args.end_order is not None:
+            parser.error("--orders is mutually exclusive with --start-order/--end-order")
     eligible = eligible_indices(
         queue,
         args.start_order,
         args.end_order,
         args.family,
         args.phase,
-        args.max_tasks,
+        args.max_tasks if orders_set is None else len(orders_set) * 4,
         retry_matching=args.retry_matching,
         retry_skipped=args.retry_skipped,
+        orders=orders_set,
     )
     for index in eligible:
         process_one(

@@ -139,7 +139,7 @@ def dinov2_image_baseline(
     without the trainable projection head.
     """
     try:
-        from .encoder import _ensure_dinov2
+        from .encoder import ImageEncoder, _ensure_dinov2
     except (ImportError, OSError, RuntimeError) as exc:
         return {"note": f"dinov2_unavailable: {exc}"}
     pooled: list[torch.Tensor] = []
@@ -160,7 +160,16 @@ def dinov2_image_baseline(
         flat = images.reshape(batch_size * max_images, c, h, w).to(device)
         mask_2d = image_mask.reshape(batch_size, max_images).to(device)
         with torch.no_grad():
-            features = _ensure_dinov2()(flat)
+            # The frozen backbone expects ImageNet-normalized inputs; the
+            # trained image encoder applies the same preprocess before the
+            # backbone, so the baseline must match it to stay comparable.
+            # The backbone must also follow the input device: torch.hub
+            # loads it on CPU, and a GPU input would otherwise raise.
+            backbone = _ensure_dinov2()
+            if next(backbone.parameters()).device != flat.device:
+                backbone = backbone.to(flat.device)
+            preprocess = ImageEncoder(embedding_dim=1).preprocess
+            features = backbone(preprocess(flat))
         features = features.reshape(batch_size, max_images, -1)
         features = features.masked_fill(~mask_2d.unsqueeze(-1), float("nan"))
         valid = mask_2d.sum(dim=1)

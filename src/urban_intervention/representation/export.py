@@ -39,6 +39,7 @@ def export_embeddings(
     batch_size: int = 64,
     use_images: bool | None = None,
     max_images_per_grid: int | None = None,
+    station_attributes_path: Path | None = None,
 ) -> Path:
     """Load a trained checkpoint and write per-grid embeddings to parquet."""
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
@@ -58,12 +59,19 @@ def export_embeddings(
         else checkpoint.get("max_images_per_grid", 4)
     )
 
+    checkpoint_conditioning = checkpoint.get("conditioning")
+    if checkpoint_conditioning in {"station", "opening_year_station"} and station_attributes_path is None:
+        raise ValueError(
+            "Checkpoint uses station conditioning; pass --station-attributes"
+        )
+
     dataset = RepresentationDataset(
         model_inputs_dir,
         split=None,
         max_images_per_grid=effective_max_images,
         load_images=effective_use_images,
         only_training_mask=False,
+        station_attributes_path=station_attributes_path,
     )
     expected_columns = checkpoint.get("feature_columns")
     if not isinstance(expected_columns, (list, tuple)):
@@ -142,14 +150,21 @@ def export_embeddings(
             images = batch.get("images")
             image_mask = batch.get("image_mask")
             conditioning_tokens = batch.get("conditioning_tokens")
+            station_tokens = batch.get("station_tokens")
             if images is not None:
                 images = images.to(dev)
             if image_mask is not None:
                 image_mask = image_mask.to(dev)
             if conditioning_tokens is not None:
                 conditioning_tokens = conditioning_tokens.to(dev)
+            if station_tokens is not None:
+                station_tokens = station_tokens.to(dev)
             embedding, _ = model(
-                features, images, image_mask, conditioning_tokens=conditioning_tokens
+                features,
+                images,
+                image_mask,
+                conditioning_tokens=conditioning_tokens,
+                station_tokens=station_tokens,
             )
             embedding = embedding.cpu()
             dim = embedding.shape[1]
@@ -198,6 +213,12 @@ def main() -> int:
     parser.add_argument(
         "--max-images", type=int, default=None, help="Override checkpoint image-count setting"
     )
+    parser.add_argument(
+        "--station-attributes",
+        type=Path,
+        default=None,
+        help="Station attribute parquet (required for station-conditioned checkpoints)",
+    )
     args = parser.parse_args()
 
     if not args.checkpoint.is_file():
@@ -215,6 +236,7 @@ def main() -> int:
             batch_size=args.batch_size,
             use_images=args.use_images,
             max_images_per_grid=args.max_images,
+            station_attributes_path=args.station_attributes,
         )
     except Exception as exc:  # noqa: BLE001
         print(f"Export failed: {exc}", file=sys.stderr)

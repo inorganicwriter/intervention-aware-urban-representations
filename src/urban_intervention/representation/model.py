@@ -47,7 +47,7 @@ class ResponseEmbeddingModel(nn.Module):
         super().__init__()
         if image_pooling not in {"max", "mean", "meanmax"}:
             raise ValueError(f"Unknown image_pooling: {image_pooling!r}")
-        if conditioning not in {None, "opening_year"}:
+        if conditioning not in {None, "opening_year", "station", "opening_year_station"}:
             raise ValueError(f"Unknown conditioning: {conditioning!r}")
         self.embedding_dim = embedding_dim
         self.use_image_encoder = use_image_encoder
@@ -75,13 +75,18 @@ class ResponseEmbeddingModel(nn.Module):
 
         self.fusion = nn.Linear(embedding_dim * 2, embedding_dim) if use_image_encoder else None
 
-        # Explicit intervention conditioning: a per-token embedding injected
+        # Explicit intervention conditioning: per-token embeddings injected
         # into the tabular stream.  ``opening_year`` is pre-treatment
-        # information available at inference for any new station, so it does
-        # not compromise cross-city transfer.  Disabled by default; the
-        # response-aligned objective alone is the "implicit conditioning".
+        # information available at inference for any new station; ``station``
+        # tokens encode treatment-level attributes (transfer / new-line /
+        # extension / terminal, 4 bits) that are likewise known ex ante.
+        # Disabled by default; the response-aligned objective alone is the
+        # "implicit conditioning".
         self.conditioning_embedding = (
-            nn.Embedding(30, embedding_dim) if conditioning == "opening_year" else None
+            nn.Embedding(30, embedding_dim) if conditioning in {"opening_year", "opening_year_station"} else None
+        )
+        self.station_embedding = (
+            nn.Embedding(16, embedding_dim) if conditioning in {"station", "opening_year_station"} else None
         )
 
         self.projector = nn.Sequential(
@@ -180,14 +185,23 @@ class ResponseEmbeddingModel(nn.Module):
         images: torch.Tensor | None = None,
         image_mask: torch.Tensor | None = None,
         conditioning_tokens: torch.Tensor | None = None,
+        station_tokens: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         tab_emb = self.tab_encoder(features)
 
-        if self.conditioning_embedding is not None:
-            if conditioning_tokens is None:
+        if self.conditioning_embedding is not None or self.station_embedding is not None:
+            if conditioning_tokens is None and self.conditioning_embedding is not None:
                 raise ValueError("Model is conditioning-enabled but no conditioning tokens given")
-            token_emb = self.conditioning_embedding(conditioning_tokens.to(tab_emb.device))
-            tab_emb = functional.normalize(tab_emb + token_emb, p=2, dim=1)
+            if station_tokens is None and self.station_embedding is not None:
+                raise ValueError("Model is station-conditioning-enabled but no station tokens given")
+            added = torch.zeros_like(tab_emb)
+            if self.conditioning_embedding is not None:
+                added = added + self.conditioning_embedding(
+                    conditioning_tokens.to(tab_emb.device)
+                )
+            if self.station_embedding is not None:
+                added = added + self.station_embedding(station_tokens.to(tab_emb.device))
+            tab_emb = functional.normalize(tab_emb + added, p=2, dim=1)
 
         if self.image_encoder is not None and images is not None:
             img_emb = self._pool_images(images, image_mask)

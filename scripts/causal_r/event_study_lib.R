@@ -60,7 +60,14 @@ collect_production_label_files <- function(staging_root) {
 }
 
 # Read admitted label files into one long data.table with method provenance.
-read_event_study_labels <- function(staging_root) {
+# With ``stratum_attribute`` and ``stratum_values`` the labels are restricted
+# to treatment orders whose station attribute (from
+# outputs/causal_labels/station_attributes/) is in the given value set; this
+# powers per-attribute event studies (transfer / new-line / terminal /
+# same-month-opening size).
+read_event_study_labels <- function(staging_root,
+                                    stratum_attribute = NULL,
+                                    stratum_values = NULL) {
   files <- collect_production_label_files(staging_root)
   if (length(files) == 0L) {
     return(data.table(
@@ -105,7 +112,26 @@ read_event_study_labels <- function(staging_root) {
       label_available = logical(0), method = character(0)
     ))
   }
-  rbindlist(parts, use.names = TRUE, fill = TRUE)
+  labels <- rbindlist(parts, use.names = TRUE, fill = TRUE)
+  if (!is.null(stratum_attribute)) {
+    attributes_path <- file.path(
+      project_root(), "outputs", "causal_labels", "station_attributes",
+      "station_attributes.parquet"
+    )
+    if (!file.exists(attributes_path)) {
+      stop("Station attributes missing for stratification: ", attributes_path)
+    }
+    attributes <- as.data.table(read_parquet(
+      attributes_path,
+      col_select = c("treatment_order", stratum_attribute)
+    ))
+    labels <- merge(labels, attributes, by = "treatment_order", all.x = TRUE)
+    if (!is.null(stratum_values)) {
+      labels <- labels[get(stratum_attribute) %in% stratum_values]
+    }
+    labels[, (stratum_attribute) := NULL]
+  }
+  labels
 }
 
 # Aggregate the event-time series per family/outcome over available labels.
@@ -282,8 +308,14 @@ write_event_study_figures <- function(series, figure_dir) {
 
 # Full pipeline: staging root + output directory -> summary files.
 run_event_study_aggregation <- function(staging_root, output_dir,
-                                        min_pre_event_time = -5L) {
-  labels <- read_event_study_labels(staging_root)
+                                        min_pre_event_time = -5L,
+                                        stratum_attribute = NULL,
+                                        stratum_values = NULL) {
+  labels <- read_event_study_labels(
+    staging_root,
+    stratum_attribute = stratum_attribute,
+    stratum_values = stratum_values
+  )
   series <- aggregate_event_study_series(labels)
   grid_summary <- joint_pretrend_tests(labels, min_pre_event_time)
   joint_tests <- finalize_joint_tests(grid_summary)

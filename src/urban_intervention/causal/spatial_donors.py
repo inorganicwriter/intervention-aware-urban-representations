@@ -377,8 +377,12 @@ def summarize_cohorts(
         .agg(treated_grids=("grid_id", "nunique"))
         .rename(columns={"opening_year": "cohort_year"})
     )
+    # The never-treated spatial donor set is time-invariant: the same city
+    # total applies to every cohort row.  The column name says "total" so it
+    # cannot be mistaken for cohort-specific availability (summing across
+    # cohort rows would double-count).
     for radius in spec.radii_m:
-        summary[f"same_city_spatial_donors_{radius}m"] = int(
+        summary[f"total_same_city_spatial_donors_{radius}m"] = int(
             city_summary[f"spatial_donors_{radius}m"]
         )
     return summary

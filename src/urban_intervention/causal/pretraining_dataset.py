@@ -368,12 +368,17 @@ def normalize_from_train(
         mean = float(train_values.mean()) if len(train_values) else 0.0
         sd = float(train_values.std(ddof=0)) if len(train_values) else 1.0
         usable = bool(len(train_values) and np.isfinite(sd) and sd > np.finfo(float).eps)
-        if not usable:
-            sd = 1.0
-        result[f"z__{column}"] = (values - mean) / sd
+        if usable:
+            result[f"z__{column}"] = (values - mean) / sd
+        else:
+            # No training-city observations: emitting raw-scale values here
+            # would mix unstandardized columns into the model inputs.  The
+            # column is published as missing instead (modality availability
+            # already reflects the source coverage).
+            result[f"z__{column}"] = np.nan
         parameters[column] = {
             "mean": mean,
-            "sd": sd,
+            "sd": sd if usable else None,
             "train_observations": int(len(train_values)),
             "usable": usable,
         }
@@ -390,6 +395,7 @@ def publish_pretraining_dataset(
     min_modalities: int = 2,
     streetview_index: Path | None = None,
     strict_production: bool = True,
+    scope_view: str = "all",
 ) -> Path:
     response_manifest_path = response_release / "manifest.json"
     response_path = response_release / "response_artifact.parquet"
@@ -434,14 +440,31 @@ def publish_pretraining_dataset(
     targets["final_training_mask"] = targets["training_mask"].fillna(False) & targets[
         "feature_training_mask"
     ].fillna(False)
+    if scope_view in {"same_city", "cross_city"}:
+        if "main_spec" not in targets.columns:
+            raise ValueError(
+                "Response Artifact lacks the main_spec column required for --scope-view"
+            )
+        in_scope = targets["main_spec"].astype("boolean").fillna(False)
+        if scope_view == "cross_city":
+            in_scope = ~in_scope
+        targets["final_training_mask"] = targets["final_training_mask"] & in_scope
     unit_level = targets.groupby("treatment_order", as_index=False).agg(
         training_mask=("training_mask", "max"),
         final_training_mask=("final_training_mask", "max"),
     )
+    # Same-city-first ordering, mirroring the Response Artifact quality
+    # grades (matched > GSC > MC within each scope; any same-city path ranks
+    # above any cross-city path).  Grades absent from the map (e.g. GSC,
+    # minimal-pre-support MC, unavailable) sort below all ranked grades.
     grade_rank = {
-        "matched_same_city_pass": 4,
-        "matched_cross_city_pass": 3,
-        "mc_same_city_pass": 2,
+        "matched_same_city_pass": 8,
+        "gsc_same_city_pass": 7,
+        "mc_same_city_minimal_pre_support": 6,
+        "mc_same_city_pass": 5,
+        "matched_cross_city_pass": 4,
+        "gsc_cross_city_pass": 3,
+        "mc_cross_city_minimal_pre_support": 2,
         "mc_cross_city_pass": 1,
         "pending": 0,
     }

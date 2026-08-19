@@ -27,6 +27,14 @@ def main() -> int:
     parser.add_argument("--streetview-index", type=Path)
     parser.add_argument("--allow-partial", action="store_true")
     parser.add_argument(
+        "--scope-view",
+        choices=("all", "same_city", "cross_city"),
+        default="all",
+        help="Restrict final_training_mask to a donor scope: all (default, "
+        "cross-city labels included), same_city (main-specification view), "
+        "or cross_city (extension-only view).",
+    )
+    parser.add_argument(
         "--output-root",
         type=Path,
         default=MODEL_INPUTS_DIR,
@@ -42,6 +50,7 @@ def main() -> int:
         min_modalities=args.min_modalities,
         streetview_index=args.streetview_index,
         strict_production=not args.allow_partial,
+        scope_view=args.scope_view,
     )
     print(f"Published pretraining dataset at {destination}")
     return 0

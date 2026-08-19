@@ -126,10 +126,18 @@ def main() -> None:
     )
     parser.add_argument(
         "--conditioning",
-        choices=("none", "opening_year"),
+        choices=("none", "opening_year", "station", "opening_year_station"),
         default="none",
         help="Explicit intervention conditioning token (default: none = implicit "
-        "response-aligned conditioning)",
+        "response-aligned conditioning); station modes require "
+        "--station-attributes",
+    )
+    parser.add_argument(
+        "--station-attributes",
+        type=Path,
+        default=None,
+        help="Station attribute parquet (outputs/causal_labels/station_attributes/"
+        "station_attributes.parquet) for station conditioning tokens",
     )
     parser.add_argument("--max-images", type=int, default=4, help="Max streetview images per grid")
     parser.add_argument("--device", type=str, default=None)
@@ -215,6 +223,7 @@ def main() -> None:
         max_images_per_grid=args.max_images,
         image_pooling=args.image_pooling,
         conditioning=args.conditioning if args.conditioning != "none" else None,
+        station_attributes_path=args.station_attributes,
         se_shrinkage=args.se_shrinkage,
         queue_size=args.queue_size,
         learnable_temperature=args.learnable_temperature,

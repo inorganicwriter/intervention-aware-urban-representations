@@ -69,7 +69,13 @@ complete_estimator_spec <- function() {
       cv_method = "rolling", cv_nobs = 1L, cv_donut = 0L, cv_buffer = 0L,
       two_stage_cv_inference = TRUE,
       min.T0 = 1L, max_donors = 2000L, se = TRUE, nboots = 200L,
-      inference = "bootstrap", parallel = TRUE, cores = 8L
+      # Unit-level bootstrap is structurally broken for the one-treated-unit
+      # grid design: every resample drops the treated unit with probability
+      # ~1/e, so the ATT variance is (almost) never computable and fect
+      # returns NA S.E. with count=1.  Jackknife leave-one-out refits stay
+      # tractable at the 2,000-donor cap and produce finite S.E./CI/p
+      # (verified on real data); parametric is not available for method "mc".
+      inference = "jackknife", parallel = TRUE, cores = 8L
     ),
     families = list(
       housing = "housing_log_price",
@@ -233,7 +239,34 @@ read_city_annual_features <- function(city_key, families, root = project_root())
   result[]
 }
 
-read_city_monthly_housing <- function(city_key, root = project_root()) {
+read_city_monthly_housing <- function(city_key, root = project_root(),
+                                      price_measure = "median") {
+  assert_choice(price_measure, c("median", "hedonic"), "price_measure")
+  if (price_measure == "hedonic") {
+    # Hedonic quality-adjusted panel (Lianjia 22 cities), built by
+    # scripts/labels/build_housing_hedonic.py into the rebuildable outputs
+    # tree; never a data/active asset.
+    .hed_dir <- .resolve_path(
+      "HOUSING_HEDONIC_DIR", root,
+      "outputs", "causal_labels", "housing_hedonic"
+    )
+    path <- file.path(.hed_dir, paste0(city_key, "_monthly.parquet"))
+    if (!file.exists(path)) {
+      stop(
+        "Hedonic housing panel missing for ", city_key, ": ", path,
+        ". Run build_housing_hedonic.py first (Lianjia cities only)."
+      )
+    }
+    x <- as.data.table(read_parquet(path, col_select = c(
+      "city_key", "grid_id", "observed_month", "adjusted_price_median"
+    )))
+    x[, month := as.IDate(format(as.IDate(observed_month), "%Y-%m-01"))]
+    x[is.finite(adjusted_price_median) & adjusted_price_median > 0,
+      housing_log_price := log(adjusted_price_median)]
+    return(x[!is.na(housing_log_price), .(
+      housing_log_price = median(housing_log_price, na.rm = TRUE)
+    ), by = .(city_key, grid_id, month)])
+  }
   .dir <- .resolve_path("PANEL_HOUSING_MONTHLY_DIR", root, "data", "active", "panels", "housing_grid_month")
   path <- file.path(.dir, paste0(city_key, ".parquet"))
   x <- as.data.table(read_parquet(path, col_select = c(
@@ -245,7 +278,8 @@ read_city_monthly_housing <- function(city_key, root = project_root()) {
   ), by = .(city_key, grid_id, month)]
 }
 
-read_city_monthly_viirs <- function(city_key, months, root = project_root()) {
+read_city_monthly_viirs <- function(city_key, months, root = project_root(),
+                                    strict = TRUE) {
   months <- sort(unique(as.IDate(format(as.IDate(months), "%Y-%m-01"))))
   parts <- lapply(months, function(period) {
     year <- as.integer(format(period, "%Y"))
@@ -257,10 +291,18 @@ read_city_monthly_viirs <- function(city_key, months, root = project_root()) {
       sprintf("month=%02d", month_number), "part.parquet"
     )
     if (!file.exists(path)) {
-      stop(
-        "Missing VIIRS monthly cache partition: ", path,
-        ". Run ensure_viirs_monthly_cache.py before the R estimator."
-      )
+      if (strict) {
+        stop(
+          "Missing VIIRS monthly cache partition: ", path,
+          ". Run ensure_viirs_monthly_cache.py before the R estimator."
+        )
+      }
+      # Non-strict (label-path) reads: a missing partition means the post
+      # horizon extends past the 2012-2024 cache ceiling (openings >= 2023).
+      # Skip the month; the caller's panel merge turns it into NA and the
+      # label availability per horizon is decided downstream, so late
+      # openings keep the horizons the cache can cover.
+      return(NULL)
     }
     x <- as.data.table(read_parquet(
       path,
@@ -285,12 +327,14 @@ read_city_monthly_viirs <- function(city_key, months, root = project_root()) {
 }
 
 read_city_monthly_outcome <- function(city_key, family, months,
-                                      root = project_root()) {
+                                      root = project_root(),
+                                      price_measure = "median",
+                                      strict = TRUE) {
   assert_choice(family, c("housing", "viirs"), "monthly family")
   if (family == "housing") {
-    return(read_city_monthly_housing(city_key, root)[month %in% months])
+    return(read_city_monthly_housing(city_key, root, price_measure)[month %in% months])
   }
-  read_city_monthly_viirs(city_key, months, root)
+  read_city_monthly_viirs(city_key, months, root, strict = strict)
 }
 
 treatment_signatures <- function(root = project_root()) {
@@ -393,7 +437,7 @@ build_annual_estimator_panel <- function(
 build_monthly_estimator_panel <- function(
     city_key, cohort_month, outcome_family = "housing", signature = "auto",
     leads = 1:24, anticipation_months = NULL, treatment_order = NULL,
-    root = project_root()) {
+    price_measure = "median", root = project_root()) {
   spec <- complete_estimator_spec()
   assert_choice(outcome_family, c("housing", "viirs"), "monthly outcome_family")
   requested_city <- city_key
@@ -433,7 +477,10 @@ build_monthly_estimator_panel <- function(
     anticipation_months = anticipation_months
   )
   months <- calendar$model_months
-  outcomes <- read_city_monthly_outcome(city_key, outcome_family, months, root)
+  outcomes <- read_city_monthly_outcome(
+    city_key, outcome_family, months, root,
+    price_measure = if (outcome_family == "housing") price_measure else "median"
+  )
   panel <- CJ(unit_id = unit_map$unit_id, month = as.IDate(months), sorted = TRUE)
   panel <- merge(panel, unit_map[, .(unit_id, city_key, grid_id, role, unit_key)], by = "unit_id")
   panel <- merge(panel, outcomes, by = c("city_key", "grid_id", "month"), all.x = TRUE)
@@ -459,12 +506,13 @@ build_monthly_estimator_panel <- function(
 
 build_monthly_housing_estimator_panel <- function(
     city_key, cohort_month, signature = "auto", leads = 1:24,
-    anticipation_months = NULL, treatment_order = NULL, root = project_root()) {
+    anticipation_months = NULL, treatment_order = NULL, price_measure = "median",
+    root = project_root()) {
   build_monthly_estimator_panel(
     city_key = city_key, cohort_month = cohort_month, outcome_family = "housing",
     signature = signature, leads = leads,
     anticipation_months = anticipation_months, treatment_order = treatment_order,
-    root = root
+    price_measure = price_measure, root = root
   )
 }
 

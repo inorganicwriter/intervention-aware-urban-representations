@@ -7,12 +7,13 @@ source(file.path("scripts", "causal_r", "complete_estimators_lib.R"))
 
 args <- commandArgs(trailingOnly = TRUE)
 causal_run_id <- Sys.getenv("MIT_CAUSAL_RUN_ID", unset = "")
-if (length(args) < 3L || length(args) > 9L) {
+if (length(args) < 3L || length(args) > 10L) {
   stop(paste(
     "Usage: run_complete_xu_gsc.R CITY COHORT OUTCOME_FAMILY",
     paste(
       "[SIGNATURE=auto] [FREQUENCY=annual] [ANTICIPATION_MONTHS=6]",
-      "[TREATMENT_ORDER] [DONOR_SCOPE=same_city] [RUN_MODE=production]"
+      "[TREATMENT_ORDER] [DONOR_SCOPE=same_city] [RUN_MODE=production]",
+      "[PRICE_MEASURE=median]"
     )
   ))
 }
@@ -25,17 +26,24 @@ anticipation_months <- if (length(args) >= 6L) as.integer(args[[6L]]) else NULL
 treatment_order <- if (length(args) >= 7L) as.integer(args[[7L]]) else NULL
 donor_scope <- if (length(args) >= 8L) args[[8L]] else "same_city"
 run_mode <- if (length(args) >= 9L) args[[9L]] else "production"
+price_measure <- if (length(args) >= 10L) args[[10L]] else "median"
 assert_choice(frequency, c("annual", "monthly"), "frequency")
 assert_choice(donor_scope, c("same_city", "all_city_standardized"), "donor_scope")
 assert_choice(run_mode, c("production", "smoke_test"), "run_mode")
+assert_choice(price_measure, c("median", "hedonic"), "price_measure")
 if (frequency == "monthly") {
   assert_choice(outcome_family, c("housing", "viirs"), "monthly outcome_family")
+  if (price_measure == "hedonic") assert_choice(outcome_family, "housing", "hedonic outcome_family")
 }
 
 spec <- complete_estimator_spec()
 run_nboots <- if (run_mode == "smoke_test") 20L else spec$xu_gsc$nboots
 if (isTRUE(spec$xu_gsc$parallel_cv) || isTRUE(spec$xu_gsc$parallel_bootstrap)) {
-  options(future.globals.maxSize = 2 * 1024^3)
+  # gsynth's parallel parametric bootstrap exports large closures
+  # (draw.error/FUN can each exceed 2 GiB on wide donor panels); the default
+  # 2 GiB future.globals.maxSize then aborts every bootstrap.  Raise the cap
+  # well above observed peak object sizes instead of disabling parallelism.
+  options(future.globals.maxSize = 16 * 1024^3)
 }
 
 scope_donors <- function() {
@@ -61,10 +69,14 @@ scope_annual_outcomes <- function(donors) {
 
 scope_monthly_outcomes <- function(donors, months) {
   if (donor_scope == "same_city") {
-    return(read_city_monthly_outcome(city_key, outcome_family, months))
+    return(read_city_monthly_outcome(city_key, outcome_family, months,
+                             price_measure = price_measure,
+                             strict = outcome_family != "viirs"))
   }
   rbindlist(lapply(scope_cities(donors), function(city) {
-    read_city_monthly_outcome(city, outcome_family, months)
+    read_city_monthly_outcome(city, outcome_family, months,
+                          price_measure = price_measure,
+                          strict = outcome_family != "viirs")
   }), use.names = TRUE)
 }
 
@@ -387,6 +399,7 @@ run_one_outcome <- function(outcome) {
     inference = spec$xu_gsc$inference, nboots = run_nboots,
     run_mode = run_mode,
     production_eligible = run_mode == "production",
+    price_measure = price_measure,
     factor_selection_parallel = spec$xu_gsc$parallel_cv,
     factor_selection_cores = spec$xu_gsc$cv_cores,
     bootstrap_parallel = spec$xu_gsc$parallel_bootstrap,

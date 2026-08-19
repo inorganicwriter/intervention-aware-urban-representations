@@ -101,7 +101,7 @@ def few_shot_probe(
             "probe_units": int(shot),
             "eval_units": n - shot,
             "rmse_overall": round(float(np.mean(rmse_values)), 6),
-            "rmse_overall_std": round(float(np.std(rmse_values)), 6)
+            "rmse_overall_std": round(float(np.std(rmse_values, ddof=1)), 6)
             if len(rmse_values) > 1
             else 0.0,
             "seeds": len(rmse_values),
@@ -253,7 +253,7 @@ def cross_validated_probe(
         return {"rmse_overall": None, "folds": 0, "requested_folds": folds}
     return {
         "rmse_overall": round(float(np.mean(values)), 6),
-        "rmse_overall_std": round(float(np.std(values)), 6) if len(values) > 1 else 0.0,
+        "rmse_overall_std": round(float(np.std(values, ddof=1)), 6) if len(values) > 1 else 0.0,
         "folds": len(values),
         "requested_folds": folds,
         "mean_fitted_cells": round(float(np.mean(fitted_cells)), 3),

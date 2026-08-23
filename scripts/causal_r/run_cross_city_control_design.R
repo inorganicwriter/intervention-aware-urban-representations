@@ -19,7 +19,9 @@ task_root <- if (length(args) == 2L) args[[2L]] else file.path(
 )
 
 for (order in orders) {
-  output <- file.path(task_root, sprintf("%05d", order))
+  # Phase-2 fallback artifacts must never overwrite the durable same-city
+  # Phase-1 control design for this treatment order.
+  output <- file.path(task_root, sprintf("%05d", order), "cross_city")
   result <- tryCatch(
     design_cross_city_control(order, root),
     error = function(error) {
@@ -31,6 +33,7 @@ for (order in orders) {
     }
   )
   if (identical(result$status, "matched")) {
+    unlink(file.path(output, "cross_city_attempt.csv"), force = TRUE)
     write_grid_control_result(result, output)
   } else {
     # Round-4 failure: never overwrite the same-city durable

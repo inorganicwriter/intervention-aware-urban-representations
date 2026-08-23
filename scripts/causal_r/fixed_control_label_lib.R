@@ -56,6 +56,8 @@ monthly_fixed_control_labels <- function(target, control_city_key, control_grid_
   # mean over months [max(1, h-window+1), h] after opening (window=1 keeps
   # the single-month specification; window=3/6 are the W=3/W=6 robustness
   # views).  The window never reaches into the pre-opening months.
+  # Sparse windows are admitted when both treated and control have at least
+  # one finite value; effective counts are retained for downstream auditing.
   window_starts <- pmax(1L, horizons - window + 1L)
   post_leads <- sort(unique(unlist(Map(
     function(start, end) seq.int(start, end), window_starts, horizons
@@ -92,19 +94,32 @@ monthly_fixed_control_labels <- function(target, control_city_key, control_grid_
     outcome = outcome, event_time = horizons,
     period = as.IDate(lead_to_month[as.character(horizons)])
   )
-  window_mean <- function(month_table, leads) {
+  window_stats <- function(month_table, leads) {
     months_in <- as.IDate(lead_to_month[as.character(sort(unique(leads)))])
     values <- month_table[month %in% months_in, get(outcome)]
     values <- values[is.finite(values)]
-    if (!length(values)) NA_real_ else mean(values)
+    list(
+      mean = if (!length(values)) NA_real_ else mean(values),
+      n = as.integer(length(values))
+    )
   }
+  treated_stats <- lapply(
+    horizons,
+    function(h) window_stats(treated, max(1L, h - window + 1L):h)
+  )
+  control_stats <- lapply(
+    horizons,
+    function(h) window_stats(control, max(1L, h - window + 1L):h)
+  )
   result[, `:=`(
-    treated_post = vapply(horizons, function(h) {
-      window_mean(treated, max(1L, h - window + 1L):h)
-    }, numeric(1L)),
-    control_post = vapply(horizons, function(h) {
-      window_mean(control, max(1L, h - window + 1L):h)
-    }, numeric(1L))
+    treated_post = vapply(treated_stats, function(x) x$mean, numeric(1L)),
+    control_post = vapply(control_stats, function(x) x$mean, numeric(1L)),
+    effective_n_treated = vapply(treated_stats, function(x) x$n, integer(1L)),
+    effective_n_control = vapply(control_stats, function(x) x$n, integer(1L)),
+    # Require a complete post-treatment observation window.  At horizon 1
+    # only one post month exists; from horizon 3 onward W=3 requires all
+    # three calendar months rather than accepting a sparse partial mean.
+    minimum_window_n = pmin(as.integer(window), horizons)
   )]
   result[, `:=`(
     treated_baseline = treated_baseline,
@@ -115,8 +130,17 @@ monthly_fixed_control_labels <- function(target, control_city_key, control_grid_
   result[, `:=`(
     observed = treated_post,
     counterfactual = treated_baseline + control_change,
-    causal_response_label = treated_change - control_change,
-    label_available = is.finite(treated_change) & is.finite(control_change)
+    window_supported = effective_n_treated >= minimum_window_n &
+      effective_n_control >= minimum_window_n
+  )]
+  # Keep this as a separate assignment: data.table does not guarantee that a
+  # column created in the same := call is visible to another RHS expression.
+  result[, label_available := window_supported &
+    is.finite(treated_change) & is.finite(control_change)]
+  result[, causal_response_label := ifelse(
+    label_available,
+    treated_change - control_change,
+    NA_real_
   )]
 
   # Regression-based DiD for each horizon.  Sparse monthly panels (housing in

@@ -104,12 +104,17 @@ mc_args <- list(
 )
 mc_input <- copy(panel)
 mc_input[D == 1L, Y := mean(mc_input[unit_id == 1L & D == 0L, Y])]
+# Fit once with the observed treated post-period values and once with the
+# runner's pre-treatment-only replacement. The counterfactual must be
+# invariant to the observed treatment response.
+mc_args$data <- panel
+set.seed(20260725)
+mc_observed <- do.call(fect::fect, mc_args)
 mc_args$data <- mc_input
 set.seed(20260725)
 mc <- do.call(fect::fect, mc_args)
 panel_shifted <- copy(panel)
 panel_shifted[D == 1L, Y := Y + 100]
-panel_shifted[D == 1L, Y := mean(panel_shifted[unit_id == 1L & D == 0L, Y])]
 mc_args$data <- panel_shifted
 set.seed(20260725)
 mc_shifted <- do.call(fect::fect, mc_args)
@@ -125,6 +130,7 @@ stopifnot(
   inherits(mc_final, "fect"), identical(mc_final$method, "mc"),
   all(is.finite(mc_final$Y.ct)),
   all(is.finite(mc$Y.ct)),
+  isTRUE(all.equal(mc_observed$Y.ct, mc$Y.ct, tolerance = 1e-10)),
   isTRUE(all.equal(mc$Y.ct, mc_shifted$Y.ct, tolerance = 1e-10))
 )
 
@@ -145,7 +151,7 @@ stopifnot(
   isTRUE(registered$mc$two_stage_cv_inference),
   identical(registered$mc$CV, TRUE),
   identical(registered$mc$criterion, "mspe"),
-  identical(registered$mc$inference, "bootstrap")
+  identical(registered$mc$inference, "jackknife")
 )
 
 cat("All four complete published-estimator workflows passed synthetic tests.\n")

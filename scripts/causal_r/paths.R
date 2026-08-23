@@ -30,6 +30,20 @@ load_project_paths <- function(root = NULL) {
   }
   paths <- jsonlite::fromJSON(manifest, simplifyVector = FALSE)
   paths <- lapply(paths, function(x) gsub("\\", "/", x, fixed = TRUE))
+  manifest_root <- paths[["PROJECT_ROOT"]]
+  canonical_root <- normalizePath(root, winslash = "/", mustWork = FALSE)
+  canonical_manifest_root <- normalizePath(manifest_root, winslash = "/", mustWork = FALSE)
+  if (.Platform$OS.type == "windows") {
+    canonical_root <- tolower(canonical_root)
+    canonical_manifest_root <- tolower(canonical_manifest_root)
+  }
+  if (!identical(canonical_root, canonical_manifest_root)) {
+    stop(
+      "paths.json belongs to a different project root: ", canonical_manifest_root,
+      "; current root is ", canonical_root,
+      ". Regenerate it with export_paths_json()."
+    )
+  }
   list2env(paths, envir = .GlobalEnv)
   invisible(paths)
 }

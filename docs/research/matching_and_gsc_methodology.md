@@ -1,7 +1,7 @@
 # 对照组匹配、广义合成控制与矩阵补全：方法说明
 
 状态：active  
-日期：2026-07-24  
+日期：2026-08-19
 适用范围：5,048 个地铁站点处理网格的控制组选择、匹配标签生成、GSC 回退和 MC 第三层回退
 
 ## 1. 文档定位
@@ -16,17 +16,16 @@
 ```text
 对每个处理网格 i：
   1. 提取处理前多变量特征（房价/VIIRS/POI/人口，按可用性筛选活跃变量族）
-  2. 活跃变量族 < 1 → gsc_pending
+  2. 没有完整变量族 → 该结果族跳过，记录结构化原因
   3. 同城 Abadie-Imbens 最近邻匹配（lag2/lag3 训练，lag1 holdout）
-  4. 共同支持检查 → 不通过则 gsc_pending
-  5. donor-donor placebo q95 门禁 → 不通过则 gsc_pending
-  6. 同城通过 → matched（冻结控制身份）
-  7. 同城未通过 → 跨城标准化匹配（相同流程）
-  8. 跨城通过 → matched
-  9. 跨城未通过 → gsc_pending
-  10. gsc_pending 的网格按结果变量运行 Xu GSC
-  11. GSC 失败 → 运行 MC（矩阵补全，Athey et al. 2021）
-  12. MC 失败 → skipped（不降级补标签）
+  4. 匹配通过 → matched（冻结控制身份）
+  5. 匹配失败 → 同城 Xu GSC
+  6. 同城 GSC 失败 → 同城 MC（矩阵补全，Athey et al. 2021）
+  7. 同城 MC 失败 → 跨城标准化匹配
+  8. 跨城匹配通过 → matched
+  9. 跨城匹配失败 → 跨城 Xu GSC
+  10. 跨城 GSC 失败 → 跨城 MC
+  11. 跨城 MC 失败 → skipped，记录结构化原因
 ```
 
 ---
@@ -84,7 +83,7 @@
 - `BiasAdjust = TRUE`，`Var.calc = 1`（完整 cohort ATT 估计时使用异方差稳健解析方差）
 - 共同支持（common support）是 Abadie-Imbens 框架的标准要求
 
-#### 项目自行设计的部分（不属于论文算法）
+#### 项目层设计（与论文步骤分开）
 
 | 设计 | 论文是否涉及 | 项目理由 |
 |------|------------|---------|
@@ -92,7 +91,7 @@
 | lag1 holdout + donor-donor placebo q95 门禁 | 否 | 项目预注册的质量规则；用 200 个确定性 donor 伪处理匹配校准阈值 |
 | 同城优先 → 跨城标准化 fallback 路由 | 否 | 城市内经济环境更相似；跨城需处理前城市内标准化（median/MAD） |
 | 三块 12 月特征（lag1/2/3） | 否 | 月度数据稀疏（房价非每月交易），分块求均值避免要求特定月份有观测 |
-| 最少 1 个完整变量族（项目保守选择） | 否 | 放宽以增加标签覆盖；单变量标签标记较低质量等级 |
+| 最少 1 个完整变量族（覆盖优先边界） | 否 | 保留可用标签覆盖；单变量标签记录较低质量等级 |
 | 控制身份冻结后不可因结果改变 | 否 | 防止基于处理后结果重新选择对照 |
 
 #### 关键区别
@@ -150,7 +149,7 @@
 
 #### 项目角色
 
-PanelMatch 作为**独立稳健性估计器**运行，不参与逐网格标签生产。其结果用于校验匹配和 GSC 标签的合理性，不作为训练信号。DDR-003 明确规定三种估计器不得混合。
+PanelMatch 作为**独立稳健性估计器**运行，不参与逐网格标签生产。其结果用于校验匹配和 GSC 标签的合理性，不作为训练信号；三种估计器分别报告。
 
 ---
 
@@ -275,12 +274,13 @@ scale  = mad(donor_values)      # by city, fallback to sd, fallback to 1
 
 ### 6.1 进入条件
 
-以下任一情况进入 `gsc_pending`：
+对至少有一个完整变量族的网格，以下匹配失败情况进入 `gsc_pending`：
 
-- 活跃变量族 < 1
 - 共同支持失败
 - 最近邻不存在
-- placebo/holdout 门禁失败（同城和跨城均失败）
+- placebo/holdout 门禁失败
+
+没有完整变量族的结果族直接跳过，并记录结构化失败原因。
 
 ### 6.2 donor pool
 
@@ -392,13 +392,13 @@ minimize ||Y_obs - L||_F^2 + λ||L||_*
 | 平行趋势 | 通过交互固定效应近似 | 不要求 |
 | 交叉验证 | 因子数 r ∈ {0,...,5} | 正则化参数 λ |
 | donor 数量 | 无上限（项目实践不加 cap） | 有 soft cap（受内存限制，项目按预处理完整度选 top 2000） |
-| bootstrap | 参数 bootstrap 200 次 | 非参数 bootstrap 200 次 |
+| inference | 参数 bootstrap 200 次 | 固定 lambda 后 jackknife；`nboots=200` 仅保留为兼容性元数据 |
 
 ### 7.5 项目设计与原文的关系
 
 MC 方法来自 Athey et al. (2021)，项目不做算法修改。`min.T0=1` 和
 `max_donors=2000` 是项目层面的应用参数，不属于论文算法内部步骤。Ratledge
-et al. (2022) 验证了 MC 在数据稀疏环境下的可靠性——他们面对的是**结果变量
+et al. (2022) 验证了 MC 在数据稀疏环境下的可靠性。他们面对的是**结果变量
 完全缺失**（需要 CNN 从卫星影像预测），我们面对的是**预处理期不足**（数据
 有观测但不够 GSC 的 min.T0=5），因此不需要 CNN 预测步骤，直接使用 MC
 补全反事实路径。
@@ -410,7 +410,7 @@ L[i,k,h] = Y_observed[i,k,h] - Y_counterfactual[i,k,h]
 ```
 
 其中 `Y_counterfactual` 为 MC 模型的 `fit$Y.ct` 列。不确定性（SE、CI、p 值）
-来自 200 次非参数 bootstrap。MC 必须以 `CV=TRUE` 对 20 个候选正则化强度进行
+来自固定 lambda 后的 jackknife。MC 必须以 `CV=TRUE` 对 20 个候选正则化强度进行
 MSPE 交叉验证；`lambda.cv`、CV MSPE、处理前观测期数和处理前 RMSPE 均写入标签与
 manifest。处理单元的处理后结果在 CV 和拟合前统一替换为仅由处理前数据计算的均值，
 避免响应泄漏。`min.T0=1` 的标签标记为
@@ -470,7 +470,7 @@ Athey et al. (2021) 不设 donor 数量上限。项目实践中，`gsynth` 的 M
     Y_it = sum_k beta_k * D_it^k + alpha_i + gamma_t + eps_it
 
 - Y_it：结果水平值（房价 log price / VIIRS asinh 辐亮度）
-- D_it^k：事件时间虚拟变量，基期 k = -1 省略
+- D_it^k：事件时间虚拟变量，基期为最后一个清洁处理前时期；月度主规格为 k = -7
 - alpha_i：网格固定效应；gamma_t：日历月固定效应
 - 标准误按网格聚类
 - 平行趋势检验：H0: beta_k = 0 for all k < 0 的联合 Wald 检验

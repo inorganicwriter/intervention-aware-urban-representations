@@ -22,6 +22,7 @@ feature, red = before, blue-green = after, dashed lines at +/- 0.10.
 
 Outputs:
     outputs/figures/balance_loveplot.png
+    outputs/figures/balance_loveplot_cross_city.png (when available)
     outputs/figures/balance_smd.csv
 """
 
@@ -34,6 +35,15 @@ from pathlib import Path
 import matplotlib
 
 matplotlib.use("Agg")
+matplotlib.rcParams.update(
+    {
+        "font.family": ["Times New Roman", "Times", "DejaVu Serif"],
+        "font.serif": ["Times New Roman", "Times", "DejaVu Serif"],
+        "pdf.fonttype": 42,
+        "ps.fonttype": 42,
+        "svg.fonttype": "none",
+    }
+)
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
@@ -179,51 +189,78 @@ def build_balance_report(
                 }
             )
 
-    donor_pool_cache: dict[tuple[str, str, str, int], pd.Series] = {}
+    donor_pool_cache: dict[tuple[str, ...], pd.Series] = {}
     city_stores: dict[str, tuple[pd.DataFrame | None, pd.DataFrame | None]] = {}
-    by_feature: dict[str, dict[str, list]] = {}
+
+    def get_city_stores(city: str) -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
+        """Load one city's feature stores, restricted to requested lag windows."""
+        if city in city_stores:
+            return city_stores[city]
+        annual_path = store_root / f"{city}_annual.parquet"
+        monthly_path = store_root / f"{city}_monthly.parquet"
+        annual = pd.read_parquet(annual_path) if annual_path.exists() else None
+        monthly = pd.read_parquet(monthly_path) if monthly_path.exists() else None
+        if monthly is not None and "month" in monthly.columns:
+            monthly["month"] = pd.to_datetime(monthly["month"])
+            city_openings = [
+                pd.Timestamp(
+                    pd.Period(str(task["opening_month"])[:7], freq="M").to_timestamp()
+                )
+                for task in tasks
+                if task["city_key"] == city or task["scope"] == "all_city_standardized"
+            ]
+            if city_openings:
+                lo = min(
+                    opening - pd.DateOffset(months=LAG_CALENDAR_OFFSET + MONTHS_PER_BLOCK * 2)
+                    for opening in city_openings
+                )
+                hi = max(
+                    opening - pd.DateOffset(months=LAG_CALENDAR_OFFSET - 1)
+                    for opening in city_openings
+                )
+                monthly = monthly.loc[monthly["month"].between(lo, hi)].copy()
+        city_stores[city] = (annual, monthly)
+        return city_stores[city]
+
+    by_scope_feature: dict[tuple[str, str], dict[str, list]] = {}
     for task in tasks:
         feature = task["feature"]
         variable, lag = parse_feature_name(feature)
         city = task["city_key"]
-        key = (city, task["opening_month"], variable, lag)
-        if key not in donor_pool_cache:
-            if city not in city_stores:
-                annual_path = store_root / f"{city}_annual.parquet"
-                monthly_path = store_root / f"{city}_monthly.parquet"
-                annual = pd.read_parquet(annual_path) if annual_path.exists() else None
-                monthly = pd.read_parquet(monthly_path) if monthly_path.exists() else None
-                if monthly is not None and "month" in monthly.columns:
-                    monthly["month"] = pd.to_datetime(monthly["month"])
-                    # Pre-filter to the union of the city's lag windows.
-                    city_openings = [
-                        pd.Timestamp(
-                            pd.Period(str(t["opening_month"])[:7], freq="M").to_timestamp()
-                        )
-                        for t in tasks
-                        if t["city_key"] == city
-                    ]
-                    if city_openings:
-                        lo = min(
-                            o - pd.DateOffset(months=LAG_CALENDAR_OFFSET + MONTHS_PER_BLOCK * 2)
-                            for o in city_openings
-                        )
-                        hi = max(
-                            o - pd.DateOffset(months=LAG_CALENDAR_OFFSET - 1) for o in city_openings
-                        )
-                        monthly = monthly.loc[monthly["month"].between(lo, hi)].copy()
-                city_stores[city] = (annual, monthly)
-            annual, monthly = city_stores[city]
-            # The before-pool is the same-city eligible donor set for every
-            # task (including cross-city-scope tasks, whose standardized
-            # matching pool is not directly comparable on raw scales).
-            donor_grids = donors.loc[donors["city_key"].eq(city), "grid_id"]
-            donor_pool_cache[key] = _donor_pool_values(
-                annual, monthly, donor_grids, variable, lag, task["opening_month"]
+        scope = str(task["scope"])
+        scope_key = "cross_city" if scope == "all_city_standardized" else "same_city"
+        pool_key = (
+            scope_key,
+            city if scope_key == "same_city" else "all_city",
+            task["opening_month"],
+            variable,
+            str(lag),
+        )
+        if pool_key not in donor_pool_cache:
+            donor_chunks = []
+            pool_cities = [city] if scope_key == "same_city" else sorted(
+                donors["city_key"].dropna().unique().tolist()
             )
-        donor_values = donor_pool_cache[key]
-        entry = by_feature.setdefault(
-            feature,
+            for donor_city in pool_cities:
+                city_key = (donor_city, task["opening_month"], variable, lag)
+                if city_key not in donor_pool_cache:
+                    annual, monthly = get_city_stores(donor_city)
+                    donor_grids = donors.loc[
+                        donors["city_key"].eq(donor_city), "grid_id"
+                    ]
+                    donor_pool_cache[city_key] = _donor_pool_values(
+                        annual, monthly, donor_grids, variable, lag,
+                        task["opening_month"]
+                    )
+                if not donor_pool_cache[city_key].empty:
+                    donor_chunks.append(donor_pool_cache[city_key])
+            donor_pool_cache[pool_key] = (
+                pd.concat(donor_chunks, ignore_index=True)
+                if donor_chunks else pd.Series(dtype=float)
+            )
+        donor_values = donor_pool_cache[pool_key]
+        entry = by_scope_feature.setdefault(
+            (scope_key, feature),
             {
                 "treated": [],
                 "control": [],
@@ -235,7 +272,7 @@ def build_balance_report(
         entry["donor"].extend(donor_values.astype(float).tolist())
 
     rows = []
-    for feature, entry in sorted(by_feature.items()):
+    for (scope, feature), entry in sorted(by_scope_feature.items()):
         treated = np.asarray(entry["treated"], dtype=float)
         control = np.asarray(entry["control"], dtype=float)
         donor = np.asarray(entry["donor"], dtype=float)
@@ -243,6 +280,7 @@ def build_balance_report(
         smd_after = pooled_smd(treated, control)
         rows.append(
             {
+                "scope": scope,
                 "feature": feature,
                 "n_treated": int(len(treated)),
                 "n_controls": int(len(control)),
@@ -261,9 +299,13 @@ def build_balance_report(
 
 
 def render_loveplot(
-    report: pd.DataFrame, out_path: Path, threshold: float = BALANCE_THRESHOLD
+    report: pd.DataFrame,
+    out_path: Path,
+    threshold: float = BALANCE_THRESHOLD,
+    scope: str | None = None,
 ) -> None:
-    frame = report.dropna(subset=["smd_before", "smd_after"])
+    frame = report if scope is None else report.loc[report["scope"].eq(scope)]
+    frame = frame.dropna(subset=["smd_before", "smd_after"])
     frame = frame.assign(_rank=frame[["smd_before", "smd_after"]].abs().max(axis=1)).sort_values(
         "_rank", ascending=True
     )
@@ -290,19 +332,23 @@ def render_loveplot(
         s=42,
         zorder=3,
     )
-    axis.axvline(0.1, color="red", linestyle=":", linewidth=1.0, alpha=0.6)
     axis.set_yticks(y_positions)
     axis.set_yticklabels(frame["feature"], fontsize=8)
     axis.set_xlabel("Standardized mean difference (SMD)")
+    scope_title = "all scopes" if scope is None else scope.replace("_", " ")
     axis.set_title(
         "Covariate balance, frozen grid-control design "
-        f"(n treated = {int(frame['n_treated'].max())})"
+        f"({scope_title}; features shown = {len(frame)})"
     )
     axis.legend(loc="lower right", fontsize=9)
     axis.grid(axis="x", color="grey", alpha=0.3)
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=150)
+    # Keep a sharp raster for quick inspection and vector companions for
+    # reports; all three share the same plotted data and dimensions.
+    fig.savefig(out_path, dpi=300)
+    fig.savefig(out_path.with_suffix(".pdf"), bbox_inches="tight")
+    fig.savefig(out_path.with_suffix(".svg"), bbox_inches="tight")
     plt.close(fig)
 
 
@@ -329,8 +375,16 @@ def main() -> int:
     csv_path = args.out_dir / "balance_smd.csv"
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     report.to_csv(csv_path, index=False, encoding="utf-8-sig")
-    render_loveplot(report, args.out_dir / "balance_loveplot.png")
-    print(f"Wrote {csv_path} ({len(report)} features) and balance_loveplot.png")
+    rendered = []
+    for scope in ("same_city", "cross_city"):
+        if report["scope"].eq(scope).any():
+            filename = "balance_loveplot.png" if scope == "same_city" else "balance_loveplot_cross_city.png"
+            render_loveplot(report, args.out_dir / filename, scope=scope)
+            rendered.append(filename)
+    if not rendered:
+        render_loveplot(report, args.out_dir / "balance_loveplot.png")
+        rendered.append("balance_loveplot.png")
+    print(f"Wrote {csv_path} ({len(report)} scope-feature rows) and {', '.join(rendered)}")
     return 0
 
 

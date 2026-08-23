@@ -6,6 +6,8 @@ import argparse
 import sys
 from pathlib import Path
 
+import pandas as pd
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
@@ -38,7 +40,21 @@ def main() -> int:
         type=Path,
         default=CAUSAL_RELEASES_DIR,
     )
+    parser.add_argument(
+        "--orders-file",
+        type=Path,
+        help="Optional CSV with treatment_order values; restricts a canary release to those grids.",
+    )
     args = parser.parse_args()
+    treatment_orders = None
+    if args.orders_file is not None:
+        orders_frame = pd.read_csv(args.orders_file)
+        if "treatment_order" not in orders_frame.columns:
+            raise ValueError(f"Orders file lacks treatment_order: {args.orders_file}")
+        parsed_orders = pd.to_numeric(orders_frame["treatment_order"], errors="coerce")
+        if parsed_orders.isna().any() or parsed_orders.duplicated().any():
+            raise ValueError("Orders file must contain unique integer treatment_order values")
+        treatment_orders = tuple(int(value) for value in parsed_orders)
     inputs = ArtifactInputs(
         treatments=TREATMENT_UNIT_LIST,
         family_queue=OUTCOME_FAMILY_QUEUE,
@@ -46,6 +62,7 @@ def main() -> int:
         task_root=OUTPUT_CAUSAL_TASKS_DIR,
         donor_universe=ELIGIBLE_DONORS,
         target_support=FORMAL_TARGET_SUPPORT,
+        treatment_orders=treatment_orders,
     )
     destination = publish_response_artifact(
         inputs,

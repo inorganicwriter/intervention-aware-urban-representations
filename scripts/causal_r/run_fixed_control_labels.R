@@ -7,6 +7,7 @@ source(file.path("scripts", "causal_r", "fixed_control_label_lib.R"))
 
 args <- commandArgs(trailingOnly = TRUE)
 causal_run_id <- Sys.getenv("MIT_CAUSAL_RUN_ID", unset = "")
+specification_fingerprint <- Sys.getenv("MIT_SPECIFICATION_FINGERPRINT", unset = "")
 if (length(args) < 4L || length(args) > 7L) {
   stop(paste(
     "Usage: run_fixed_control_labels.R TREATMENT_ORDER",
@@ -25,6 +26,11 @@ output <- if (length(args) >= 5L && nzchar(args[[5L]])) args[[5L]] else file.pat
 )
 window <- if (length(args) >= 6L) as.integer(args[[6L]]) else 1L
 price_measure <- if (length(args) >= 7L) args[[7L]] else "median"
+if (!nzchar(specification_fingerprint)) {
+  specification_fingerprint <- paste0(
+    "main_a6_r1km__a6__w", window, "__price_", price_measure
+  )
+}
 dir.create(output, recursive = TRUE, showWarnings = FALSE)
 
 labels <- fixed_control_labels(
@@ -40,6 +46,7 @@ write_run_manifest(output, list(
   run_id = causal_run_id,
   estimator = "frozen_matched_change",
   treatment_order = treatment_order,
+  specification_fingerprint = specification_fingerprint,
   outcome_family = family,
   control_city_key = control_city_key,
   control_grid_id = control_grid_id,

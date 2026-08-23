@@ -27,12 +27,16 @@ make_task_labels <- function(order, city, event_times, values, family = "populat
 write_task <- function(root, tag, labels, production = TRUE) {
   dir_path <- file.path(root, "xu_gsc", "test_city", tag)
   dir.create(dir_path, recursive = TRUE, showWarnings = FALSE)
+  family_name <- unique(as.character(labels$outcome_family))
+  stopifnot(length(family_name) == 1L)
   write_parquet(as.data.frame(labels), file.path(dir_path, "causal_response_labels.parquet"),
                 compression = "zstd")
   write_estimator_manifest(dir_path, list(
     schema = "test_v1", run_id = paste0("run_", tag),
     estimator = "gsynth", run_mode = if (production) "production" else "smoke",
-    production_eligible = if (production) "TRUE" else "FALSE"
+    production_eligible = if (production) "TRUE" else "FALSE",
+    frequency = if (family_name %in% c("housing", "viirs")) "monthly" else "annual",
+    specification_fingerprint = "main_a6_r1km__a6__w3__price_main"
   ))
 }
 
@@ -125,7 +129,7 @@ report <- readLines(file.path(output, "event_study_report.md"), warn = FALSE)
 stopifnot(any(grepl("Joint zero-pre-trend tests", report)),
           any(grepl("population", report)),
           file.exists(file.path(output, "figures",
-                                "event_study_population__population_log.png")))
+                                "event_study_annual__population__population_log.png")))
 
 cat(paste0(
   "Event-study aggregation tests passed: admission filter, series, CI, ",

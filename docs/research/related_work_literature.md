@@ -201,9 +201,9 @@
 
 你提出的 **Intervention-aware Urban Representation Learning** 位于以下交叉点：
 
-1. **Urban Representation Learning** (zone embedding) —— 但现有工作学的是"空间长什么样"
-2. **Causal ML + Policy Evaluation** (DiD / SCM / Matrix Completion) —— 但因果推断独立于表征学习
-3. **TOD Impact** (地铁站效应) —— 但依赖手工特征而非学习到的embedding
+1. **Urban Representation Learning** (zone embedding)：现有工作主要学习“空间长什么样”。
+2. **Causal ML + Policy Evaluation** (DiD / SCM / Matrix Completion)：因果推断通常独立于表征学习。
+3. **TOD Impact** (地铁站效应)：现有研究多依赖手工特征，而非学习到的 embedding。
 
 你的核心创新：**学到的是"空间对policy如何响应"**，即embedding空间的相似度 = 干预响应路径的相似度。这实质上是将 contrastive learning 的相似度定义从视觉/语义相似重构为**因果响应相似**。
 

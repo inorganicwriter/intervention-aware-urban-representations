@@ -12,31 +12,22 @@ import hashlib
 import json
 import math
 import os
+import signal
 import subprocess
 import sys
+import time
 import uuid
 from collections.abc import Iterable
+from contextlib import suppress
 from pathlib import Path
 
 import pandas as pd
 import pyarrow.parquet as pq
 
-ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "src"))
+CODE_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(CODE_ROOT / "src"))
 
 from urban_intervention.data.paths import (  # noqa: E402
-    CAUSAL_DIR,
-    OUTPUT_CONTROL_TASKS_DIR,
-    OUTPUT_FIXED_CONTROL_DIR,
-    PANEL_HOUSING_MONTHLY_DIR,
-    POI_DIR,
-    POPULATION_DIR,
-    R_LIB_DIR,
-    TREATMENT_UNIT_LIST,
-    collection_script,
-    r_script,
-)
-from urban_intervention.data.paths import (
     CONTROL_DESIGN_QUEUE as CONTROL_QUEUE,
 )
 from urban_intervention.data.paths import (
@@ -57,14 +48,31 @@ from urban_intervention.data.paths import (
 from urban_intervention.data.paths import (
     OUTPUT_COMPLETE_STAGING_DIR as STAGING,
 )
+from urban_intervention.data.paths import (
+    OUTPUT_CONTROL_TASKS_DIR,
+    OUTPUT_FIXED_CONTROL_DIR,
+    PANEL_HOUSING_MONTHLY_DIR,
+    POI_DIR,
+    POPULATION_DIR,
+    PROJECT_ROOT,
+    R_LIB_DIR,
+    TREATMENT_UNIT_LIST,
+    collection_script,
+    r_script,
+)
 
 R_SCRIPT = os.environ.get("MIT_RSCRIPT", "Rscript")
 R_LIB = Path(os.environ.get("MIT_R_LIB", str(R_LIB_DIR)))
 VIIRS_RAW = os.environ.get("MIT_VIIRS_RAW")
+ROOT = PROJECT_ROOT
 
 # Main anticipation window in months (complete_estimator_spec()$timing:
 # main = 6; sensitivity = 0 / 12).  Set via --anticipation-months.
 _ANTICIPATION_MONTHS = 6
+_PRICE_MEASURE = "median"
+_LABEL_WINDOW = 1
+_RUN_MODE = "production"
+_R_TIMEOUT_SECONDS = int(os.environ.get("MIT_R_TIMEOUT_SECONDS", "7200"))
 
 OUTCOMES = {
     "housing": ["housing_log_price"],
@@ -87,9 +95,19 @@ HORIZONS = {
 
 def atomic_csv(frame: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     frame.to_csv(temporary, index=False, encoding="utf-8-sig")
-    os.replace(temporary, path)
+    try:
+        for attempt in range(5):
+            try:
+                os.replace(temporary, path)
+                break
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.25 * (attempt + 1))
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def atomic_parquet(frame: pd.DataFrame, path: Path) -> None:
@@ -109,6 +127,24 @@ def atomic_json(payload: dict[str, object], path: Path) -> None:
     os.replace(temporary, path)
 
 
+def effective_price_measure(row: pd.Series) -> str:
+    """Resolve the housing measure for the approved mixed main specification."""
+    if _PRICE_MEASURE != "main" or str(row.outcome_family) != "housing":
+        return "median" if _PRICE_MEASURE == "main" else _PRICE_MEASURE
+    hedonic_path = ROOT / "outputs" / "causal_labels" / "housing_hedonic" / (
+        f"{row.city_key}_monthly.parquet"
+    )
+    return "hedonic" if hedonic_path.exists() else "median"
+
+
+def specification_fingerprint(row: pd.Series) -> str:
+    """Identify the exact label specification used by this queue process."""
+    return (
+        f"main_a6_r1km__a{_ANTICIPATION_MONTHS}__w{_LABEL_WINDOW}"
+        f"__price_{_PRICE_MEASURE}"
+    )
+
+
 def file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -123,6 +159,29 @@ def read_family_queue(path: Path = FAMILY_QUEUE) -> pd.DataFrame:
     for column in ("status", "selected_method", "failure_reason", "outcome_family"):
         queue[column] = queue[column].astype("string")
     return queue
+
+
+def read_orders_file(path: Path) -> set[int]:
+    """Read a treatment-order sample manifest with strict uniqueness checks."""
+    frame = pd.read_csv(path)
+    if "treatment_order" not in frame.columns:
+        raise ValueError(f"Orders file lacks treatment_order: {path}")
+    values = pd.to_numeric(frame["treatment_order"], errors="raise").astype(int).tolist()
+    orders = set(values)
+    if len(orders) != len(values):
+        raise ValueError(f"Orders file contains duplicate treatment_order values: {path}")
+    if not orders:
+        raise ValueError(f"Orders file is empty: {path}")
+    return orders
+
+
+def shard_order_slice(orders: list[int], shard_id: int, shard_count: int) -> list[int]:
+    """Split an explicit processing order list into balanced shard slices."""
+    chunk_size = len(orders) // shard_count
+    remainder = len(orders) % shard_count
+    start = shard_id * chunk_size + min(shard_id, remainder)
+    size = chunk_size + (1 if shard_id < remainder else 0)
+    return orders[start : start + size]
 
 
 def read_control_queue(path: Path = CONTROL_QUEUE) -> pd.DataFrame:
@@ -182,6 +241,7 @@ def run(
     command: list[str], environment_overrides: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
+    environment["MIT_PROJECT_ROOT"] = str(ROOT)
     if R_LIB.is_dir():
         environment["R_LIBS_USER"] = str(R_LIB)
     # The queue's Python subprocesses (e.g. ensure_viirs_monthly_cache.py)
@@ -193,15 +253,43 @@ def run(
     )
     if environment_overrides:
         environment.update(environment_overrides)
-    return subprocess.run(
+    # Keep BLAS/data.table from creating a second hidden parallel layer unless
+    # the server explicitly opts into it.  The estimator-level cores are
+    # controlled in complete_estimator_spec().
+    for variable in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+        environment.setdefault(variable, "1")
+    environment.setdefault("R_DATATABLE_NUM_THREADS", "1")
+    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+    process = subprocess.Popen(
         command,
         cwd=ROOT,
         env=environment,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        check=False,
+        start_new_session=os.name != "nt",
+        creationflags=creationflags,
     )
+    try:
+        stdout, _ = process.communicate(timeout=_R_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as exc:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                check=False,
+            )
+        else:
+            with suppress(ProcessLookupError):
+                os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+        stdout, _ = process.communicate()
+        output = (stdout or "") + f"\nR subprocess timed out after {_R_TIMEOUT_SECONDS}s\n"
+        if exc.stdout:
+            output = str(exc.stdout) + output
+        return subprocess.CompletedProcess(command, 124, output)
+    return subprocess.CompletedProcess(command, process.returncode, stdout or "")
 
 
 def family_signature(row: pd.Series, support: pd.DataFrame) -> str:
@@ -269,7 +357,40 @@ def family_has_observed_support(row: pd.Series) -> bool:
 
 
 def task_directory(order: int, family: str) -> Path:
-    return TASK_ROOT / f"{order:05d}" / family
+    root = TASK_ROOT if _RUN_MODE == "production" else TASK_ROOT.parent / "tasks_preview"
+    return root / f"{order:05d}" / family
+
+
+def queue_variant_path(path: Path, run_mode: str) -> Path:
+    """Return an isolated queue path for non-production preview work."""
+    if run_mode == "production":
+        return path
+    return path.with_name(f"{path.stem}_{run_mode}{path.suffix}")
+
+
+def shard_queue_path(path: Path, shard_id: int) -> Path:
+    return path.with_name(f"{path.stem}_shard_{shard_id:02d}{path.suffix}")
+
+
+def read_tasks_file(path: Path) -> set[tuple[int, str]]:
+    """Read successful preview task keys for a formal uncertainty rerun."""
+    frame = pd.read_csv(path)
+    required = {"treatment_order", "outcome_family"}
+    missing = required - set(frame.columns)
+    if missing:
+        raise ValueError(f"Tasks file lacks columns: {sorted(missing)}")
+    keys = {
+        (int(order), str(family))
+        for order, family in zip(frame["treatment_order"], frame["outcome_family"], strict=False)
+    }
+    if len(keys) != len(frame):
+        raise ValueError(f"Tasks file contains duplicate task keys: {path}")
+    if not keys:
+        raise ValueError(f"Tasks file is empty: {path}")
+    unknown = {family for _, family in keys} - set(OUTCOMES)
+    if unknown:
+        raise ValueError(f"Tasks file contains unknown outcome families: {sorted(unknown)}")
+    return keys
 
 
 def _month_key(value: object) -> str:
@@ -293,19 +414,28 @@ def validate_task_labels(row: pd.Series, labels: pd.DataFrame) -> None:
         "outcome",
         "event_time",
         "specification_id",
+        "specification_fingerprint",
     ]
     identity = ["city_key", "grid_id", "opening_month"]
-    missing = set(keys + identity) - set(labels.columns)
-    if missing:
-        raise ValueError(f"Normalized task labels lack identity columns: {sorted(missing)}")
+    missing_identity = set(identity) - set(labels.columns)
+    if missing_identity:
+        raise ValueError(
+            "Normalized task labels lack identity columns: "
+            f"{sorted(missing_identity)}"
+        )
     if labels.empty:
         raise ValueError("Successful task cannot contain zero label rows")
+    if "treatment_order" not in labels.columns:
+        raise ValueError("Normalized task labels lack required columns: ['treatment_order']")
     expected_order = int(row.treatment_order)
     orders = set(pd.to_numeric(labels["treatment_order"], errors="raise").astype(int))
     if orders != {expected_order}:
         raise ValueError(
             f"Task labels treatment_order {sorted(orders)} disagree with {expected_order}"
         )
+    missing = set(keys) - set(labels.columns)
+    if missing:
+        raise ValueError(f"Normalized task labels lack required columns: {sorted(missing)}")
     expected_family = str(row.outcome_family)
     families = set(labels["outcome_family"].astype(str))
     if families != {expected_family}:
@@ -326,6 +456,13 @@ def validate_task_labels(row: pd.Series, labels: pd.DataFrame) -> None:
     specifications = set(labels["specification_id"].astype(str))
     if specifications != {"main_a6_r1km"}:
         raise ValueError(f"Unexpected task specification_id: {sorted(specifications)}")
+    fingerprints = set(labels["specification_fingerprint"].astype(str))
+    expected_fingerprint = specification_fingerprint(row)
+    if fingerprints != {expected_fingerprint}:
+        raise ValueError(
+            "Unexpected task specification_fingerprint: "
+            f"{sorted(fingerprints)}; expected {expected_fingerprint}"
+        )
     allowed_outcomes = set(OUTCOMES[expected_family])
     outcomes = set(labels["outcome"].astype(str))
     if not outcomes.issubset(allowed_outcomes):
@@ -336,6 +473,20 @@ def validate_task_labels(row: pd.Series, labels: pd.DataFrame) -> None:
     horizons = set(pd.to_numeric(labels["event_time"], errors="raise").astype(int))
     if not horizons.issubset(allowed_horizons):
         raise ValueError(f"Task labels contain invalid event times: {sorted(horizons)}")
+    # A multi-outcome MC family may publish the outcomes that converged while
+    # recording structured failures for the remaining outcomes.  Therefore
+    # completeness is enforced within each published outcome, not across the
+    # entire family.  This still rejects a truncated outcome path.
+    actual_event_time = pd.to_numeric(labels["event_time"], errors="raise").astype(int)
+    for outcome in sorted(outcomes):
+        actual_horizons = set(actual_event_time[labels["outcome"].astype(str) == outcome])
+        if actual_horizons != allowed_horizons:
+            missing_horizons = sorted(allowed_horizons - actual_horizons)
+            extra_horizons = sorted(actual_horizons - allowed_horizons)
+            raise ValueError(
+                f"Task labels for outcome {outcome!r} do not contain the complete "
+                f"horizon grid; missing={missing_horizons}, extra={extra_horizons}"
+            )
     if labels.duplicated(keys).any():
         raise ValueError("Normalized task labels violate their primary key")
 
@@ -357,8 +508,16 @@ def validate_task_manifest(row: pd.Series, payload: dict[str, object], labels_pa
         raise ValueError("Completed task manifest lacks labels_sha256")
     if expected_hash != file_sha256(labels_path):
         raise ValueError("Completed task label hash disagrees with manifest")
-    if payload.get("production_eligible") is not True:
-        raise ValueError("Completed task manifest is not production eligible")
+    expected_production = _RUN_MODE == "production"
+    if payload.get("run_mode") != _RUN_MODE:
+        raise ValueError("Completed task manifest run_mode disagrees with current queue mode")
+    if payload.get("production_eligible") is not expected_production:
+        raise ValueError("Completed task manifest production eligibility disagrees with queue mode")
+    expected_fingerprint = specification_fingerprint(row)
+    if payload.get("specification_fingerprint") != expected_fingerprint:
+        raise ValueError(
+            "Completed task manifest specification_fingerprint disagrees with current run"
+        )
     details = payload.get("details")
     if not isinstance(details, dict) or not str(details.get("run_id") or ""):
         raise ValueError("Completed task manifest lacks current estimator run_id")
@@ -371,12 +530,27 @@ def recover_completed_task(
     manifest = task_directory(int(row.treatment_order), str(row.outcome_family)) / "manifest.json"
     labels = manifest.parent / "labels.parquet"
     if (
-        row.status in {"matching_running", "gsc_pending", "gsc_running", "mc_pending", "mc_running"}
+        row.status in {
+            "matching_running",
+            "gsc_pending",
+            "gsc_running",
+            "mc_pending",
+            "mc_running",
+            "cross_matching_running",
+            "cross_gsc_running",
+            "cross_mc_running",
+        }
         and manifest.exists()
         and labels.exists()
     ):
         payload = json.loads(manifest.read_text(encoding="utf-8"))
         if payload.get("status") in {"matched_labelled", "gsc_labelled", "mc_labelled"}:
+            # A valid task from a previous specification must be recomputed,
+            # not adopted merely because its identity/hash is internally
+            # consistent.  This is especially important when resuming after
+            # changing the monthly window or housing price measure.
+            if payload.get("specification_fingerprint") != specification_fingerprint(row):
+                return False
             validate_task_manifest(row, payload, labels)
             if payload.get("status") == "matched_labelled" and control_queue is not None:
                 control = control_for_order(int(row.treatment_order), control_queue)
@@ -407,6 +581,34 @@ def recover_completed_task(
             atomic_csv(queue, FAMILY_QUEUE)
             return True
     return False
+
+
+def invalidate_stale_terminal_tasks(queue: pd.DataFrame, orders: set[int]) -> int:
+    """Return successful queue rows to pending when their spec is stale."""
+    terminal = {"matched_labelled", "gsc_labelled", "mc_labelled"}
+    changed = 0
+    for index in queue.index[
+        queue["treatment_order"].isin(orders) & queue["status"].isin(terminal)
+    ]:
+        row = queue.loc[index]
+        manifest = task_directory(int(row.treatment_order), str(row.outcome_family)) / "manifest.json"
+        payload = None
+        if manifest.exists():
+            try:
+                payload = json.loads(manifest.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                payload = None
+        if isinstance(payload, dict) and payload.get("specification_fingerprint") == specification_fingerprint(row):
+            continue
+        queue.loc[index, ["status", "selected_method", "failure_reason"]] = [
+            "pending",
+            pd.NA,
+            "stale_specification_invalidated",
+        ]
+        changed += 1
+    if changed:
+        atomic_csv(queue, FAMILY_QUEUE)
+    return changed
 
 
 def ensure_viirs(
@@ -465,9 +667,11 @@ def run_cross_city_matching(
     """
     order = int(row.treatment_order)
     task_root = OUTPUT_CONTROL_TASKS_DIR
+    cross_city_output = task_root / f"{order:05d}" / "cross_city"
     environment = os.environ.copy()
-    if Path(os.environ.get("MIT_R_LIB", "")).exists():
-        environment["R_LIBS_USER"] = os.environ["MIT_R_LIB"]
+    mit_r_lib = os.environ.get("MIT_R_LIB")
+    if mit_r_lib and Path(mit_r_lib).is_dir():
+        environment["R_LIBS_USER"] = mit_r_lib
     completed = run(
         [
             str(R_SCRIPT),
@@ -486,7 +690,7 @@ def run_cross_city_matching(
                 "log": completed.stdout,
             },
         )
-    attempt_path = task_root / f"{order:05d}" / "cross_city_attempt.csv"
+    attempt_path = cross_city_output / "cross_city_attempt.csv"
     if attempt_path.exists():
         attempt = pd.read_csv(attempt_path).iloc[0]
         return (
@@ -497,7 +701,7 @@ def run_cross_city_matching(
                 "record_status": str(attempt.get("status")),
             },
         )
-    record_path = task_root / f"{order:05d}" / "control_record.csv"
+    record_path = cross_city_output / "control_record.csv"
     if not record_path.exists():
         return (
             False,
@@ -578,9 +782,12 @@ def run_frozen_control(
             family,
             str(output),
             str(_LABEL_WINDOW),
-            _PRICE_MEASURE,
+            effective_price_measure(row),
         ],
-        {"MIT_CAUSAL_RUN_ID": run_id},
+        {
+            "MIT_CAUSAL_RUN_ID": run_id,
+            "MIT_SPECIFICATION_FINGERPRINT": specification_fingerprint(row),
+        },
     )
     if completed.returncode != 0:
         return False, [], {"reason": "fixed_control_label_runtime_error", "log": completed.stdout}
@@ -600,6 +807,7 @@ def run_frozen_control(
         or manifest_values.get("production_eligible", "").upper() != "TRUE"
         or manifest_values.get("treatment_order") != str(int(row.treatment_order))
         or manifest_values.get("outcome_family") != family
+        or manifest_values.get("specification_fingerprint") != specification_fingerprint(row)
     ):
         return (
             False,
@@ -613,6 +821,7 @@ def run_frozen_control(
     raw = pq.read_table(labels_path).to_pandas()
     raw["transformed_scale"] = True
     raw["specification_id"] = "main_a6_r1km"
+    raw["specification_fingerprint"] = specification_fingerprint(row)
     raw["outcome_family"] = family
     raw["method"] = "frozen_matched_change_12m_baseline"
     if "control_unit_key" not in raw.columns:
@@ -664,6 +873,8 @@ def gsc_output(row: pd.Series, outcome: str, donor_scope: str = "same_city") -> 
         if donor_scope == "same_city"
         else "outcome_only_prepath_all_city_standardized"
     )
+    if _RUN_MODE != "production":
+        signature = f"{signature}_{_RUN_MODE}"
     return STAGING / "xu_gsc" / str(row.city_key) / cohort / tag / signature
 
 
@@ -686,11 +897,24 @@ def run_gsc_scope(
             str(_ANTICIPATION_MONTHS),
             str(int(row.treatment_order)),
             donor_scope,
+            _RUN_MODE,
+            effective_price_measure(row),
+            str(_LABEL_WINDOW),
         ],
-        {"MIT_CAUSAL_RUN_ID": run_id},
+        {
+            "MIT_CAUSAL_RUN_ID": run_id,
+            "MIT_SPECIFICATION_FINGERPRINT": specification_fingerprint(row),
+        },
     )
     if completed.returncode != 0:
-        return False, [], {"reason": "xu_gsc_runtime_or_support_failure", "log": completed.stdout}
+        log = completed.stdout
+        if "non-finite treated-target counterfactual" in log:
+            reason = "xu_gsc_target_counterfactual_nonfinite"
+        elif "uncertainty event times do not align" in log:
+            reason = "xu_gsc_uncertainty_event_time_mismatch"
+        else:
+            reason = "xu_gsc_runtime_or_support_failure"
+        return False, [], {"reason": reason, "log": log}
     labels: list[pd.DataFrame] = []
     estimator_manifests: list[dict[str, object]] = []
     selected_method = (
@@ -708,14 +932,21 @@ def run_gsc_scope(
                 {"reason": "xu_gsc_manifest_or_labels_missing", "path": str(path.parent)},
             )
         manifest_values = read_estimator_manifest(estimator_manifest)
+        expected_production = _RUN_MODE == "production"
+        expected_nboots = "200" if expected_production else "0"
         if (
             manifest_values.get("run_id") != run_id
             or manifest_values.get("estimator") != "gsynth"
             or manifest_values.get("CV", "").upper() != "TRUE"
-            or manifest_values.get("run_mode") != "production"
-            or manifest_values.get("production_eligible", "").upper() != "TRUE"
+            or manifest_values.get("run_mode") != _RUN_MODE
+            or manifest_values.get("production_eligible", "").upper()
+            != ("TRUE" if expected_production else "FALSE")
+            or manifest_values.get("specification_fingerprint") != specification_fingerprint(row)
+            or manifest_values.get("price_measure") != effective_price_measure(row)
+            or manifest_values.get("observation_window")
+            != str(_LABEL_WINDOW if frequency == "monthly" else 1)
             or manifest_values.get("inference") != "parametric"
-            or manifest_values.get("nboots") != "200"
+            or manifest_values.get("nboots") != expected_nboots
         ):
             return (
                 False,
@@ -736,6 +967,19 @@ def run_gsc_scope(
         )
         raw = pq.read_table(path).to_pandas()
         raw = raw.loc[raw["event_time"].isin(HORIZONS[family])].copy()
+        expected_horizons = set(HORIZONS[family])
+        actual_horizons = set(pd.to_numeric(raw["event_time"], errors="coerce").dropna().astype(int))
+        if actual_horizons != expected_horizons:
+            return (
+                False,
+                [],
+                {
+                    "reason": "xu_gsc_outcome_horizon_grid_incomplete",
+                    "outcome": outcome,
+                    "expected_horizons": sorted(expected_horizons),
+                    "actual_horizons": sorted(actual_horizons),
+                },
+            )
         normalized = pd.DataFrame(
             {
                 "treatment_order": raw["treatment_order"].astype(int),
@@ -746,6 +990,7 @@ def run_gsc_scope(
                 "outcome": raw["outcome"],
                 "event_time": raw["event_time"].astype(int),
                 "specification_id": "main_a6_r1km",
+                "specification_fingerprint": specification_fingerprint(row),
                 "observed": raw["observed"],
                 "counterfactual": raw["counterfactual"],
                 "causal_response_label": raw["causal_response_label"],
@@ -773,6 +1018,77 @@ def run_gsc_scope(
             "log": completed.stdout,
         },
     )
+
+
+_GSC_STRUCTURAL_FAILURE_REASONS = {
+    "monthly_viirs_cache_unavailable",
+    "viirs_insufficient_clean_pre_periods_for_gsc",
+}
+_GSC_STRUCTURAL_FAILURE_PATTERNS = (
+    "no post-treatment full-year outcome",
+    "insufficient clean post-treatment annual periods",
+    "insufficient post-treatment monthly periods",
+    "insufficient clean pre-treatment monthly periods",
+    "no complete post-treatment outcome",
+    "no treated unit has a complete clean pre-treatment path",
+)
+
+
+def classify_gsc_failure(details: dict[str, object]) -> str | None:
+    """Classify failures that cannot be rescued by MC or cross-city donors.
+
+    Numerical/non-finite gsynth failures still follow the existing MC and
+    cross-city fallback route.  Structural support failures do not: changing
+    the donor scope cannot create a missing target pre/post path, and a missing
+    VIIRS cache cannot be repaired by another estimator.
+    """
+    reason = str(details.get("reason") or "")
+    if reason in _GSC_STRUCTURAL_FAILURE_REASONS:
+        return "structural_support_failure"
+    text = (reason + "\n" + str(details.get("log") or "")).lower()
+    if any(pattern in text for pattern in _GSC_STRUCTURAL_FAILURE_PATTERNS):
+        return "structural_support_failure"
+    return None
+
+
+def skip_after_structural_gsc_failure(
+    queue: pd.DataFrame,
+    index: int,
+    row: pd.Series,
+    gsc_details: dict[str, object],
+) -> None:
+    """Persist a bounded GSC support failure without launching fallback R jobs."""
+    directory = task_directory(int(row.treatment_order), str(row.outcome_family))
+    atomic_json(
+        {"schema": "gsc_failure_before_skip_v1", **gsc_details},
+        directory / "gsc_attempt.json",
+    )
+    matching_attempt_path = directory / "matching_attempt.json"
+    matching_details = (
+        json.loads(matching_attempt_path.read_text(encoding="utf-8"))
+        if matching_attempt_path.exists()
+        else {"reason": None}
+    )
+    atomic_json(
+        {
+            "schema": "causal_response_labels_v1",
+            "status": "skipped",
+            "method": None,
+            "treatment_order": int(row.treatment_order),
+            "outcome_family": str(row.outcome_family),
+            "matching_failure": matching_details,
+            "gsc_failure": gsc_details,
+            "failure_class": classify_gsc_failure(gsc_details),
+            "fallback_suppressed": True,
+        },
+        directory / "failure_manifest.json",
+    )
+    queue.loc[index, ["status", "selected_method", "failure_reason"]] = [
+        "skipped",
+        pd.NA,
+        str(gsc_details.get("reason")),
+    ]
+    atomic_csv(queue, FAMILY_QUEUE)
 
 
 def ensure_cross_city_viirs(row: pd.Series) -> tuple[bool, list[str]]:
@@ -807,6 +1123,8 @@ def mc_output(row: pd.Series, outcome: str, donor_scope: str = "same_city") -> P
         if donor_scope == "same_city"
         else "outcome_only_prepath_mc_all_city"
     )
+    if _RUN_MODE != "production":
+        signature = f"{signature}_{_RUN_MODE}"
     return STAGING / "matrix_completion" / str(row.city_key) / cohort / tag / signature
 
 
@@ -822,6 +1140,8 @@ def mc_family_run_output(row: pd.Series, donor_scope: str = "same_city") -> Path
         if donor_scope == "same_city"
         else "outcome_only_prepath_mc_all_city"
     )
+    if _RUN_MODE != "production":
+        signature = f"{signature}_{_RUN_MODE}"
     return STAGING / "matrix_completion_runs" / str(row.city_key) / cohort / tag / signature
 
 
@@ -844,8 +1164,14 @@ def run_mc_scope(
             str(_ANTICIPATION_MONTHS),
             str(int(row.treatment_order)),
             donor_scope,
+            _RUN_MODE,
+            effective_price_measure(row),
+            str(_LABEL_WINDOW),
         ],
-        {"MIT_CAUSAL_RUN_ID": run_id},
+        {
+            "MIT_CAUSAL_RUN_ID": run_id,
+            "MIT_SPECIFICATION_FINGERPRINT": specification_fingerprint(row),
+        },
     )
     status_path = mc_family_run_output(row, donor_scope) / "outcome_status.csv"
     if completed.returncode != 0:
@@ -911,10 +1237,17 @@ def run_mc_scope(
             cv_min_mspe = float(manifest_values.get("cv_min_mspe", "nan"))
         except ValueError:
             selected_lambda = cv_min_mspe = float("nan")
+        expected_production = _RUN_MODE == "production"
+        expected_nboots = "200" if expected_production else "0"
         if (
             manifest_values.get("estimator") != "mc"
             or manifest_values.get("fitted_method") != "mc"
             or manifest_values.get("backend") != "fect"
+            or manifest_values.get("force") != "two-way"
+            or manifest_values.get("criterion") != "mspe"
+            or manifest_values.get("nlambda") != "20"
+            or manifest_values.get("min_T0") != "1"
+            or manifest_values.get("se", "").upper() != "TRUE"
             or manifest_values.get("run_id") != run_id
             or manifest_values.get("CV", "").upper() != "TRUE"
             or manifest_values.get("cv_method") != "rolling"
@@ -923,10 +1256,15 @@ def run_mc_scope(
             or manifest_values.get("cv_buffer") != "0"
             or manifest_values.get("two_stage_cv_inference", "").upper() != "TRUE"
             or manifest_values.get("inference_fit_CV", "").upper() != "FALSE"
-            or manifest_values.get("run_mode") != "production"
-            or manifest_values.get("production_eligible", "").upper() != "TRUE"
-            or manifest_values.get("inference") != "bootstrap"
-            or manifest_values.get("nboots") != "200"
+            or manifest_values.get("run_mode") != _RUN_MODE
+            or manifest_values.get("production_eligible", "").upper()
+            != ("TRUE" if expected_production else "FALSE")
+            or manifest_values.get("specification_fingerprint") != specification_fingerprint(row)
+            or manifest_values.get("price_measure") != effective_price_measure(row)
+            or manifest_values.get("observation_window")
+            != str(_LABEL_WINDOW if frequency == "monthly" else 1)
+            or manifest_values.get("inference") != "jackknife"
+            or manifest_values.get("nboots") != expected_nboots
             or not math.isfinite(selected_lambda)
             or selected_lambda <= 0
             or not math.isfinite(cv_min_mspe)
@@ -948,6 +1286,11 @@ def run_mc_scope(
         if raw.empty or not bool(raw["label_available"].fillna(False).any()):
             outcome_failures[outcome] = "mc_has_no_available_target_horizon"
             continue
+        expected_horizons = set(HORIZONS[family])
+        actual_horizons = set(pd.to_numeric(raw["event_time"], errors="coerce").dropna().astype(int))
+        if actual_horizons != expected_horizons:
+            outcome_failures[outcome] = "mc_outcome_horizon_grid_incomplete"
+            continue
         normalized = pd.DataFrame(
             {
                 "treatment_order": raw["treatment_order"].astype(int),
@@ -958,6 +1301,7 @@ def run_mc_scope(
                 "outcome": raw["outcome"],
                 "event_time": raw["event_time"].astype(int),
                 "specification_id": "main_a6_r1km",
+                "specification_fingerprint": specification_fingerprint(row),
                 "observed": raw["observed"],
                 "counterfactual": raw["counterfactual"],
                 "causal_response_label": raw["causal_response_label"],
@@ -1036,7 +1380,12 @@ def write_task(
             "opening_month": _month_key(row.opening_month),
             "label_rows": len(result),
             "labels_sha256": file_sha256(labels_path),
-            "production_eligible": True,
+            "specification_fingerprint": specification_fingerprint(row),
+            "anticipation_months": _ANTICIPATION_MONTHS,
+            "observation_window": _LABEL_WINDOW,
+            "price_measure": effective_price_measure(row),
+            "production_eligible": _RUN_MODE == "production",
+            "run_mode": _RUN_MODE,
             "details": details,
         },
         directory / "manifest.json",
@@ -1081,77 +1430,103 @@ def run_mc_stage(
       all failed -> skipped
     """
     directory = task_directory(int(row.treatment_order), str(row.outcome_family))
+    stage = str(row.status)
     gsc_attempt_path = directory / "gsc_attempt.json"
+    cross_gsc_attempt_path = directory / "cross_city_gsc_attempt.json"
     gsc_details: dict[str, object] = (
         json.loads(gsc_attempt_path.read_text(encoding="utf-8"))
         if gsc_attempt_path.exists()
         else {"reason": "gsc_failure_details_unavailable"}
     )
 
-    # Round 3: same-city MC
-    queue.loc[index, ["status", "selected_method"]] = ["mc_running", pd.NA]
-    atomic_csv(queue, FAMILY_QUEUE)
-    same_mc_ok, same_mc_labels, same_mc_details = run_mc_scope(row, "same_city")
-    if same_mc_ok:
-        selected_method = str(same_mc_details["selected_method"])
-        write_task(row, same_mc_labels, "mc_labelled", selected_method, same_mc_details)
-        queue.loc[index, ["status", "selected_method", "failure_reason"]] = [
-            "mc_labelled",
-            selected_method,
-            pd.NA,
-        ]
-        atomic_csv(queue, FAMILY_QUEUE)
+    if classify_gsc_failure(gsc_details):
+        skip_after_structural_gsc_failure(queue, index, row, gsc_details)
         return
 
-    # Round 4: cross-city matching
-    if control_queue is None:
-        control_queue = read_control_queue()
-    cross_match_ok = False
-    match_details: dict[str, object] = {}
-    if (
-        str(
-            control_queue.loc[
-                control_queue["treatment_order"].astype(int) == int(row.treatment_order), "status"
-            ].iloc[0]
-        )
-        == "gsc_pending"
-    ):
-        cross_match_ok, cross_control, cross_match_details = run_cross_city_matching(
-            row, control_queue, control_queue_path
-        )
-        match_details = cross_match_details
-        if cross_match_ok:
-            cross_ok, cross_labels, cross_details = run_frozen_control(row, cross_control)
-            if cross_ok:
-                selected_method = "frozen_matched_change_12m_baseline_cross_city"
-                write_task(row, cross_labels, "matched_labelled", selected_method, cross_details)
-                queue.loc[index, ["status", "selected_method", "failure_reason"]] = [
-                    "matched_labelled",
-                    selected_method,
-                    pd.NA,
-                ]
-                atomic_csv(queue, FAMILY_QUEUE)
-                return
+    same_mc_ok = False
+    same_mc_details: dict[str, object] = {"reason": "same_city_mc_not_run"}
+    cross_gsc_ok = False
+    cross_gsc_labels: list[pd.DataFrame] = []
+    cross_gsc_details: dict[str, object] = {"reason": "cross_city_gsc_not_run"}
+    cross_mc_details: dict[str, object] = {"reason": "cross_city_mc_not_run"}
+    match_details: dict[str, object] = {"reason": "cross_city_matching_not_run"}
 
-    # Round 5: cross-city GSC.  The cross-city estimator reads VIIRS
+    # Round 3: same-city MC. A resumed cross-city stage must not restart
+    # this expensive round.
+    if stage not in {"cross_matching_running", "cross_gsc_running", "cross_mc_running"}:
+        queue.loc[index, ["status", "selected_method"]] = ["mc_running", pd.NA]
+        atomic_csv(queue, FAMILY_QUEUE)
+        same_mc_ok, same_mc_labels, same_mc_details = run_mc_scope(row, "same_city")
+        if same_mc_ok:
+            selected_method = str(same_mc_details["selected_method"])
+            write_task(row, same_mc_labels, "mc_labelled", selected_method, same_mc_details)
+            queue.loc[index, ["status", "selected_method", "failure_reason"]] = [
+                "mc_labelled",
+                selected_method,
+                pd.NA,
+            ]
+            atomic_csv(queue, FAMILY_QUEUE)
+            return
+
+    # Round 4: cross-city matching
+    if stage not in {"cross_gsc_running", "cross_mc_running"}:
+        if control_queue is None:
+            control_queue = read_control_queue()
+        queue.loc[index, "status"] = "cross_matching_running"
+        atomic_csv(queue, FAMILY_QUEUE)
+        cross_match_ok = False
+        if (
+            str(
+                control_queue.loc[
+                    control_queue["treatment_order"].astype(int) == int(row.treatment_order), "status"
+                ].iloc[0]
+            )
+            == "gsc_pending"
+        ):
+            cross_match_ok, cross_control, cross_match_details = run_cross_city_matching(
+                row, control_queue, control_queue_path
+            )
+            match_details = cross_match_details
+            if cross_match_ok:
+                cross_ok, cross_labels, cross_details = run_frozen_control(row, cross_control)
+                if cross_ok:
+                    selected_method = "frozen_matched_change_12m_baseline_cross_city"
+                    write_task(row, cross_labels, "matched_labelled", selected_method, cross_details)
+                    queue.loc[index, ["status", "selected_method", "failure_reason"]] = [
+                        "matched_labelled",
+                        selected_method,
+                        pd.NA,
+                    ]
+                    atomic_csv(queue, FAMILY_QUEUE)
+                    return
+
+    # Round 5: cross-city GSC. The cross-city estimator reads VIIRS
     # partitions for every donor city, so materialise the window across all
     # donor cities first (the same-city rounds only need the target city).
-    if str(row.outcome_family) == "viirs":
-        cached, cache_logs = ensure_cross_city_viirs(row)
-        if not cached:
-            cross_gsc_ok, cross_gsc_labels, cross_gsc_details = (
-                False,
-                [],
-                {"reason": "cross_city_viirs_cache_unavailable", "log": "\n".join(cache_logs)},
-            )
+    if stage != "cross_mc_running":
+        queue.loc[index, "status"] = "cross_gsc_running"
+        atomic_csv(queue, FAMILY_QUEUE)
+        if str(row.outcome_family) == "viirs":
+            cached, cache_logs = ensure_cross_city_viirs(row)
+            if not cached:
+                cross_gsc_ok, cross_gsc_labels, cross_gsc_details = (
+                    False,
+                    [],
+                    {"reason": "cross_city_viirs_cache_unavailable", "log": "\n".join(cache_logs)},
+                )
+            else:
+                cross_gsc_ok, cross_gsc_labels, cross_gsc_details = run_gsc_scope(
+                    row, "all_city_standardized"
+                )
         else:
             cross_gsc_ok, cross_gsc_labels, cross_gsc_details = run_gsc_scope(
                 row, "all_city_standardized"
             )
-    else:
-        cross_gsc_ok, cross_gsc_labels, cross_gsc_details = run_gsc_scope(
-            row, "all_city_standardized"
-        )
+        if not cross_gsc_ok:
+            atomic_json(
+                {"schema": "cross_city_gsc_failure_v1", **cross_gsc_details},
+                cross_gsc_attempt_path,
+            )
     if cross_gsc_ok:
         selected_method = str(cross_gsc_details["selected_method"])
         write_task(row, cross_gsc_labels, "gsc_labelled", selected_method, cross_gsc_details)
@@ -1165,6 +1540,10 @@ def run_mc_stage(
 
     # Round 6: cross-city MC (VIIRS cache already materialised in round 5
     # for the same donor scope, so no repeated materialisation here).
+    if stage == "cross_mc_running" and cross_gsc_attempt_path.exists():
+        cross_gsc_details = json.loads(cross_gsc_attempt_path.read_text(encoding="utf-8"))
+    queue.loc[index, "status"] = "cross_mc_running"
+    atomic_csv(queue, FAMILY_QUEUE)
     cross_mc_ok, cross_mc_labels, cross_mc_details = run_mc_scope(row, "all_city_standardized")
     if cross_mc_ok:
         selected_method = str(cross_mc_details["selected_method"])
@@ -1258,7 +1637,13 @@ def process_one(
         ]
         atomic_csv(queue, FAMILY_QUEUE)
         return
-    if str(row.status) in {"mc_pending", "mc_running"} and phase in {"all", "mc"}:
+    if str(row.status) in {
+        "mc_pending",
+        "mc_running",
+        "cross_matching_running",
+        "cross_gsc_running",
+        "cross_mc_running",
+    } and phase in {"all", "mc"}:
         run_mc_stage(queue, index, row, control_queue, control_queue_path)
         return
     if (
@@ -1295,8 +1680,11 @@ def process_one(
                 pd.NA,
             ]
         else:
-            begin_mc_stage(queue, index, row, gsc_details)
-            if phase != "gsc":
+            if classify_gsc_failure(gsc_details):
+                skip_after_structural_gsc_failure(queue, index, row, gsc_details)
+            else:
+                begin_mc_stage(queue, index, row, gsc_details)
+            if not classify_gsc_failure(gsc_details) and phase != "gsc":
                 run_mc_stage(queue, index, row, control_queue, control_queue_path)
         if gsc_ok:
             atomic_csv(queue, FAMILY_QUEUE)
@@ -1368,8 +1756,11 @@ def process_one(
             pd.NA,
         ]
     else:
-        begin_mc_stage(queue, index, row, gsc_details)
-        if phase != "gsc":
+        if classify_gsc_failure(gsc_details):
+            skip_after_structural_gsc_failure(queue, index, row, gsc_details)
+        else:
+            begin_mc_stage(queue, index, row, gsc_details)
+        if not classify_gsc_failure(gsc_details) and phase != "gsc":
             run_mc_stage(queue, index, row, control_queue, control_queue_path)
     if gsc_ok:
         atomic_csv(queue, FAMILY_QUEUE)
@@ -1385,11 +1776,18 @@ def eligible_indices(
     retry_matching: bool = False,
     retry_skipped: bool = False,
     orders: set[int] | None = None,
+    tasks: set[tuple[int, str]] | None = None,
 ) -> pd.Index:
     statuses = {
         "matching": {"pending", "matching_running"},
         "gsc": {"gsc_pending", "gsc_running"},
-        "mc": {"mc_pending", "mc_running"},
+        "mc": {
+            "mc_pending",
+            "mc_running",
+            "cross_matching_running",
+            "cross_gsc_running",
+            "cross_mc_running",
+        },
         "all": {
             "pending",
             "matching_running",
@@ -1397,6 +1795,9 @@ def eligible_indices(
             "gsc_running",
             "mc_pending",
             "mc_running",
+            "cross_matching_running",
+            "cross_gsc_running",
+            "cross_mc_running",
         },
     }[phase]
     if phase == "matching" and retry_matching:
@@ -1411,11 +1812,16 @@ def eligible_indices(
             mask &= queue["treatment_order"] <= end_order
     if family is not None:
         mask &= queue["outcome_family"].eq(family)
+    if tasks is not None:
+        task_index = pd.MultiIndex.from_arrays(
+            [queue["treatment_order"].astype(int), queue["outcome_family"].astype(str)]
+        )
+        mask &= task_index.isin(tasks)
     return queue.index[mask][:max_tasks]
 
 
 def main() -> int:
-    global FAMILY_QUEUE, _ANTICIPATION_MONTHS
+    global FAMILY_QUEUE, _ANTICIPATION_MONTHS, _RUN_MODE
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--start-order", type=int, default=1)
     parser.add_argument("--end-order", type=int)
@@ -1423,6 +1829,11 @@ def main() -> int:
         "--orders",
         help="Comma-separated treatment orders to process (mutually exclusive "
         "with --start-order/--end-order ranges)",
+    )
+    parser.add_argument(
+        "--orders-file",
+        type=Path,
+        help="CSV containing treatment_order values; mutually exclusive with --orders",
     )
     parser.add_argument("--max-tasks", type=int, default=1)
     parser.add_argument("--family", choices=sorted(OUTCOMES))
@@ -1435,17 +1846,17 @@ def main() -> int:
     )
     parser.add_argument(
         "--price-measure",
-        choices=("median", "hedonic"),
+        choices=("main", "median", "hedonic"),
         default="median",
-        help="Housing price measure for monthly families (hedonic = Lianjia "
-        "quality-adjusted panel; defaults to the unified median measure)",
+        help="Housing price measure: main = hedonic where the city panel exists, "
+        "otherwise median; median/hedonic force one measure.",
     )
     parser.add_argument(
         "--window",
         type=int,
         default=1,
-        help="Observation-window width in months for monthly fixed-control "
-        "labels (1 = single-month specification; 3/6 = robustness views)",
+        help="Observation-window width in months for monthly labels "
+        "(main housing specification uses 3; 1/6 are sensitivity views)",
     )
     parser.add_argument("--retry-matching", action="store_true")
     parser.add_argument(
@@ -1455,6 +1866,17 @@ def main() -> int:
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--sync-all-units", action="store_true")
+    parser.add_argument(
+        "--run-mode",
+        choices=("production", "preview"),
+        default="production",
+        help="Use isolated preview artifacts with point estimates only, or formal production inference.",
+    )
+    parser.add_argument(
+        "--tasks-file",
+        type=Path,
+        help="CSV with treatment_order and outcome_family; restrict formal reruns to these task keys.",
+    )
     parser.add_argument(
         "--shard-id",
         type=int,
@@ -1468,6 +1890,7 @@ def main() -> int:
         help="Total number of shards for parallel execution.",
     )
     args = parser.parse_args()
+    _RUN_MODE = args.run_mode
     _ANTICIPATION_MONTHS = args.anticipation_months
     global _PRICE_MEASURE, _LABEL_WINDOW
     _PRICE_MEASURE = args.price_measure
@@ -1477,15 +1900,28 @@ def main() -> int:
     if bool(args.shard_id is not None) != bool(args.shard_count is not None):
         parser.error("--shard-id and --shard-count must be used together")
 
-    family_queue = FAMILY_QUEUE
-    unit_queue = UNIT_QUEUE
-    control_queue_path = CONTROL_QUEUE
+    family_master_queue = queue_variant_path(FAMILY_QUEUE, _RUN_MODE)
+    unit_master_queue = queue_variant_path(UNIT_QUEUE, _RUN_MODE)
+    control_master_queue = queue_variant_path(CONTROL_QUEUE, _RUN_MODE)
+    if _RUN_MODE != "production":
+        import shutil as _shutil
+
+        for source, target in (
+            (FAMILY_QUEUE, family_master_queue),
+            (UNIT_QUEUE, unit_master_queue),
+            (CONTROL_QUEUE, control_master_queue),
+        ):
+            if not target.exists():
+                _shutil.copy2(source, target)
+
+    family_queue = family_master_queue
+    unit_queue = unit_master_queue
+    control_queue_path = control_master_queue
 
     if has_shard:
-        shard_tag = f"_shard_{args.shard_id:02d}"
-        family_queue = CAUSAL_DIR / f"outcome_family_work_queue{shard_tag}.csv"
-        unit_queue = CAUSAL_DIR / f"counterfactual_work_queue{shard_tag}.csv"
-        control_queue_path = CAUSAL_DIR / f"control_design_queue{shard_tag}.csv"
+        family_queue = shard_queue_path(family_master_queue, args.shard_id)
+        unit_queue = shard_queue_path(unit_master_queue, args.shard_id)
+        control_queue_path = shard_queue_path(control_master_queue, args.shard_id)
         # All queue writes inside process_one / recover_completed_task /
         # run_mc_stage / begin_mc_stage target the module-level FAMILY_QUEUE;
         # rebind it to the shard file so concurrent shards never clobber the
@@ -1500,23 +1936,33 @@ def main() -> int:
             import shutil as _shutil
 
             _shutil.copy2(master_family_queue, family_queue)
-            _shutil.copy2(CONTROL_QUEUE, control_queue_path)
-            if UNIT_QUEUE.exists():
-                _shutil.copy2(UNIT_QUEUE, unit_queue)
+            _shutil.copy2(control_master_queue, control_queue_path)
+            if unit_master_queue.exists():
+                _shutil.copy2(unit_master_queue, unit_queue)
             print(f"Initialized shard {args.shard_id + 1}/{args.shard_count}: {family_queue.name}")
 
-        # Compute this shard's portion of the 5,048 treatment orders
+        # Compute this shard's portion of the selected treatment orders.
         treatments = pq.read_table(
             TREATMENT_UNIT_LIST,
             columns=["treatment_order"],
         ).to_pandas()
         all_orders = sorted(treatments["treatment_order"].astype(int).tolist())
-        chunk_size = len(all_orders) // args.shard_count
-        remainder = len(all_orders) % args.shard_count
-        start_idx = args.shard_id * chunk_size + min(args.shard_id, remainder)
-        if args.shard_id < remainder:
-            chunk_size += 1
-        shard_orders = set(all_orders[start_idx : start_idx + chunk_size])
+        # For a representative sample, balance the selected orders themselves
+        # rather than the full 5,048-order universe.  Otherwise a sample
+        # concentrated in later opening cohorts can leave most shards idle.
+        shard_pool = all_orders
+        if args.tasks_file is not None:
+            task_path = args.tasks_file if args.tasks_file.is_absolute() else ROOT / args.tasks_file
+            shard_pool = sorted({order for order, _ in read_tasks_file(task_path)})
+        elif args.orders_file is not None:
+            sample_path = args.orders_file if args.orders_file.is_absolute() else ROOT / args.orders_file
+            shard_pool = sorted(read_orders_file(sample_path))
+        elif args.orders is not None:
+            shard_pool = sorted({int(value) for value in args.orders.split(",") if value.strip()})
+        shard_orders = set(shard_order_slice(shard_pool, args.shard_id, args.shard_count))
+        if not shard_orders:
+            print(f"Shard {args.shard_id + 1}/{args.shard_count}: no assigned orders")
+            return 0
         # Override CLI range to match shard
         args.start_order = min(shard_orders)
         args.end_order = max(shard_orders)
@@ -1536,22 +1982,64 @@ def main() -> int:
         print("Synchronized terminal family rows into the treatment-unit queue")
         return 0
     orders_set: set[int] | None = None
-    if args.orders is not None:
-        orders_set = {int(value) for value in args.orders.split(",") if value.strip()}
+    task_keys: set[tuple[int, str]] | None = None
+    if args.tasks_file is not None:
+        if args.orders is not None or args.orders_file is not None:
+            parser.error("--tasks-file is mutually exclusive with --orders/--orders-file")
+        task_path = args.tasks_file if args.tasks_file.is_absolute() else ROOT / args.tasks_file
+        task_keys = read_tasks_file(task_path)
+        orders_set = {order for order, _ in task_keys}
+        if has_shard:
+            # A task-file run must be partitioned by the same selected-order
+            # pool used to initialize the shard.  Without this restriction,
+            # every shard processes the full task file and concurrent workers
+            # overwrite the same fixed-control staging artifacts.
+            orders_set &= shard_orders
+            task_keys = {
+                (order, family) for order, family in task_keys if order in orders_set
+            }
+            if not orders_set:
+                print(f"Shard {args.shard_id + 1}/{args.shard_count}: no selected task orders")
+                return 0
+    elif args.orders is not None or args.orders_file is not None:
+        if args.orders is not None and args.orders_file is not None:
+            parser.error("--orders and --orders-file are mutually exclusive")
+        orders_set = (
+            {int(value) for value in args.orders.split(",") if value.strip()}
+            if args.orders is not None
+            else read_orders_file(
+                args.orders_file if args.orders_file.is_absolute() else ROOT / args.orders_file
+            )
+        )
         if not orders_set:
-            parser.error("--orders must contain at least one treatment order")
-        if args.start_order != 1 or args.end_order is not None:
-            parser.error("--orders is mutually exclusive with --start-order/--end-order")
+            parser.error("selected orders must contain at least one treatment order")
+        if not has_shard and (args.start_order != 1 or args.end_order is not None):
+            parser.error("selected orders are mutually exclusive with --start-order/--end-order")
+        available_orders = set(queue["treatment_order"].astype(int))
+        missing_orders = sorted(orders_set - available_orders)
+        if missing_orders:
+            parser.error(f"orders file contains unknown treatment orders: {missing_orders[:10]}")
+        if has_shard:
+            orders_set &= shard_orders
+            if not orders_set:
+                print(f"Shard {args.shard_id + 1}/{args.shard_count}: no selected sample orders")
+                return 0
+        invalidated = invalidate_stale_terminal_tasks(queue, orders_set)
+        if invalidated:
+            print(f"Invalidated {invalidated} terminal tasks from a different specification")
     eligible = eligible_indices(
         queue,
         args.start_order,
         args.end_order,
         args.family,
         args.phase,
-        args.max_tasks if orders_set is None else len(orders_set) * 4,
+        args.max_tasks
+        if task_keys is not None
+        else (len(orders_set) * 4 if orders_set is not None else args.max_tasks),
         retry_matching=args.retry_matching,
         retry_skipped=args.retry_skipped,
         orders=orders_set,
+        tasks=task_keys,
     )
     for index in eligible:
         process_one(
@@ -1564,7 +2052,7 @@ def main() -> int:
             retry_matching=args.retry_matching,
             control_queue_path=control_queue_path,
         )
-        if not args.dry_run:
+        if not args.dry_run and _RUN_MODE == "production":
             sync_unit_queue(
                 int(queue.loc[index, "treatment_order"]),
                 queue,

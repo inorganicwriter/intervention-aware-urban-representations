@@ -58,19 +58,21 @@ def test_atomic_resume_finalizes_completed_task(tmp_path: Path, monkeypatch) -> 
         }
     )
     MODULE.atomic_csv(queue, family_queue)
+    row = queue.iloc[0]
     directory = MODULE.task_directory(1, "housing")
     directory.mkdir(parents=True)
     labels_path = directory / "labels.parquet"
     pd.DataFrame(
         {
-            "treatment_order": [1],
-            "city_key": ["alpha"],
-            "grid_id": ["g1"],
-            "opening_month": ["2020-01"],
-            "outcome_family": ["housing"],
-            "outcome": ["housing_log_price"],
-            "event_time": [1],
-            "specification_id": ["main_a6_r1km"],
+                "treatment_order": [1] * 6,
+                "city_key": ["alpha"] * 6,
+                "grid_id": ["g1"] * 6,
+                "opening_month": ["2020-01"] * 6,
+                "outcome_family": ["housing"] * 6,
+                "outcome": ["housing_log_price"] * 6,
+                "event_time": [1, 3, 6, 12, 18, 24],
+                "specification_id": ["main_a6_r1km"] * 6,
+                "specification_fingerprint": [MODULE.specification_fingerprint(row)] * 6,
         }
     ).to_parquet(labels_path)
     (directory / "manifest.json").write_text(
@@ -85,9 +87,11 @@ def test_atomic_resume_finalizes_completed_task(tmp_path: Path, monkeypatch) -> 
                 "grid_id": "g1",
                 "opening_month": "2020-01",
                 "station_event_id": "s1",
-                "label_rows": 1,
+                    "label_rows": 6,
                 "labels_sha256": MODULE.file_sha256(labels_path),
                 "production_eligible": True,
+                "run_mode": "production",
+                "specification_fingerprint": MODULE.specification_fingerprint(row),
                 "details": {"run_id": "resume-run"},
             }
         ),
@@ -310,25 +314,25 @@ def test_mc_scope_keeps_successful_poi_outcomes_when_another_outcome_fails(
     output.mkdir(parents=True)
     pd.DataFrame(
         {
-            "treatment_order": [9],
-            "city_key": ["alpha"],
-            "grid_id": ["g9"],
-            "outcome": [outcome],
-            "event_time": [1],
-            "observed": [2.0],
-            "counterfactual": [1.5],
-            "causal_response_label": [0.5],
-            "label_available": [True],
-            "standard_error": [0.1],
-            "confidence_lower": [0.3],
-            "confidence_upper": [0.7],
-            "p_value": [0.01],
-            "bootstrap_repetitions": [20],
-            "uncertainty_source": ["mc_nonparametric_bootstrap"],
-            "pre_observed_periods": [1],
-            "pre_rmspe": [0.2],
-            "mc_lambda": [0.25],
-            "mc_cv_mspe": [0.04],
+                "treatment_order": [9] * 3,
+                "city_key": ["alpha"] * 3,
+                "grid_id": ["g9"] * 3,
+                "outcome": [outcome] * 3,
+            "event_time": [1, 2, 3],
+            "observed": [2.0, 2.1, 2.2],
+            "counterfactual": [1.5, 1.6, 1.7],
+            "causal_response_label": [0.5, 0.5, 0.5],
+            "label_available": [True, True, True],
+            "standard_error": [0.1, 0.1, 0.1],
+            "confidence_lower": [0.3, 0.3, 0.3],
+            "confidence_upper": [0.7, 0.7, 0.7],
+            "p_value": [0.01, 0.01, 0.01],
+            "bootstrap_repetitions": [0, 0, 0],
+            "uncertainty_source": ["mc_jackknife"] * 3,
+            "pre_observed_periods": [1, 1, 1],
+            "pre_rmspe": [0.2, 0.2, 0.2],
+            "mc_lambda": [0.25, 0.25, 0.25],
+            "mc_cv_mspe": [0.04, 0.04, 0.04],
         }
     ).to_parquet(output / "causal_response_labels.parquet", index=False)
     pd.DataFrame(
@@ -337,6 +341,11 @@ def test_mc_scope_keeps_successful_poi_outcomes_when_another_outcome_fails(
                 "estimator",
                 "fitted_method",
                 "backend",
+                "force",
+                "criterion",
+                "nlambda",
+                "min_T0",
+                "se",
                 "run_id",
                 "CV",
                 "cv_method",
@@ -351,11 +360,19 @@ def test_mc_scope_keeps_successful_poi_outcomes_when_another_outcome_fails(
                 "production_eligible",
                 "inference",
                 "nboots",
+                "specification_fingerprint",
+                "price_measure",
+                "observation_window",
             ],
             "value": [
                 "mc",
                 "mc",
                 "fect",
+                "two-way",
+                "mspe",
+                "20",
+                "1",
+                "TRUE",
                 "test-mc-run",
                 "TRUE",
                 "rolling",
@@ -368,8 +385,11 @@ def test_mc_scope_keeps_successful_poi_outcomes_when_another_outcome_fails(
                 "0.04",
                 "production",
                 "TRUE",
-                "bootstrap",
+                "jackknife",
                 "200",
+                MODULE.specification_fingerprint(row),
+                "median",
+                "1",
             ],
         }
     ).to_csv(output / "manifest.csv", index=False)
@@ -378,7 +398,7 @@ def test_mc_scope_keeps_successful_poi_outcomes_when_another_outcome_fails(
 
     assert ok
     assert len(labels) == 1
-    assert labels[0]["outcome"].tolist() == [outcome]
+    assert labels[0]["outcome"].tolist() == [outcome] * 3
     assert set(details["outcome_failures"]) == set(MODULE.OUTCOMES["poi"][1:])
 
 

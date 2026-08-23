@@ -89,7 +89,7 @@ Y_it = D_it τ + X_it' β + λ_i' F_t + ε_it
 Y_it = L_it + ε_it,   L_it 低秩
 ```
 用 `fect(method="mc")` 估计，λ 由 MSPE 交叉验证选择；反事实为
-补全矩阵在 (i, t > T0) 的元素；推断为 200 次 bootstrap。
+补全矩阵在 (i, t > T0) 的元素；固定 λ 后使用 jackknife 推断。
 
 实现：`run_complete_mc.R`。
 
@@ -102,7 +102,7 @@ Y_it = L_it + ε_it,   L_it 低秩
 ```
 Y_it = Σ_{k∈K} β_k · D_it^k + α_i + γ_t + ε_it
 ```
-- D_it^k：事件时间 k 的虚拟变量（k = 事件月 − 开通月），基期 k = −1 省略
+- D_it^k：事件时间 k 的虚拟变量（k = 事件月 − 开通月），基期为最后一个清洁处理前时期；月度主规格为 k = −7
 - α_i：网格固定效应；γ_t：日历月固定效应
 - 标准误按网格聚类
 - 平行趋势：H₀: β_k = 0 ∀ k < 0（联合 Wald 检验）
@@ -122,7 +122,7 @@ Y_it = Σ_k β_k^IW · 1(k, cohort) 加权交互估计（fixest::sunab）
 ```
 mean_k = (1/N) Σ_i label_i,k
 SE_k = √( within_var_k + between_var_k / N )
-within_var_k  = mean(SE_i,k²)/N   （bootstrap SE 聚合）
+within_var_k  = mean(SE_i,k²)/N   （按估计器提供的 SE 聚合）
 between_var_k = var(grid_mean_k)   （网格间方差）
 ```
 联合零 pre-trend：网格级均值 one-sample t 检验。

@@ -10,7 +10,7 @@ suppressPackageStartupMessages({
 #   Y_it = sum_{k in K} beta_k * D_it^k + alpha_i + gamma_t + eps_it
 #
 # - Y_it: outcome level (housing log price, asinh VIIRS radiance)
-# - D_it^k: event-time dummies, baseline k = -1 omitted
+# - D_it^k: event-time dummies, baseline is the last clean pre-period
 # - alpha_i: grid fixed effects; gamma_t: calendar-month fixed effects
 # - SEs clustered by grid
 #
@@ -28,8 +28,33 @@ if (!outcome_family %in% c("housing", "viirs", "poi", "population")) {
   stop("Event-study matching supports housing | viirs | poi | population")
 }
 is_annual <- outcome_family %in% c("poi", "population")
-min_pre <- if (length(args) >= 2L) as.integer(args[[2L]]) else if (is_annual) -4L else -36L
+anticipation_months <- if (is_annual) 0L else 6L
+lag_periods <- if (is_annual) 3L else 36L
+clean_pre_end_event_time <- -(anticipation_months + 1L)
+default_min_pre <- if (is_annual) -4L else -(lag_periods + anticipation_months)
+min_pre <- if (length(args) >= 2L) as.integer(args[[2L]]) else default_min_pre
 max_post <- if (length(args) >= 3L) as.integer(args[[3L]]) else if (is_annual) 3L else 24L
+reference_event_time <- clean_pre_end_event_time
+if (is.na(min_pre) || is.na(max_post) || min_pre > reference_event_time ||
+    max_post < 0L) {
+  stop("Event-study range must satisfy MIN_PRE < 0 <= MAX_POST")
+}
+figure_font_family <- "Times New Roman"
+
+save_recorded_vector_plot <- function(plot_record, base_path, width = 8, height = 5.2) {
+  grDevices::cairo_pdf(
+    paste0(base_path, ".pdf"), width = width, height = height,
+    family = figure_font_family
+  )
+  replayPlot(plot_record)
+  grDevices::dev.off()
+  grDevices::svg(
+    paste0(base_path, ".svg"), width = width, height = height,
+    family = figure_font_family
+  )
+  replayPlot(plot_record)
+  grDevices::dev.off()
+}
 
 root <- project_root <- normalizePath(getwd(), winslash = "/", mustWork = TRUE)
 source(file.path(root, "scripts", "causal_r", "paths.R"))
@@ -43,12 +68,13 @@ if (nrow(matched) == 0L) {
 cat(sprintf("Matched pairs: %d\n", nrow(matched)))
 
 # ---- Build event-time aligned panel ------------------------------------
-# Monthly VIIRS partitions are per city-year-month; read the window months
-# once per city into a memory cache instead of scanning the full 156-month
-# stack for every grid.
+# Monthly VIIRS partitions are per city-year-month; read each distinct
+# city/opening window once into a memory cache. The opening month is part of
+# the key because one city can contain treatment events at different dates.
 viirs_cache <- new.env()
 read_viirs_window <- function(city_key, opening_month, months_back = 36L, months_ahead = 24L) {
-  cache_key <- city_key
+  opening_key <- format(as.IDate(format(as.IDate(opening_month), "%Y-%m-01")), "%Y-%m")
+  cache_key <- paste(city_key, opening_key, months_back, months_ahead, sep = "::")
   if (!exists(cache_key, envir = viirs_cache)) {
     # IDate arithmetic must stay integral: a float day offset would turn the
     # sequence into numeric and break seq(by = "month").  31-day bounds only
@@ -103,7 +129,7 @@ read_panel <- function(city_key, opening_month) {
     x[, month := as.IDate(paste0(year, "-01-01"))]
     # log transform mirrors the estimator families (housing_log_price,
     # poi_count_log, population_log are all log-scale outcomes).
-    x[, outcome := log(get(count_var) + 1)]
+    x[, outcome := log1p(pmax(get(count_var), 0))]
     x[, .(city_key, grid_id, month, outcome)]
   } else {
     x <- read_viirs_window(city_key, opening_month)
@@ -153,7 +179,8 @@ for (i in seq_len(nrow(treated_units))) {
   combined[, event_time := if (is_annual) {
     as.integer(format(month, "%Y")) - as.integer(format(opening, "%Y"))
   } else {
-    as.integer(round(as.numeric(difftime(month, opening, units = "days")) / 30.44))
+    (as.integer(format(month, "%Y")) * 12L + as.integer(format(month, "%m"))) -
+      (as.integer(format(opening, "%Y")) * 12L + as.integer(format(opening, "%m")))
   }]
   combined[, grid_id := paste0(row$city_key, "::", grid_id)]
   combined[, unit := paste0(role, "_", treatment_order, "_", grid_id)]
@@ -172,21 +199,46 @@ for (i in seq_len(nrow(treated_units))) {
   )]
   panel_parts[[length(panel_parts) + 1L]] <- combined
 }
+if (!length(panel_parts)) {
+  stop("No treated/control outcome panels could be read for the matched queue")
+}
 panel <- rbindlist(panel_parts, use.names = TRUE, fill = TRUE)
-panel <- panel[event_time >= min_pre & event_time <= max_post]
+# The opening month/year is a partial-exposure boundary and is not a model
+# period.  The anticipation window is also excluded from this parallel-trends
+# sample. The first complete month/year after opening is event_time = 1.
+panel <- panel[
+  event_time != 0L &
+    event_time >= min_pre &
+    event_time <= clean_pre_end_event_time &
+    event_time <= max_post
+]
 panel <- panel[is.finite(outcome)]
+if (!nrow(panel)) {
+  stop("Matched event-study panel is empty after event-time and finite-outcome filters")
+}
+if (anyNA(panel[role == "treated", treatment_time])) {
+  stop("Treated event-study units have missing treatment_time")
+}
 cat(sprintf("Panel rows: %d (units: %d, treated events: %d)\n",
             nrow(panel), uniqueN(panel$unit), uniqueN(panel$treatment_order)))
 
 # ---- Event-study regression (TWFE, grid + month FE, cluster by grid) ----
-# Use i(event_time, ref=-1): fixest expands numeric event-time dummies
-# robustly (factor-based manual dummies mis-parse negative levels).  Sparse
-# panels (few treated events or few overlapping months) can make the event
-# dummies collinear with the unit FE or the clustered vcov singular; degrade
-# to a note instead of aborting the whole script.
-panel[, et_dummy := ifelse(role == "treated", event_time, NA_integer_)]
+# Use i(event_time, ref=last clean pre-period): fixest expands numeric event-time dummies
+# robustly (factor-based manual dummies mis-parse negative levels).  Controls
+# are coded as the omitted reference period rather than NA so that fixest
+# cannot drop the entire control panel during RHS missing-value handling.
+panel[, et_dummy := as.integer(ifelse(
+  role == "treated", event_time, reference_event_time
+))]
+if (anyNA(panel$et_dummy) || any(panel[
+  role == "control", et_dummy != reference_event_time
+])) {
+  stop("Invalid event-time coding for matched controls")
+}
 
-formula_text <- "outcome ~ i(et_dummy, ref = -1L) | unit + month"
+formula_text <- sprintf(
+  "outcome ~ i(et_dummy, ref = %dL) | unit + month", reference_event_time
+)
 fit <- tryCatch(
   feols(as.formula(formula_text), data = panel,
         cluster = ~ grid_id),
@@ -215,7 +267,7 @@ if (is.null(fit)) {
 }
 
 # ---- Joint parallel-trends Wald test (all pre-period betas = 0) ---------
-pre_terms <- coef_table[event_time < 0L & event_time != -1L]$term
+  pre_terms <- coef_table[event_time < 0L & event_time != reference_event_time]$term
 wald <- NULL
 wald_city <- NULL
 if (length(pre_terms) > 0L && !is.null(fit)) {
@@ -306,7 +358,9 @@ if (file.exists(attributes_path)) {
     coef_stratum[, event_time := as.integer(sub("et_dummy::", "", term))]
     coef_stratum[, stratum := stratum_name]
     coef_stratum[, n_treated_events := strat_events]
-    pre_terms_stratum <- coef_stratum[event_time < 0L & event_time != -1L]$term
+    pre_terms_stratum <- coef_stratum[
+      event_time < 0L & event_time != reference_event_time
+    ]$term
     wald_stratum <- NULL
     if (length(pre_terms_stratum) > 0L) {
       wald_stratum <- tryCatch(
@@ -334,7 +388,9 @@ cat("\nSaved to", out_dir, "\n")
 
 # ---- Figure -------------------------------------------------------------
 if (!is.null(fit) && nrow(coef_table) > 0L) {
-  png(file.path(out_dir, "event_study_matching.png"), width = 1000, height = 650, res = 130)
+  png(file.path(out_dir, "event_study_matching.png"), width = 2400, height = 1560,
+      res = 300, type = "cairo")
+  par(family = figure_font_family)
   ci <- tryCatch(confint(fit), error = function(e) NULL)
   if (is.null(ci)) {
     dev.off()
@@ -346,10 +402,11 @@ if (!is.null(fit) && nrow(coef_table) > 0L) {
     plot_data[, event_time := as.integer(sub("et_dummy::", "", term))]
     plot_data <- plot_data[order(event_time)]
     x_range <- range(plot_data$event_time)
-    # ylim from the coefficient range (not the CI range): huge standard
-    # errors in sparse panels would otherwise stretch the axis and squash
-    # every point onto y=0.  CI lines extend past the window as usual.
-    y_span <- range(c(plot_data$estimate, 0), na.rm = TRUE)
+    # Include the full CI range in the axis so uncertainty is never clipped.
+    # The event-study figure should show the inferential object, not only the
+    # point estimates.
+    y_span <- range(c(plot_data$estimate, plot_data$ci_lower,
+                      plot_data$ci_upper, 0), na.rm = TRUE)
     y_pad <- 0.15 * max(diff(y_span), 0.1)
     y_min <- y_span[1L] - y_pad
     y_max <- y_span[2L] + y_pad
@@ -358,18 +415,19 @@ if (!is.null(fit) && nrow(coef_table) > 0L) {
          xlab = "Event time (months)", ylab = "Coefficient (beta_k)",
          main = paste0("Event study (matched sample): ", outcome_family))
     abline(h = 0, lty = 2, col = "grey50")
-    abline(v = -1, lty = 3, col = "grey70")
-    # light 95% CI band plus point estimates (standard event-study style)
-    polygon(
-      c(plot_data$event_time, rev(plot_data$event_time)),
-      c(plot_data$ci_lower, rev(plot_data$ci_upper)),
-      col = grDevices::adjustcolor("steelblue", alpha.f = 0.15),
-      border = NA
-    )
+    abline(v = 0, lty = 3, col = "grey70")
+    # Error bars are safer than a ribbon here: event times can be missing in
+    # sparse matched panels, and a polygon would imply unsupported values
+    # between non-adjacent periods.
     segments(plot_data$event_time, plot_data$ci_lower,
              plot_data$event_time, plot_data$ci_upper, col = "steelblue", lwd = 1)
+    lines(plot_data$event_time, plot_data$estimate, col = "steelblue", lwd = 1.5)
     points(plot_data$event_time, plot_data$estimate, pch = 19, col = "steelblue")
+    plot_record <- recordPlot()
     dev.off()
+    save_recorded_vector_plot(
+      plot_record, file.path(out_dir, "event_study_matching")
+    )
     cat("Figure written.\n")
   }
 }
@@ -391,11 +449,10 @@ tryCatch(
     } else {
       as.integer(format(as.IDate(month), "%Y%m"))
     }]
-    panel[, treatment_time := ifelse(role == "treated",
-                                     as.integer(format(opening, if (is_annual) "%Y" else "%Y%m")),
-                                     as.integer(NA))]
     sunab_fit <- feols(
-      outcome ~ sunab(treatment_time, calendar_month, ref.c = -1L) | unit + month,
+      outcome ~ sunab(
+        treatment_time, calendar_month, ref.c = reference_event_time
+      ) | unit + month,
       data = panel,
       cluster = ~ grid_id
     )
@@ -408,7 +465,9 @@ tryCatch(
     # Keep the study-window relative periods only for the Wald test and the
     # figure; the full coefficient table is archived above for audit.
     sunab_window <- sunab_coef[event_time %in% seq.int(min_pre, max_post)]
-    pre_terms_sa <- sunab_window[event_time < 0L & event_time != -1L]$term
+    pre_terms_sa <- sunab_window[
+      event_time < 0L & event_time != reference_event_time
+    ]$term
     if (length(pre_terms_sa) > 0L) {
       sunab_wald <- tryCatch(
         as.data.table(wald_test(sunab_fit, keep = pre_terms_sa))[1L],
@@ -426,7 +485,8 @@ tryCatch(
     )
     # Figure: Sun-Abraham coefficients vs event time
     png(file.path(out_dir, "event_study_matching_sun_abraham.png"),
-        width = 1000, height = 650, res = 130)
+        width = 2400, height = 1560, res = 300, type = "cairo")
+    par(family = figure_font_family)
     ci_sa <- confint(sunab_fit)
     ci_sa_dt <- as.data.table(ci_sa, keep.rownames = TRUE)
     setnames(ci_sa_dt, c("term", "ci_lower", "ci_upper"))
@@ -434,7 +494,8 @@ tryCatch(
                      ci_sa_dt[, .(term, ci_lower, ci_upper)],
                      by = "term", all.x = TRUE)
     plot_sa <- plot_sa[order(event_time)]
-    sa_span <- range(c(plot_sa$estimate, 0), na.rm = TRUE)
+    sa_span <- range(c(plot_sa$estimate, plot_sa$ci_lower,
+                       plot_sa$ci_upper, 0), na.rm = TRUE)
     sa_pad <- 0.15 * max(diff(sa_span), 0.1)
     plot(plot_sa$event_time, plot_sa$estimate, type = "n",
          xlim = range(plot_sa$event_time),
@@ -442,17 +503,16 @@ tryCatch(
          xlab = "Event time (months)", ylab = "IW coefficient",
          main = paste0("Sun-Abraham event study (matched): ", outcome_family))
     abline(h = 0, lty = 2, col = "grey50")
-    abline(v = -1, lty = 3, col = "grey70")
-    polygon(
-      c(plot_sa$event_time, rev(plot_sa$event_time)),
-      c(plot_sa$ci_lower, rev(plot_sa$ci_upper)),
-      col = grDevices::adjustcolor("darkorange", alpha.f = 0.15),
-      border = NA
-    )
+    abline(v = 0, lty = 3, col = "grey70")
     segments(plot_sa$event_time, plot_sa$ci_lower,
              plot_sa$event_time, plot_sa$ci_upper, col = "darkorange", lwd = 1)
+    lines(plot_sa$event_time, plot_sa$estimate, col = "darkorange", lwd = 1.5)
     points(plot_sa$event_time, plot_sa$estimate, pch = 19, col = "darkorange")
+    plot_record <- recordPlot()
     dev.off()
+    save_recorded_vector_plot(
+      plot_record, file.path(out_dir, "event_study_matching_sun_abraham")
+    )
     cat("Sun-Abraham event study written.\n")
   },
   error = function(e) {
@@ -477,7 +537,9 @@ if (length(same_month_vals) > 4L) {
     if (nrow(strat_panel[stratum == strat]) < 3L) next
     fit_strat <- tryCatch(
       feols(
-        outcome ~ sunab(treatment_time, calendar_month, ref.c = -1L) | unit + month,
+        outcome ~ sunab(
+          treatment_time, calendar_month, ref.c = reference_event_time
+        ) | unit + month,
         data = strat_panel, cluster = ~ grid_id
       ),
       error = function(e) NULL
@@ -495,14 +557,16 @@ if (length(same_month_vals) > 4L) {
            bom = TRUE)
     if (nrow(coef_strat) > 0L && all(is.finite(coef_strat$event_time))) {
       png(file.path(out_dir, sprintf("spillover_%s_event_study.png", strat)),
-          width = 900, height = 600, res = 130)
+          width = 2100, height = 1400, res = 300, type = "cairo")
+      par(family = figure_font_family)
       ci_s <- confint(fit_strat)
       ci_s_dt <- as.data.table(ci_s, keep.rownames = TRUE)
       setnames(ci_s_dt, c("term", "ci_lower", "ci_upper"))
       plot_s <- merge(coef_strat[, .(term, event_time, estimate = Estimate)],
                       ci_s_dt[, .(term, ci_lower, ci_upper)],
                       by = "term", all.x = TRUE)[order(event_time)]
-      sp_span <- range(c(plot_s$estimate, 0), na.rm = TRUE)
+      sp_span <- range(c(plot_s$estimate, plot_s$ci_lower,
+                         plot_s$ci_upper, 0), na.rm = TRUE)
       sp_pad <- 0.15 * max(diff(sp_span), 0.1)
       plot(plot_s$event_time, plot_s$estimate, type = "n",
            xlim = range(plot_s$event_time),
@@ -510,17 +574,16 @@ if (length(same_month_vals) > 4L) {
            xlab = "Event time", ylab = "IW coefficient",
            main = sprintf("Spillover stratum: %s (same-month openings)", strat))
       abline(h = 0, lty = 2, col = "grey50")
-      abline(v = -1, lty = 3, col = "grey70")
-      polygon(
-        c(plot_s$event_time, rev(plot_s$event_time)),
-        c(plot_s$ci_lower, rev(plot_s$ci_upper)),
-        col = grDevices::adjustcolor("darkgreen", alpha.f = 0.15),
-        border = NA
-      )
+      abline(v = 0, lty = 3, col = "grey70")
       segments(plot_s$event_time, plot_s$ci_lower,
                plot_s$event_time, plot_s$ci_upper, col = "darkgreen", lwd = 1)
+      lines(plot_s$event_time, plot_s$estimate, col = "darkgreen", lwd = 1.5)
       points(plot_s$event_time, plot_s$estimate, pch = 19, col = "darkgreen")
+      plot_record <- recordPlot()
       dev.off()
+      save_recorded_vector_plot(
+        plot_record, file.path(out_dir, sprintf("spillover_%s_event_study", strat))
+      )
     }
     cat(sprintf("Spillover stratum %s written (median=%d)\n", strat, med))
   }

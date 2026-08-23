@@ -87,7 +87,7 @@
   处理前时点对齐）合并进匹配 frame，列名加 `loc_` / `transit_` 前缀。
 - **两阶段控制选择**：阶段 1 按处理前结果滞后（lag2/lag3）Mahalanobis 匹配
   M=5 个候选；阶段 2 在候选中精炼静态协变量平衡最优者（`static_balance_refine()`）。
-- 共同支持门禁与 holdout/placebo 门禁仍只作用于结果历史特征——处理网格按构造
+- 共同支持门禁与 holdout/placebo 门禁仍只作用于结果历史特征。处理网格按构造
   比 1km 排除后的 donor 更接近轨道网络，静态特征进入支持门禁会使匹配路径
   系统性失败（详见 `docs/research/matching_and_gsc_methodology.md` §5.4.1）。
 - SMD 诊断（`feature_balance.parquet`）同时报告结果滞后与静态协变量。

@@ -10,8 +10,14 @@ Outputs (all under outputs/causal_labels/):
 - representative_sample_400.csv: sampled treatment orders with stratum info
 - representative_sample_400_diagnostics.json: coverage and composition report
 
+The production sample defaults to the opening-month interval 2017-07 through
+2022-12. With the current processed VIIRS cache (2014-01 through 2024-12),
+this interval provides the full 42-month pre-treatment and 24-month
+post-treatment window used by the monthly GSC specification.
+
 Usage:
-    python scripts/analysis/select_representative_sample.py [--n 400] [--seed mit-summer-2026]
+    python scripts/analysis/select_representative_sample.py [--n 400] [--seed 20260814]
+    python scripts/analysis/select_representative_sample.py [--n 400] [--seed 20260814] [--min-opening-month YYYY-MM] [--max-opening-month YYYY-MM]
 """
 
 from __future__ import annotations
@@ -91,6 +97,10 @@ def select_sample(
         sampled_rows.append(chosen)
     sample = pd.concat(sampled_rows, ignore_index=True)
     sample = sample.sort_values("treatment_order").reset_index(drop=True)
+    if len(sample) != n or sample["treatment_order"].duplicated().any():
+        raise ValueError(
+            f"Representative sample cardinality/uniqueness failed: n={len(sample)}, target={n}"
+        )
 
     coverage = pd.DataFrame(
         {
@@ -122,13 +132,58 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--n", type=int, default=400)
     parser.add_argument("--seed", type=int, default=20260814)
+    parser.add_argument(
+        "--min-opening-month",
+        default="2017-07",
+        help="Inclusive lower opening-month bound (default: 2017-07).",
+    )
+    parser.add_argument(
+        "--max-opening-month",
+        default="2022-12",
+        help="Inclusive upper opening-month bound (default: 2022-12).",
+    )
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
     args = parser.parse_args()
 
     treatments = pd.read_parquet(TREATMENTS_PATH)
     if len(treatments) != 5_048 or treatments["treatment_order"].duplicated().any():
         raise ValueError("Treatment list is not the immutable 5,048-unit list")
-    sample, diagnostics = select_sample(treatments, args.n, args.seed)
+    eligible = treatments.copy()
+    cutoff = None
+    ceiling = None
+    if args.min_opening_month:
+        try:
+            cutoff = pd.Period(args.min_opening_month, freq="M")
+        except Exception as exc:
+            raise ValueError("--min-opening-month must use YYYY-MM format") from exc
+    if args.max_opening_month:
+        try:
+            ceiling = pd.Period(args.max_opening_month, freq="M")
+        except Exception as exc:
+            raise ValueError("--max-opening-month must use YYYY-MM format") from exc
+    if cutoff is not None and ceiling is not None and cutoff > ceiling:
+        raise ValueError("--min-opening-month must not be later than --max-opening-month")
+    if cutoff is not None or ceiling is not None:
+        opening_period = pd.to_datetime(
+            eligible["opening_month"].astype(str) + "-01", errors="raise"
+        ).dt.to_period("M")
+        keep = pd.Series(True, index=eligible.index)
+        if cutoff is not None:
+            keep &= opening_period >= cutoff
+        if ceiling is not None:
+            keep &= opening_period <= ceiling
+        eligible = eligible.loc[keep].copy()
+        if len(eligible) < args.n:
+            raise ValueError(
+                f"Eligible population {len(eligible)} is smaller than target sample {args.n}"
+            )
+
+    sample, diagnostics = select_sample(eligible, args.n, args.seed)
+    diagnostics["source_n"] = int(len(treatments))
+    diagnostics["eligible_n"] = int(len(eligible))
+    diagnostics["excluded_n"] = int(len(treatments) - len(eligible))
+    diagnostics["min_opening_month_filter"] = str(cutoff) if cutoff is not None else None
+    diagnostics["max_opening_month_filter"] = str(ceiling) if ceiling is not None else None
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     out_columns = [
@@ -150,7 +205,10 @@ def main() -> int:
     (args.output_dir / "representative_sample_400_diagnostics.json").write_text(
         json.dumps(diagnostics, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
-    print(f"Sampled {len(sample)} grids from {diagnostics['non_empty_strata']} non-empty strata")
+    print(
+        f"Sampled {len(sample)} grids from {diagnostics['eligible_n']} eligible units "
+        f"({diagnostics['excluded_n']} excluded before the opening-month cutoff)"
+    )
     print(json.dumps(
         {k: v for k, v in diagnostics.items() if k not in {"created_utc", "by_year", "by_city"}},
         ensure_ascii=False, indent=2,

@@ -47,8 +47,8 @@ Mahalanobis refinement, placebo estimation, and 1,000 bootstrap iterations.
 
 The production runner does not cap the same-city donor pool. A benchmark with
 16,514 donors exceeded ten minutes on the current machine. The
-`test_real_panelmatch_gate.R` 300-donor fixture is only an integration test and
-must never be reported as a formal estimate.
+`test_real_panelmatch_gate.R` 300-donor fixture is an integration test and is
+excluded from formal estimates.
 
 ## Abadie-Imbens matching
 
@@ -107,9 +107,10 @@ When both same-city and all-city GSC fail, the queue enters the recoverable
 `mc_pending` and `mc_running` states. The MC runner uses the official
 `fect(method="mc")` implementation, two-way effects, MSPE cross-validation
 over 20 lambda candidates, `min.T0=1`, `cv.nobs=1`, and zero CV donut/buffer,
-using a pre-only CV selection stage followed by a fixed-lambda 200-bootstrap
-inference stage,
-and 200 nonparametric bootstrap replications. Treated post-period outcomes are
+using a pre-only CV selection stage followed by fixed-lambda jackknife
+inference. The formal `nboots=200` setting is retained for run compatibility,
+but it is not interpreted as 200 bootstrap replications under jackknife.
+Treated post-period outcomes are
 masked with a pre-treatment-only value before lambda construction, CV, and
 fitting. A successful production manifest must record `fitted_method=mc`, a
 finite positive `selected_lambda`, and finite CV MSPE.
@@ -118,7 +119,7 @@ finite positive `selected_lambda`, and finite CV MSPE.
 & $rscript scripts/causal_r/run_complete_mc.R xiamen 2019 population auto annual 6 2346 same_city smoke_test
 ```
 
-Smoke mode uses 20 bootstrap replications and isolated output signatures. A
+Smoke mode uses 20 compatibility repetitions with jackknife inference and isolated output signatures. A
 multi-outcome family may retain successful outcomes while recording structured
 failures for unavailable outcomes. MC returns a donor-based counterfactual
 path, not one physical `control_grid_id`.
@@ -129,17 +130,16 @@ Control selection runs before the outcome-family queue and creates exactly one
 design row for each of the 5,048 treated grids. Unlike the annual outcome
 estimators, the control design uses monthly VIIRS in three twelve-month
 pre-treatment blocks. Production matching therefore requires the complete
-44-city, 2012-01--2024-12 monthly cache before the first grid is processed:
+44-city, 2012-01–2024-12 monthly cache before the first grid is processed:
 
 ```powershell
 $env:MIT_VIIRS_RAW = 'E:\Data\MIT_Summer_VIIRS'
 conda run -n mit python scripts/causal_r/run_grid_control_design_queue.py --prepare-viirs-cache-only
 ```
 
-The command is resumable and verifies all 6,864 Parquet+audit pairs. A normal
-production run fails closed if any pair is absent. Missing cache files must
-never be interpreted as an unavailable VIIRS family or silently remove cities
-from the all-city donor pool.
+The command is resumable and verifies all 6,864 Parquet+audit pairs. A missing
+pair is a cache-contract failure; production does not convert it into family
+unavailability or silently remove a city from the all-city donor pool.
 
 After the cache contract passes:
 
@@ -147,12 +147,12 @@ After the cache contract passes:
 conda run -n mit python scripts/causal_r/run_grid_control_design_queue.py --start-order 1 --max-units 10 --dry-run
 ```
 
-Remove `--dry-run` only for a bounded canary. The runner tries same-city
-Matching first, then the pre-treatment-standardized all-city fallback. Failed
-placebo/holdout gates are recorded as `gsc_pending`. Use bounded batches (for
-example 25--50 rows) so durable per-grid records are synchronized into the CSV
-queue regularly. The current CSV orchestrator is single-writer: do not launch
-multiple control-design queue processes against the same queue.
+Remove `--dry-run` only for a bounded canary. The control-design queue records a
+same-city attempt and, when it fails, an all-city pre-treatment-standardized
+attempt; failed placebo/holdout gates are recorded as `gsc_pending`. Use bounded
+batches (for example 25–50 rows) so durable per-grid records are synchronized
+into the CSV queue. The current CSV orchestrator is single-writer, so run only
+one control-design queue process against a given queue.
 
 ## Transactional production queue
 
@@ -196,7 +196,9 @@ formal training.
 ## Event-study aggregation (parallel-trends validation)
 
 GSC and MC task outputs keep negative `event_time` rows (pre-period
-counterfactual gaps); these are the per-grid event-study coefficients. The
+counterfactual gaps); these are the per-grid event-study coefficients. Their
+monthly values use actual calendar offsets: under the main specification the
+clean pre-period is `-42:-7`, while anticipation `-6:-1` is excluded. The
 label queue publishes only post horizons, so the event-study aggregator reads
 the estimator staging directly:
 
@@ -208,16 +210,17 @@ Only outputs with production manifests (`run_mode=production`,
 `production_eligible=TRUE`) are admitted; smoke/canary artifacts are excluded.
 It writes `outputs/event_study/`:
 
-- `event_study_series.csv` — mean/SD/SE/95% CI per family × outcome ×
+- `event_study_series.csv` — mean/SD/SE/95% CI per frequency × family × outcome ×
   `event_time` (pre and post), with per-period unit counts;
-- `event_study_joint_tests.csv` — grid-level joint zero-pre-trend test
-  (one-sample t-test on per-grid mean pre-period labels; grid-level means
-  cluster within-grid correlation; requires ≥2 grids);
-- `event_study_report.md` — reading guide: pre-period means near zero support
-  the parallel-trends assumption, rejection at 5% is a red flag (Roth 2022:
-  the test complements, never proves);
-- `figures/event_study_{family}__{outcome}.png` — mean + 95% CI event-study
-  plots.
+- `event_study_joint_tests.csv` — grid-level joint zero-pre-trend test on the
+  latest five clean pre-periods per grid (one-sample t-test on per-grid mean
+  pre-period labels; requires ≥2 grids);
+- `event_study_report.md` — reading guide: near-zero pre-period means are
+  consistent with, but do not establish, parallel trends; the joint test is
+  read together with the design-stage placebo evidence;
+- `figures/event_study_{frequency}__{family}__{outcome}.{png,pdf,svg}` —
+  mean + 95% CI event-study plots, with family-level and pooled overview figures
+  written alongside them.
 
 ## Verification
 

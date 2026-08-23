@@ -11,8 +11,8 @@ from pathlib import Path
 import pandas as pd
 import pyarrow.parquet as pq
 
-ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "src"))
+CODE_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(CODE_ROOT / "src"))
 
 from urban_intervention.data.paths import (  # noqa: E402
     CONTROL_DESIGN_QUEUE as QUEUE,
@@ -24,6 +24,7 @@ from urban_intervention.data.paths import (
     OUTPUT_VIIRS_PARTITION_AUDITS_DIR as VIIRS_AUDITS,
 )
 from urban_intervention.data.paths import (
+    PROJECT_ROOT,
     R_LIB_DIR,
     collection_script,
     r_script,
@@ -37,6 +38,7 @@ from urban_intervention.data.paths import (
 
 R_SCRIPT = os.environ.get("MIT_RSCRIPT", "Rscript")
 R_LIB = Path(os.environ.get("MIT_R_LIB", str(R_LIB_DIR)))
+ROOT = PROJECT_ROOT
 VIIRS_START = pd.Period("2012-01", freq="M")
 VIIRS_END = pd.Period("2024-12", freq="M")
 VIIRS_CACHE_CONTRACT = "complete_44_city_2012_2024_monthly_v1"
@@ -101,6 +103,20 @@ def read_queue(path: Path = QUEUE) -> pd.DataFrame:
     for column in STRING_COLUMNS:
         queue[column] = queue[column].astype("string")
     return queue
+
+
+def read_orders_file(path: Path) -> list[int]:
+    """Read and validate a treatment-order sample manifest."""
+    frame = pd.read_csv(path)
+    if "treatment_order" not in frame.columns:
+        raise ValueError(f"Orders file lacks treatment_order: {path}")
+    values = pd.to_numeric(frame["treatment_order"], errors="raise").astype(int).tolist()
+    orders = sorted(set(values))
+    if len(orders) != len(values):
+        raise ValueError(f"Orders file contains duplicate treatment_order values: {path}")
+    if not orders:
+        raise ValueError(f"Orders file is empty: {path}")
+    return orders
 
 
 def treatment_cities() -> list[str]:
@@ -328,6 +344,11 @@ def main() -> int:
         help="Comma-separated treatment orders to process (mutually exclusive "
         "with --start-order/--end-order ranges)",
     )
+    parser.add_argument(
+        "--orders-file",
+        type=Path,
+        help="CSV containing a treatment_order column; mutually exclusive with --orders",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--retry", action="store_true")
     parser.add_argument(
@@ -360,10 +381,16 @@ def main() -> int:
     eligible_statuses = ["pending", "running"]
     if args.retry:
         eligible_statuses.extend(["matched", "gsc_pending", "not_matched", "error"])
-    if args.orders is not None:
-        orders = sorted({int(value) for value in args.orders.split(",") if value.strip()})
+    if args.orders is not None or args.orders_file is not None:
+        if args.orders is not None and args.orders_file is not None:
+            parser.error("--orders and --orders-file are mutually exclusive")
+        orders = (
+            sorted({int(value) for value in args.orders.split(",") if value.strip()})
+            if args.orders is not None
+            else read_orders_file(args.orders_file.resolve())
+        )
         if not orders:
-            parser.error("--orders must contain at least one treatment order")
+            parser.error("selected orders must contain at least one treatment order")
         if args.start_order != 1 or args.end_order is not None:
             parser.error("--orders is mutually exclusive with --start-order/--end-order")
         mask = (queue["treatment_order"].isin(orders)) & statuses.isin(eligible_statuses)

@@ -7,12 +7,13 @@ source(file.path("scripts", "causal_r", "complete_estimators_lib.R"))
 
 args <- commandArgs(trailingOnly = TRUE)
 causal_run_id <- Sys.getenv("MIT_CAUSAL_RUN_ID", unset = "")
-if (length(args) < 3L || length(args) > 10L) {
+specification_fingerprint <- Sys.getenv("MIT_SPECIFICATION_FINGERPRINT", unset = "")
+if (length(args) < 3L || length(args) > 11L) {
   stop(paste(
     "Usage: run_complete_mc.R CITY COHORT OUTCOME_FAMILY",
     "[SIGNATURE=auto] [FREQUENCY=annual] [ANTICIPATION_MONTHS=6]",
-    "[TREATMENT_ORDER] [DONOR_SCOPE=same_city] [RUN_MODE=production]",
-    "[PRICE_MEASURE=median]"
+       "[TREATMENT_ORDER] [DONOR_SCOPE=same_city] [RUN_MODE=production]",
+       "[PRICE_MEASURE=median] [OBSERVATION_WINDOW=1]"
   ))
 }
 city_key <- args[[1L]]
@@ -26,16 +27,36 @@ requested_treatment_order <- treatment_order
 donor_scope <- if (length(args) >= 8L) args[[8L]] else "same_city"
 run_mode <- if (length(args) >= 9L) args[[9L]] else "production"
 price_measure <- if (length(args) >= 10L) args[[10L]] else "median"
+observation_window <- if (length(args) >= 11L) as.integer(args[[11L]]) else 1L
 assert_choice(frequency, c("annual", "monthly"), "frequency")
 assert_choice(donor_scope, c("same_city", "all_city_standardized"), "donor_scope")
-assert_choice(run_mode, c("production", "smoke_test"), "run_mode")
+assert_choice(run_mode, c("production", "preview", "smoke_test"), "run_mode")
 assert_choice(price_measure, c("median", "hedonic"), "price_measure")
+if (observation_window < 1L || observation_window > 6L) {
+  stop("observation_window must be in 1..6 months")
+}
 if (frequency == "monthly") {
   assert_choice(outcome_family, c("housing", "viirs"), "monthly outcome_family")
 }
+if (!nzchar(specification_fingerprint)) {
+  specification_fingerprint <- paste0(
+    "main_a6_r1km__a6__w", observation_window, "__price_", price_measure
+  )
+}
 
 spec <- complete_estimator_spec()
-run_nboots <- if (run_mode == "smoke_test") 20L else spec$mc$nboots
+run_nboots <- if (run_mode == "production") {
+  spec$mc$nboots
+} else if (run_mode == "smoke_test") {
+  20L
+} else {
+  0L
+}
+inference_repetitions <- if (identical(spec$mc$inference, "bootstrap")) {
+  as.integer(run_nboots)
+} else {
+  0L
+}
 if (isTRUE(spec$mc$parallel)) {
   options(future.globals.maxSize = 2 * 1024^3)
 }
@@ -92,12 +113,19 @@ build_mc_design <- function() {
     } else "outcome_only_prepath_mc_all_city"
     donors <- scope_donors()
     outcomes <- scope_annual_outcomes(donors)
-    available <- sort(unique(outcomes$year))
     annual_anticipation <- spec$timing$annual_anticipation_years
-    pre <- available[available < as.integer(cohort) - annual_anticipation]
-    post <- available[available > as.integer(cohort) & available <= as.integer(cohort) + 3L]
-    if (length(pre) < spec$mc$min.T0) stop("Insufficient pre-treatment periods for MC")
-    if (!length(post)) stop("No post-treatment outcome")
+    pre_end <- as.integer(cohort) - annual_anticipation - 1L
+    available_pre <- sort(unique(outcomes$year))
+    available_pre <- available_pre[available_pre <= pre_end]
+    if (!length(available_pre)) stop("No pre-treatment outcome for MC")
+    # Preserve the annual calendar skeleton.  Dropping an unavailable year
+    # would compress (for example) 2018 and 2020 into adjacent time_id values
+    # and change the temporal structure seen by fect. Missing years remain NA
+    # cells in the balanced panel and are handled by the estimator's missing
+    # observation mask.
+    pre <- seq.int(min(available_pre), pre_end)
+    post <- seq.int(as.integer(cohort) + 1L, as.integer(cohort) + 3L)
+    if (!any(outcomes$year %in% post)) stop("No post-treatment outcome")
     times <- c(pre, post)
     setnames(outcomes, "year", "period")
     opening_period_excluded <- as.integer(cohort)
@@ -126,8 +154,10 @@ build_mc_design <- function() {
       outcomes <- scope_monthly_outcomes(donors, c(pre, calendar$post_months))
     } else {
       outcomes <- scope_monthly_outcomes(donors, calendar$model_months)
-      available_months <- sort(unique(outcomes$month))
-      pre <- calendar$pre_months[calendar$pre_months %in% available_months]
+      # Keep every requested calendar month in the MC design.  Sparse housing
+      # observations are represented as NA cells rather than removed from the
+      # time axis, so a missing month cannot silently shorten the pre-period.
+      pre <- calendar$pre_months
       outcomes <- outcomes[month %in% c(pre, calendar$post_months)]
     }
     if (length(pre) < spec$mc$min.T0) {
@@ -269,13 +299,23 @@ run_one_outcome <- function(outcome) {
   dir.create(lambda_cache_dir, recursive = TRUE, showWarnings = FALSE)
   lambda_cache_path <- file.path(
     lambda_cache_dir,
-    paste0(city_key, "__", cohort, "__", outcome_family, "__", donor_scope, ".rds")
+    paste0(
+      city_key, "__", cohort, "__", outcome_family, "__", donor_scope,
+      "__", price_measure, "__", gsub("[^A-Za-z0-9_-]", "_", specification_fingerprint), ".rds"
+    )
   )
   selected_lambda <- NULL
+  mc_cv_mspe <- NA_real_
+  selection_fit <- NULL
   if (file.exists(lambda_cache_path)) {
     cached <- readRDS(lambda_cache_path)
-    if (is.numeric(cached) && length(cached) == 1L && is.finite(cached) && cached > 0) {
-      selected_lambda <- cached
+    cached_lambda <- if (is.list(cached)) cached$selected_lambda else NULL
+    cached_mspe <- if (is.list(cached)) cached$cv_min_mspe else NULL
+    if (is.numeric(cached_lambda) && length(cached_lambda) == 1L &&
+        is.numeric(cached_mspe) && length(cached_mspe) == 1L &&
+        is.finite(cached_lambda) && cached_lambda > 0 && is.finite(cached_mspe)) {
+      selected_lambda <- as.numeric(cached$selected_lambda)
+      mc_cv_mspe <- as.numeric(cached$cv_min_mspe)
     }
   }
   if (is.null(selected_lambda)) {
@@ -298,31 +338,41 @@ run_one_outcome <- function(outcome) {
       stop("MC selection stage did not choose one finite positive lambda")
     }
     selected_lambda <- as.numeric(selection_fit$lambda.cv)
-    saveRDS(selected_lambda, lambda_cache_path)
+    if (!is.matrix(selection_fit$CV.out.mc) ||
+        !"MSPE" %in% colnames(selection_fit$CV.out.mc) ||
+        !any(is.finite(selection_fit$CV.out.mc[, "MSPE"]))) {
+      stop("MC cross-validation diagnostics are missing or invalid")
+    }
+    mc_cv_mspe <- min(selection_fit$CV.out.mc[, "MSPE"], na.rm = TRUE)
+    saveRDS(
+      list(selected_lambda = selected_lambda, cv_min_mspe = mc_cv_mspe),
+      lambda_cache_path
+    )
   }
-  fit <- fect(
-    Y ~ D, data = estimation_data, index = c("mc_unit_id", "time_id"),
+  fit_args <- list(
+    formula = Y ~ D, data = estimation_data, index = c("mc_unit_id", "time_id"),
     method = spec$mc$estimator, force = spec$mc$force,
     CV = FALSE, lambda = selected_lambda,
-    se = spec$mc$se, nboots = run_nboots,
-    vartype = spec$mc$inference,
-    parallel = spec$mc$parallel, cores = spec$mc$cores,
+    se = isTRUE(spec$mc$se) && run_mode != "preview",
+    parallel = if (run_mode == "preview") FALSE else spec$mc$parallel,
+    cores = if (run_mode == "preview") 1L else spec$mc$cores,
     min.T0 = spec$mc$min.T0, normalize = FALSE,
     seed = 20260725
   )
+  if (run_mode != "preview") {
+    fit_args$nboots <- run_nboots
+    fit_args$vartype <- spec$mc$inference
+  }
+  fit <- do.call(fect, fit_args)
   if (!inherits(fit, "fect") || is.null(fit$Y.ct)) {
     stop("MC did not return a valid counterfactual model")
   }
   if (!identical(fit$method, "mc")) {
     stop("Requested MC estimator returned a different fitted method")
   }
-  if (!isTRUE(spec$mc$CV) || is.null(selection_fit$CV.out.mc) ||
-      !is.matrix(selection_fit$CV.out.mc) ||
-      !"MSPE" %in% colnames(selection_fit$CV.out.mc) ||
-      !any(is.finite(selection_fit$CV.out.mc[, "MSPE"]))) {
+  if (!isTRUE(spec$mc$CV) || !is.finite(mc_cv_mspe)) {
     stop("MC cross-validation diagnostics are missing or invalid")
   }
-  mc_cv_mspe <- min(selection_fit$CV.out.mc[, "MSPE"], na.rm = TRUE)
 
   # Never guess the target column: a wrong Y.ct column silently corrupts labels.
   if (is.null(fit$id)) stop("MC fit does not expose unit identities for Y.ct")
@@ -354,7 +404,10 @@ run_one_outcome <- function(outcome) {
     outcome_family = outcome_family,
     outcome = outcome,
     period = model_periods,
-    event_time = c(seq.int(-pre_count, -1L), as.integer(post_event_time)),
+    event_time = c(
+      event_time_from_period(design$pre, design$opening_period_excluded, frequency),
+      as.integer(post_event_time)
+    ),
     observed = target_panel$value,
     counterfactual = counterfactual
   )
@@ -370,14 +423,17 @@ run_one_outcome <- function(outcome) {
     paths[, `:=`(
       standard_error = NA_real_, confidence_lower = NA_real_,
       confidence_upper = NA_real_, p_value = NA_real_,
-      bootstrap_repetitions = as.integer(run_nboots),
-      uncertainty_source = "mc_nonparametric_bootstrap_unavailable"
+      bootstrap_repetitions = inference_repetitions,
+      uncertainty_source = paste0("mc_", spec$mc$inference, "_unavailable")
     )]
   } else {
     paths <- attach_single_target_gsc_uncertainty(
-      paths, fit, run_nboots, effect_scale = target_scale
+      paths, fit, inference_repetitions, effect_scale = target_scale
     )
-    paths[, uncertainty_source := "mc_nonparametric_bootstrap"]
+    paths[, uncertainty_source := paste0("mc_", spec$mc$inference)]
+  }
+  if (frequency == "monthly") {
+    paths <- apply_post_observation_window(paths, observation_window)
   }
   prefit <- paths[event_time < 0L, .(
     pre_rmspe = sqrt(mean(causal_response_label^2, na.rm = TRUE)),
@@ -389,14 +445,22 @@ run_one_outcome <- function(outcome) {
     outcome,
     if (!is.null(treatment_order)) sprintf("_t%05d", treatment_order) else ""
   )
-  output_signature <- if (run_mode == "smoke_test") {
-    paste0(design$signature, "_smoke_test")
+  output_signature <- if (run_mode %in% c("smoke_test", "preview")) {
+    paste0(design$signature, "_", run_mode)
   } else design$signature
   output <- estimator_output_dir(
     "matrix_completion", city_key, cohort, outcome_tag, output_signature
   )
   saveRDS(fit, file.path(output, "mc_object.rds"), compress = "xz")
-  saveRDS(selection_fit, file.path(output, "mc_cv_object.rds"), compress = "xz")
+  cv_object <- if (is.null(selection_fit)) {
+    list(
+      cached = TRUE,
+      method = "mc",
+      lambda.cv = selected_lambda,
+      cv_min_mspe = mc_cv_mspe
+    )
+  } else selection_fit
+  saveRDS(cv_object, file.path(output, "mc_cv_object.rds"), compress = "xz")
   write_parquet(panel, file.path(output, "estimation_panel.parquet"), compression = "zstd")
   write_parquet(paths, file.path(output, "causal_response_labels.parquet"), compression = "zstd")
   fwrite(units, file.path(output, "unit_map.csv"), bom = TRUE)
@@ -416,6 +480,7 @@ run_one_outcome <- function(outcome) {
     package = paste0("fect ", packageVersion("fect")),
     city_key = city_key, cohort = cohort, frequency = frequency,
     treatment_order = treatment_order,
+    specification_fingerprint = specification_fingerprint,
     outcome_family = outcome_family, outcome = outcome,
     signature = design$signature, estimator = "mc", backend = spec$mc$backend,
     fitted_method = fit$method,
@@ -427,10 +492,12 @@ run_one_outcome <- function(outcome) {
     inference_fit_CV = FALSE,
     cv_min_mspe = mc_cv_mspe,
     force = spec$mc$force, min_T0 = spec$mc$min.T0,
-    se = spec$mc$se, inference = spec$mc$inference, nboots = run_nboots,
+    se = spec$mc$se && run_mode != "preview", inference = spec$mc$inference,
+    nboots = run_nboots, inference_repetitions = inference_repetitions,
     run_mode = run_mode,
     production_eligible = run_mode == "production",
     price_measure = price_measure,
+    observation_window = if (frequency == "monthly") observation_window else 1L,
     donor_admission_uses_post_outcome = FALSE,
     treated_post_outcome_mask = "treated_pre_mean_before_mc_cv_and_fit",
     opening_period_excluded = as.character(design$opening_period_excluded),
@@ -449,7 +516,7 @@ run_one_outcome <- function(outcome) {
     } else "none",
     formal_queue_written = FALSE
   ))
-  cat("Completed MC and normalized causal labels for", outcome, "at", output, "\n")
+  cat("Completed", run_mode, "MC and normalized causal labels for", outcome, "at", output, "\n")
 }
 
 run_status <- rbindlist(lapply(design$outcome_names, function(outcome) {
@@ -469,8 +536,8 @@ family_tag <- paste0(
   outcome_family,
   if (!is.null(treatment_order)) sprintf("_t%05d", treatment_order) else ""
 )
-family_signature <- if (run_mode == "smoke_test") {
-  paste0(design$signature, "_smoke_test")
+family_signature <- if (run_mode %in% c("smoke_test", "preview")) {
+  paste0(design$signature, "_", run_mode)
 } else design$signature
 family_output <- estimator_output_dir(
   "matrix_completion_runs", city_key, cohort, family_tag, family_signature

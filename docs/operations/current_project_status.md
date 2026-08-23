@@ -1,6 +1,6 @@
 # Current Project Status
 
-Updated: 2026-08-04
+Updated: 2026-08-19
 
 This page records only the active state needed to resume work. Detailed research
 choices belong in the causal design and DDRs; dataset paths belong in
@@ -87,12 +87,11 @@ post horizons, so parallel-trends validation is aggregated separately:
 
 - `scripts/causal_r/run_event_study_aggregation.R` admits only production
   manifests (`run_mode=production`, `production_eligible=TRUE`) and writes
-  `outputs/event_study/`: per-family × outcome × `event_time` series
-  (mean/SD/SE/95% CI with per-period n), a grid-level joint zero-pre-trend
-  test (one-sample t-test on per-grid mean pre-period labels, requiring ≥2
-  grids), a report with reading guide (Roth 2022 caveat), and event-study
-  figures.
-- Real-data check (2026-08-04, order 906 population MC task): mean pre-period
+  `outputs/event_study/`. Annual and monthly results remain separate through
+  the `frequency` field; the output includes per-frequency × family × outcome ×
+  `event_time` series (mean/SD/SE/95% CI with per-period n), a grid-level joint
+  zero-pre-trend test, a reading guide, and PNG/PDF/SVG event-study figures.
+- Historical real-data check (2026-08-04, order 906 population MC task): mean pre-period
   label 0.0004 over 5 pre-period rows — consistent with the canary's
   near-zero pre-period claims; joint test deferred until ≥2 grids are labelled.
 - The matched path contributes pre-trend evidence through the selection-stage
@@ -105,7 +104,7 @@ Queue state after the deliberate reset for the 6-round routing (same-city
 matching → same-city GSC → same-city MC → cross-city matching → cross-city
 GSC → cross-city MC → skip):
 
-- `control_design_queue.csv` (5,048 rows): 5,048 `pending`.
+- `control_design_queue.csv` (5,048 rows): 4,648 `pending`, 218 `matched`, 182 `gsc_pending`.
 - `outcome_family_work_queue.csv` (20,192 rows): 20,192 `pending`.
 - `counterfactual_work_queue.csv` (5,048 rows): 5,048 `pending`.
 
@@ -126,9 +125,10 @@ canary below reflects the **current** two-stage logic:
    `gsc_pending` (holdout/placebo gate rejections — expected with the new
    static covariates). `feature_balance.parquet` reports standardized gaps for
    the 9 static covariates (loc_*/transit_*) alongside the outcome lags.
-   Orders 1–10 (shanghai 2010 openings) route to `gsc_pending` for
-   `fewer_than_1_complete_pre_treatment_families` (VIIRS/POI start 2012),
-   which is the designed early-opening behaviour.
+   For orders 1–10 (Shanghai 2010 openings), the control queue records
+   `gsc_pending` with reason `fewer_than_1_complete_pre_treatment_families`
+   (VIIRS/POI start 2012); the corresponding family tasks skip directly with
+   `no_complete_pre_treatment_families`.
 2. **GSC path**: Xu (2017) gsynth smoke test on order 906 (Guangzhou 2015,
    population, annual, same-city) completed successfully — 49,329 donors,
    CV selected r=0, 20 parametric bootstrap replications, 8 label rows
@@ -144,7 +144,7 @@ canary below reflects the **current** two-stage logic:
    estimator-label hashes were revalidated.
 3. **MC path**: matrix completion smoke execution selected a positive lambda by
    treatment-pre MSPE cross-validation and produced finite counterfactuals and
-   bootstrap uncertainty. End-to-end queue canary (2026-08-10, order 906 all
+   jackknife uncertainty. End-to-end queue canary (2026-08-10, order 906 all
    families): matching failed the placebo gate → GSC → MC; poi/population/viirs
    reached `mc_labelled`, housing `skipped` (MC support failure) — the full
    6-round chain (match → GSC → MC → skip) ran atomically with task provenance.
@@ -154,9 +154,6 @@ canary below reflects the **current** two-stage logic:
 Early-opening grids (2010–2014) mostly route to gsc_pending or skipped due to
 insufficient pre-treatment data (VIIRS starts 2012, housing coverage varies by
 city). Grids opening 2015+ have adequate support for both matching and GSC.
-
-Canary artifacts were removed after verification; queues were reset to
-`pending` for the formal run.
 
 ## Remaining steps before full production
 
@@ -171,11 +168,12 @@ are complete. Formal production execution is still outstanding:
    representation model on the full production release
 
 
-GSC in production mode uses 200 bootstrap replications (vs 20 in smoke test);
-expect ~10× longer per task. See `scripts/causal_r/README.md` for commands.
-Every estimator invocation receives a unique queue-generated `run_id`; stale,
-smoke-mode, non-production, or incorrectly bootstrapped artifacts are rejected
-before a task can be marked labelled.
+GSC in production mode uses 200 parametric bootstrap replications (vs 20 in
+smoke test). MC uses fixed-lambda jackknife inference; its `nboots=200` field
+is compatibility metadata, not 200 bootstrap replications. See
+`scripts/causal_r/README.md` for commands. Every estimator invocation receives
+a unique queue-generated `run_id`; stale, smoke-mode, non-production, or
+incorrectly inferred artifacts are rejected before a task can be marked labelled.
 
 ## Representation-learning status
 

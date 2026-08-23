@@ -89,12 +89,13 @@ playwright install chromium
 - **裸机**：安装 R 4.6.1，包库指向项目内 `.r-lib`：
 
 ```bash
-export R_LIBS_USER="$(pwd)/.r-lib"          # 首次 mkdir -p .r-lib
-R -e 'install.packages(c("data.table","dplyr","arrow","fixest","lmtest","sandwich",
-                         "Matching","PanelMatch","gsynth","fect",
-                         "future","doParallel","foreach"),
-     repos="https://cloud.r-project.org")'
+export R_LIBS_USER="$(pwd)/.r-lib"
+mkdir -p "$R_LIBS_USER"
+Rscript -e 'options(repos=c(CRAN="https://mirrors.pku.edu.cn/CRAN/")); install.packages(c("data.table","dplyr","fixest","lmtest","sandwich","Matching","PanelMatch","gsynth","fect","future","doParallel","foreach"), lib=Sys.getenv("R_LIBS_USER"), Ncpus=1)'
+Rscript -e 'options(repos=c(PPM="https://packagemanager.posit.co/cran/latest/bin/linux/noble-x86_64/4.6")); install.packages("arrow", lib=Sys.getenv("R_LIBS_USER"), Ncpus=1)'
 ```
+
+当前服务器为 Ubuntu 24.04 x86_64。Arrow 使用 Posit Package Manager 的 R 4.6 Linux 二进制包；安装日志必须显示 `* installing *binary* package 'arrow'`。如果回退为 `* installing *source* package 'arrow'`，应停止安装并检查二进制仓库地址，避免再次触发本地 C++ 编译。
 
 验证（门禁测试）：
 
@@ -103,8 +104,7 @@ export R_LIBS_USER="$(pwd)/.r-lib"
 Rscript tests/causal_r/test_complete_estimators.R
 ```
 
-`scripts/causal_r/RUNTIME_LOCK.csv` 是 Windows 本机的运行锁定记录；服务器上以
-实际安装路径为准，通过下面第 5 节环境变量覆盖，无需修改任何代码。
+`scripts/causal_r/RUNTIME_LOCK.csv` 记录当前规范环境的 R 包版本；其中路径字段是机器本地路径，不能直接复制到服务器。当前规范版本以服务器为准，R 4.6.1 使用 `arrow 25.0.0`；本地 Windows 环境已同步到同一 Arrow 版本。服务器实际路径仍通过下面第 5 节环境变量覆盖，无需修改代码中的数据路径。
 
 ## 5. 环境变量与配置
 
@@ -137,7 +137,7 @@ Rscript tests/causal_r/test_complete_estimators.R
 
 ### 7.1 VIIRS 月度缓存（控制设计前置，先于一切）
 
-控制设计需要完整 44 城 2012-01~2024-12 月度 VIIRS 缓存（6,864 个 Parquet+audit 对）。
+控制设计需要完整 44 城 2012-01 至 2024-12 月度 VIIRS 缓存（6,864 个 Parquet+audit 对）。
 缺失文件**不得**被当作 VIIRS 不可用而静默丢城：
 
 ```bash
@@ -165,9 +165,11 @@ canary 审核通过前不要启动全量。2026-08-10 两阶段匹配 canary 已
 
 ```bash
 conda run -n mit python scripts/causal_r/run_parallel_production.py \
-  --run-all --reset-queues --shard-count 16 --workers 48
+  --run-all --reset-queues --shard-count 8 --workers 8
 ```
 
+- `8` 是当前内存友好的默认并行度：8 个标签分片和 8 个控制设计 worker。
+  估计器内部的核心数另行配置，不要把外层 worker 数与 R 内部并行度相乘到超出服务器内存。
 - Phase 1 控制设计 → Phase 2 因果标签（分片并行，可断点续跑）→ Phase 3 合并回 master 队列。
 - 中途中断后重跑同命令（不带 `--reset-queues` 保留进度）即可续跑。
 

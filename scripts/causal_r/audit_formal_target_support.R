@@ -4,10 +4,11 @@ suppressPackageStartupMessages({
 })
 
 source(file.path("scripts", "causal_r", "paths.R"))
+root <- normalizePath(getwd(), winslash = "/")
 tryCatch(load_project_paths(root), error = function(e) message("Paths manifest unavailable: ", e$message))
 source(file.path("scripts", "causal_r", "formal_matching_lib.R"))
+source(file.path("scripts", "causal_r", "complete_estimators_lib.R"))
 
-root <- normalizePath(getwd(), winslash = "/")
 if (exists("TREATMENT_UNIT_LIST", envir = .GlobalEnv)) {
   treatments <- as.data.table(read_parquet(TREATMENT_UNIT_LIST))
 } else {
@@ -74,6 +75,7 @@ read_city_family <- function(path, family) {
 
 audit_family <- function(family) {
   variables <- formal_matching_spec()$families[[family]]
+  spec <- complete_estimator_spec()
   rows <- rbindlist(lapply(family_paths(family), function(path) {
     city_name <- sub("(_poi_grid_yearly|_viirs_annual|_pop)?\\.parquet$", "", basename(path))
     target_city <- treatments[city_key == city_name]
@@ -89,20 +91,43 @@ audit_family <- function(family) {
     )
   }), fill = TRUE)
   rows[, lag := opening_year - year]
-  rows <- rows[lag %in% 1:3]
-  result <- rows[, .(
+  post_rows <- rows[lag %in% seq_len(spec$annual$lag)]
+  pre_rows <- rows[year < opening_year - spec$timing$annual_anticipation_years]
+  post_result <- post_rows[, .(
     complete_years = uniqueN(year[complete.cases(.SD)]),
     observed_years = uniqueN(year[!is.na(year)])
   ), by = treatment_order, .SDcols = variables]
-  result[, complete := complete_years == 3L]
-  # GSC's annual estimator requires min.T0 = 5 clean pre-treatment years
-  # (complete_estimators_lib.R), which is stricter than the 3-year matching
-  # admission criterion; record both so routing diagnostics are truthful.
-  result[, gsc_ready := complete_years >= 5L]
+  pre_result <- pre_rows[, .(
+    gsc_pre_complete_years = uniqueN(year[complete.cases(.SD)]),
+    gsc_pre_observed_years = uniqueN(year[!is.na(year)])
+  ), by = treatment_order, .SDcols = variables]
+  result <- merge(post_result, pre_result, by = "treatment_order", all = TRUE)
+  for (column in c(
+    "complete_years", "observed_years", "gsc_pre_complete_years",
+    "gsc_pre_observed_years"
+  )) {
+    result[is.na(get(column)), (column) := 0L]
+  }
+  result[, complete := complete_years == spec$annual$lag]
+  # GSC's annual estimator requires min.T0 clean pre-treatment years and the
+  # full annual post-treatment horizon.  These are distinct from the
+  # three-year matching admission criterion.
+  result[, gsc_ready := (
+    complete & gsc_pre_complete_years >= spec$xu_gsc$min.T0
+  )]
   setnames(
     result,
-    c("complete_years", "observed_years", "complete", "gsc_ready"),
-    paste0(family, c("_complete_years", "_observed_years", "_complete", "_gsc_ready"))
+    c(
+      "complete_years", "observed_years", "gsc_pre_complete_years",
+      "gsc_pre_observed_years", "complete", "gsc_ready"
+    ),
+    paste0(
+      family,
+      c(
+        "_complete_years", "_observed_years", "_gsc_pre_complete_years",
+        "_gsc_pre_observed_years", "_complete", "_gsc_ready"
+      )
+    )
   )
   result
 }

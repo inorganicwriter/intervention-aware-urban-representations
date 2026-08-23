@@ -1,7 +1,11 @@
 # Learning How Cities Respond：完整项目与生产管线
 
-状态：因果标签与训练前数据代码已实现；正式 5,048 网格生产尚未启动；表示模型与训练器未实现  
-更新日期：2026-07-23
+状态：因果标签、训练前数据、表示模型与训练器均已实现；正式 5,048 网格生产尚未完成
+更新日期：2026-08-19
+
+本文保留稳定的研究与生产合同；当前队列状态和已完成的 canary 记录见
+[`docs/operations/current_project_status.md`](../operations/current_project_status.md)，服务器命令见
+[`docs/operations/server_deployment.md`](../operations/server_deployment.md)。
 
 ## 1. 项目目标
 
@@ -53,19 +57,20 @@ causal_response_label = observed outcome - untreated counterfactual
 
 ### 4.1 单一物理控制设计
 
-每个处理网格只搜索一次控制身份。`Matching::Match` 使用 `Y=NULL`、Mahalanobis 距离、
-`M=1`、允许替换；控制选择不读取处理后结果或处理后缺失状态。
+控制设计阶段先进行同城控制搜索；搜索阶段使用 `Matching::Match` 的 `Y=NULL`、Mahalanobis
+距离、`M=5` 候选和允许替换设置。匹配失败时记录 `gsc_pending`，跨城控制在结果族路由需要时单独生成，
+不覆盖同城设计记录。所有控制选择均不读取处理后结果或处理后缺失状态。
 
 月度房价和 VIIRS 使用三个完整 12 月块：lag 2/3 用于训练距离，lag 1 完全留出。年度 POI
-和人口使用开通前第 1/2/3 个完整年度。目标至少需要两个完整变量族。
+和人口使用开通前第 1/2/3 个完整年度。目标至少需要一个完整变量族才能进入物理匹配。
 
-1. 显式共同支持；
-2. 同城市 donor 匹配；
-3. 200 个确定性 donor-placebo 校准训练距离、holdout RMS 和最大 gap 的 q95；
-4. 同城失败后使用全城市处理前标准化 donor；
-5. 再失败则进入 `gsc_pending`。
+1. 同城市 donor 匹配：显式共同支持、lag1 holdout 和 200 个确定性 donor-placebo q95 门禁；
+2. 同城匹配通过后冻结控制身份；
+3. 同城匹配失败后依次运行同城 GSC 和同城 MC；
+4. 同城两条回退路径均失败后，再运行跨城标准化匹配、跨城 GSC 和跨城 MC；
+5. 六条路径均失败时进入 `skipped`，并记录结构化原因。
 
-同城优先、跨城标准化、holdout 和 q95 是项目设计层，不属于 Abadie–Imbens 论文内部步骤。
+同城优先、跨城标准化、holdout 和 q95 属于项目设计层，与 Abadie–Imbens 估计器分开报告。
 正式研究必须报告 placebo 数量、分位门槛、空间半径和跨城规范敏感性。
 
 ### 4.2 匹配标签
@@ -190,12 +195,12 @@ MIT_VIIRS_RAW VIIRS 原始月度根目录
 11. 构造城市隔离的训练前数据集；
 12. 冻结 release 后才允许模型训练读取。
 
-`--allow-partial` 只用于 canary/开发，产物不能进入正式训练。
+`--allow-partial` 仅用于 canary 和开发验证；部分产物带有非生产标记。
 
 ## 9. 识别与验证边界
 
 代码可以检验共同支持、处理前拟合、placebo 相对质量、donor 污染、信息泄漏和输出完整性；
-不能用数据证明无未观测混杂或绝对无空间干扰。必须保留：
+现有数据只能支持对可观测识别条件的检查，不能替代未观测混杂和空间干扰的敏感性分析。正式报告保留：
 
 - 0/6/12 月 anticipation；
 - 0.5/1/1.5/2km 空间半径；
@@ -224,5 +229,4 @@ MIT_VIIRS_RAW VIIRS 原始月度根目录
 - Abadie（2021）：synthetic-control feasibility and diagnostics；
 - Roth（2022）及 Rambachan and Roth（2023）：平行趋势预检与敏感性。
 
-论文估计器、项目路由/质量门禁和机器学习发布层必须分别表述，不得拼接成一篇论文未定义的
-“完整混合算法”。
+论文估计器、项目路由、质量门禁和机器学习发布层分别报告，不合并为单一估计器。

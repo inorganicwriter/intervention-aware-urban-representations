@@ -56,7 +56,7 @@ def _fixture(tmp_path: Path) -> ArtifactInputs:
             "treatment_order": [1, 2],
             "status": ["matched", "gsc_pending"],
             "active_families": ["poi+population", "population"],
-            "selected_method": ["Matching::Match_M1", pd.NA],
+            "selected_method": ["Matching::Match_M5_static_refine", pd.NA],
             "donor_scope": ["same_city", pd.NA],
             "control_city_key": ["alpha", pd.NA],
             "control_grid_id": ["c1", pd.NA],

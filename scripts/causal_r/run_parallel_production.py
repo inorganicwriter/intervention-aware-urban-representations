@@ -1,13 +1,14 @@
-"""Parallel production launcher for the complete 5,048-grid pipeline.
+"""Parallel production launcher for the causal-label pipeline.
 
-Phase 1: Control design (parallel via R processes, --workers 48)
-Phase 2: Causal labels (sharded, 12 parallel orchestrator instances)
+Phase 1: Control design (parallel via R processes)
+Phase 2: Causal labels (sharded orchestrator instances)
 Phase 3: Merge shard queues back to master queue
 
 Usage:
-  For a 48-core server, start all 12 shards in parallel:
+  For the approved 400-grid sample:
 
-      python scripts/causal_r/run_parallel_production.py --run-all
+      python scripts/causal_r/run_parallel_production.py --phase 2 \
+          --orders-file outputs/causal_labels/representative_sample_400.csv
 
   Or run one phase at a time:
 
@@ -29,13 +30,13 @@ import subprocess
 import sys
 import tempfile
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "src"))
+CODE_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(CODE_ROOT / "src"))
 
 from urban_intervention.data.paths import (  # noqa: E402
     CAUSAL_DIR,
@@ -43,6 +44,7 @@ from urban_intervention.data.paths import (  # noqa: E402
     COUNTERFACTUAL_QUEUE,
     OUTCOME_FAMILY_QUEUE,
     R_LIB_DIR,
+    PROJECT_ROOT,
     TREATMENT_UNIT_LIST,
     r_script,
 )
@@ -50,6 +52,7 @@ from urban_intervention.data.paths import (  # noqa: E402
 R_SCRIPT = os.environ.get("MIT_RSCRIPT", "Rscript")
 R_LIB = Path(os.environ.get("MIT_R_LIB", str(R_LIB_DIR)))
 VIIRS_RAW = os.environ.get("MIT_VIIRS_RAW")
+ROOT = PROJECT_ROOT
 
 
 def atomic_write_csv(frame: pd.DataFrame, path: Path) -> None:
@@ -65,21 +68,73 @@ def atomic_write_csv(frame: pd.DataFrame, path: Path) -> None:
         raise
 
 
-def _file_sha256(path: Path) -> str:
-    import hashlib
-
-    digest = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-# Default: 12 shards on a 48-core machine (4 cores idle for OS + I/O)
-DEFAULT_SHARD_COUNT = 12
+# Safe defaults for the sample release.  Estimator-level parallelism is
+# configured separately so outer queue workers do not silently multiply R
+# workers.
+DEFAULT_SHARD_COUNT = 8
+DEFAULT_CONTROL_WORKERS = 8
 
 
-def phase1_control_design(dry_run: bool, workers: int = 48) -> None:
-    """Run control design for all 5,048 grids in parallel (R processes)."""
+def read_orders_file(path: Path) -> list[int]:
+    frame = pd.read_csv(path)
+    if "treatment_order" not in frame.columns:
+        raise ValueError(f"Orders file lacks treatment_order: {path}")
+    values = pd.to_numeric(frame["treatment_order"], errors="raise").astype(int).tolist()
+    orders = sorted(set(values))
+    if len(orders) != len(values):
+        raise ValueError(f"Orders file contains duplicate treatment_order values: {path}")
+    if not orders:
+        raise ValueError(f"Orders file is empty: {path}")
+    return orders
+
+
+def read_tasks_file(path: Path) -> set[tuple[int, str]]:
+    frame = pd.read_csv(path)
+    required = {"treatment_order", "outcome_family"}
+    missing = required - set(frame.columns)
+    if missing:
+        raise ValueError(f"Tasks file lacks columns: {sorted(missing)}")
+    keys = {
+        (int(order), str(family))
+        for order, family in zip(frame["treatment_order"], frame["outcome_family"], strict=False)
+    }
+    if len(keys) != len(frame) or not keys:
+        raise ValueError(f"Tasks file is empty or contains duplicate keys: {path}")
+    return keys
+
+
+def queue_variant_path(path: Path, run_mode: str) -> Path:
+    if run_mode == "production":
+        return path
+    return path.with_name(f"{path.stem}_{run_mode}{path.suffix}")
+
+
+def shard_queue_path(path: Path, shard_id: int) -> Path:
+    return path.with_name(f"{path.stem}_shard_{shard_id:02d}{path.suffix}")
+
+
+def resource_environment(
+    base: dict[str, str], gsc_cv_cores: int, gsc_bootstrap_cores: int, mc_cores: int
+) -> dict[str, str]:
+    env = base.copy()
+    env["MIT_PROJECT_ROOT"] = str(ROOT)
+    env["MIT_R_LIB"] = str(R_LIB)
+    env["MIT_GSC_CV_CORES"] = str(gsc_cv_cores)
+    env["MIT_GSC_BOOTSTRAP_CORES"] = str(gsc_bootstrap_cores)
+    env["MIT_MC_CORES"] = str(mc_cores)
+    for variable in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+        env.setdefault(variable, "1")
+    env.setdefault("R_DATATABLE_NUM_THREADS", "1")
+    return env
+
+
+def phase1_control_design(
+    dry_run: bool,
+    workers: int = DEFAULT_CONTROL_WORKERS,
+    orders_file: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> None:
+    """Run control design for the selected treatment orders."""
     print("=" * 60)
     print(f"PHASE 1: Grid-level control design (workers={workers})")
     print("=" * 60)
@@ -89,15 +144,17 @@ def phase1_control_design(dry_run: bool, workers: int = 48) -> None:
         str(r_script("run_grid_control_design_queue.py")),
         "--start-order",
         "1",
-        "--max-units",
-        "5048",
         "--workers",
         str(workers),
     ]
+    if orders_file is not None:
+        cmd.extend(["--orders-file", str(orders_file)])
+    else:
+        cmd.extend(["--max-units", "5048"])
     if dry_run:
         cmd.append("--dry-run")
 
-    env = os.environ.copy()
+    env = env or os.environ.copy()
     env["R_LIBS_USER"] = str(R_LIB)
     start = time.time()
     result = subprocess.run(
@@ -110,8 +167,21 @@ def phase1_control_design(dry_run: bool, workers: int = 48) -> None:
     print(f"Phase 1 completed in {timedelta(seconds=int(elapsed))}")
 
 
-def phase2_causal_labels(dry_run: bool, shard_count: int = DEFAULT_SHARD_COUNT) -> None:
-    """Launch N parallel causal-label orchestrators, each handling a shard."""
+def phase2_causal_labels(
+    dry_run: bool,
+    shard_count: int = DEFAULT_SHARD_COUNT,
+    orders_file: Path | None = None,
+    tasks_file: Path | None = None,
+    run_mode: str = "production",
+    price_measure: str = "main",
+    window: int = 3,
+    anticipation_months: int = 6,
+    queue_phase: str = "all",
+    retry_matching: bool = False,
+    reset_shards: bool = False,
+    env: dict[str, str] | None = None,
+) -> None:
+    """Launch shard workers for the selected treatment-order sample."""
     print("=" * 60)
     print(f"PHASE 2: Causal labels ({shard_count} shards)")
     print("=" * 60)
@@ -119,9 +189,21 @@ def phase2_causal_labels(dry_run: bool, shard_count: int = DEFAULT_SHARD_COUNT) 
     # Validate control design is complete
     cq = pd.read_csv(CONTROL_DESIGN_QUEUE)
     statuses = cq["status"].astype(str)
+    task_keys = read_tasks_file(tasks_file) if tasks_file is not None else None
+    selected_orders = (
+        {order for order, _ in task_keys}
+        if task_keys is not None
+        else (set(read_orders_file(orders_file)) if orders_file is not None else set(cq["treatment_order"].astype(int)))
+    )
+    queue_orders = set(cq["treatment_order"].astype(int))
+    missing_orders = sorted(selected_orders - queue_orders)
+    if missing_orders:
+        raise RuntimeError(f"Orders file contains unknown treatment orders: {missing_orders[:10]}")
+    scoped = cq[cq["treatment_order"].astype(int).isin(selected_orders)]
+    statuses = scoped["status"].astype(str)
     terminal_control = statuses.isin({"matched", "gsc_pending"})
     n_valid = terminal_control.sum()
-    n_total = len(cq)
+    n_total = len(scoped)
     if n_valid < n_total:
         raise RuntimeError(
             f"Phase 1 incomplete: only {n_valid}/{n_total} control designs "
@@ -131,24 +213,71 @@ def phase2_causal_labels(dry_run: bool, shard_count: int = DEFAULT_SHARD_COUNT) 
     n_matched = (statuses == "matched").sum()
     print(f"  Control designs: {n_matched} matched, {n_total - n_matched} gsc_pending, 0 error")
 
-    # Copy master queues for each shard.  A stale shard file (left over from a
-    # previous run whose master queue has since been reset/rebuilt) must never
-    # be reused: compare content hashes so --reset-queues + rerun of phase 2
-    # cannot resurrect old shard progress at merge time.
-    master_family = OUTCOME_FAMILY_QUEUE
-    master_control = CONTROL_DESIGN_QUEUE
-    master_unit = COUNTERFACTUAL_QUEUE
+    # Prepare master queues for each shard.  Existing shard files are the
+    # durable checkpoint for an interrupted Phase 2 and must be preserved.
+    # They are archived and rebuilt only for an explicit queue reset.
+    master_family = queue_variant_path(OUTCOME_FAMILY_QUEUE, run_mode)
+    master_control = queue_variant_path(CONTROL_DESIGN_QUEUE, run_mode)
+    master_unit = queue_variant_path(COUNTERFACTUAL_QUEUE, run_mode)
+    if run_mode != "production":
+        for source, target in (
+            (OUTCOME_FAMILY_QUEUE, master_family),
+            (CONTROL_DESIGN_QUEUE, master_control),
+            (COUNTERFACTUAL_QUEUE, master_unit),
+        ):
+            if not target.exists():
+                shutil.copy2(source, target)
+    master_paths = [master_family, master_control, master_unit]
+    shard_paths = []
     for shard_id in range(shard_count):
-        tag = f"_shard_{shard_id:02d}"
-        for master_path in [master_family, master_control, master_unit]:
-            shard_path = CAUSAL_DIR / master_path.name.replace(".csv", f"{tag}.csv")
-            if shard_path.exists() and _file_sha256(shard_path) == _file_sha256(master_path):
+        shard_paths.extend(
+            shard_queue_path(master_path, shard_id)
+            for master_path in master_paths
+        )
+
+    if reset_shards:
+        existing = [path for path in shard_paths if path.exists()]
+        if existing:
+            archive_dir = (
+                ROOT / "outputs" / "archive" /
+                f"causal_shards_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+            )
+            archive_dir.mkdir(parents=True, exist_ok=False)
+            for path in existing:
+                shutil.move(str(path), str(archive_dir / path.name))
+            print(f"Archived {len(existing)} existing shard queues to {archive_dir}")
+
+    copied = 0
+    resumed = 0
+    for shard_id in range(shard_count):
+        for master_path in master_paths:
+            shard_path = shard_queue_path(master_path, shard_id)
+            if shard_path.exists():
+                master_frame = pd.read_csv(master_path)
+                shard_frame = pd.read_csv(shard_path)
+                if list(master_frame.columns) != list(shard_frame.columns):
+                    raise RuntimeError(
+                        f"Shard queue schema differs from master: {shard_path}. "
+                        "Use --reset-queues to rebuild shard queues."
+                    )
+                key_columns = ["treatment_order"]
+                if "outcome_family" in master_frame.columns:
+                    key_columns.append("outcome_family")
+                if len(shard_frame) != len(master_frame) or set(
+                    map(tuple, shard_frame[key_columns].to_numpy())
+                ) != set(map(tuple, master_frame[key_columns].to_numpy())):
+                    raise RuntimeError(
+                        f"Shard queue keys differ from master: {shard_path}. "
+                        "Use --reset-queues to rebuild shard queues."
+                    )
+                resumed += 1
                 continue
             shutil.copy2(master_path, shard_path)
-    print(f"Copied master queues → {shard_count} shard copies")
+            copied += 1
+    print(f"Shard queues ready: {copied} copied, {resumed} resumed")
 
     # Launch shard workers
-    env = os.environ.copy()
+    env = env or os.environ.copy()
     env["R_LIBS_USER"] = str(R_LIB)
     if VIIRS_RAW:
         env["MIT_VIIRS_RAW"] = VIIRS_RAW
@@ -166,7 +295,23 @@ def phase2_causal_labels(dry_run: bool, shard_count: int = DEFAULT_SHARD_COUNT) 
             str(shard_count),
             "--max-tasks",
             "9999",
+            "--price-measure",
+            price_measure,
+            "--window",
+            str(window),
+            "--anticipation-months",
+            str(anticipation_months),
+            "--run-mode",
+            run_mode,
+            "--phase",
+            queue_phase,
         ]
+        if orders_file is not None:
+            cmd.extend(["--orders-file", str(orders_file)])
+        if tasks_file is not None:
+            cmd.extend(["--tasks-file", str(tasks_file)])
+        if retry_matching:
+            cmd.append("--retry-matching")
         if dry_run:
             cmd.append("--dry-run")
 
@@ -211,14 +356,61 @@ def shard_order_range(all_orders: list[int], shard_id: int, shard_count: int) ->
     return all_orders[start : start + size]
 
 
-def phase3_merge_shards(shard_count: int = DEFAULT_SHARD_COUNT) -> None:
+def merge_queue_parts(
+    master_path: Path,
+    parts: list[pd.DataFrame],
+    key_columns: list[str],
+    selected_orders: set[int] | None,
+    selected_task_keys: set[tuple[int, str]] | None = None,
+) -> pd.DataFrame:
+    """Merge shard updates, preserving non-sample rows in the master queue."""
+    if not parts:
+        raise RuntimeError(f"No shard parts found for {master_path}")
+    merged = pd.concat(parts, ignore_index=True)
+    if merged.duplicated(key_columns).any():
+        raise RuntimeError(f"Merged shard queue contains duplicate keys: {master_path}")
+    master = pd.read_csv(master_path)
+    if selected_orders is None:
+        expected_keys = set(map(tuple, master[key_columns].to_numpy()))
+        actual_keys = set(map(tuple, merged[key_columns].to_numpy()))
+        if actual_keys != expected_keys:
+            raise RuntimeError(f"Merged shard keys differ from master queue: {master_path}")
+        return merged.sort_values(key_columns).reset_index(drop=True)
+
+    if selected_task_keys is not None:
+        master_keys = pd.MultiIndex.from_arrays(
+            [master["treatment_order"].astype(int), master["outcome_family"].astype(str)]
+        )
+        selected_mask = master_keys.isin(selected_task_keys)
+    else:
+        selected_mask = master["treatment_order"].astype(int).isin(selected_orders)
+    expected_keys = set(map(tuple, master.loc[selected_mask, key_columns].to_numpy()))
+    actual_keys = set(map(tuple, merged[key_columns].to_numpy()))
+    if actual_keys != expected_keys:
+        raise RuntimeError(
+            f"Selected shard keys differ from master queue: {master_path}; "
+            f"expected={len(expected_keys)}, actual={len(actual_keys)}"
+        )
+    combined = pd.concat([master.loc[~selected_mask], merged], ignore_index=True)
+    if len(combined) != len(master) or combined.duplicated(key_columns).any():
+        raise RuntimeError(f"Selected shard merge changed queue cardinality: {master_path}")
+    return combined.sort_values(key_columns).reset_index(drop=True)
+
+
+def phase3_merge_shards(
+    shard_count: int = DEFAULT_SHARD_COUNT,
+    orders_file: Path | None = None,
+    tasks_file: Path | None = None,
+    run_mode: str = "production",
+) -> None:
     """Merge per-shard queue CSVs back to master and run sync_unit_queue."""
     print("=" * 60)
     print(f"PHASE 3: Merge {shard_count} shard queues → master")
     print("=" * 60)
 
-    master_family = OUTCOME_FAMILY_QUEUE
-    master_unit = COUNTERFACTUAL_QUEUE
+    master_family = queue_variant_path(OUTCOME_FAMILY_QUEUE, run_mode)
+    master_unit = queue_variant_path(COUNTERFACTUAL_QUEUE, run_mode)
+    master_control = queue_variant_path(CONTROL_DESIGN_QUEUE, run_mode)
 
     # Each shard file is a full copy of the master queue at launch; only the
     # rows inside the shard's order range carry that shard's progress, so trim
@@ -227,16 +419,26 @@ def phase3_merge_shards(shard_count: int = DEFAULT_SHARD_COUNT) -> None:
     # times and the release build would fail.
     treatments = pd.read_parquet(TREATMENT_UNIT_LIST, columns=["treatment_order"])
     all_orders = sorted(treatments["treatment_order"].astype(int).tolist())
+    task_keys = read_tasks_file(tasks_file) if tasks_file is not None else None
+    selected_orders = (
+        {order for order, _ in task_keys}
+        if task_keys is not None
+        else (set(read_orders_file(orders_file)) if orders_file is not None else None)
+    )
+    # Use the same selected-order pool as the workers when merging a sample
+    # run; non-sample rows remain unchanged in their master queues.
+    shard_pool = sorted(selected_orders) if selected_orders is not None else all_orders
 
     family_parts = []
     unit_parts = []
+    control_parts = []
     missing_family_shards = []
 
     for shard_id in range(shard_count):
-        tag = f"_shard_{shard_id:02d}"
-        shard_family = CAUSAL_DIR / f"outcome_family_work_queue{tag}.csv"
-        shard_unit = CAUSAL_DIR / f"counterfactual_work_queue{tag}.csv"
-        shard_orders = set(shard_order_range(all_orders, shard_id, shard_count))
+        shard_family = shard_queue_path(master_family, shard_id)
+        shard_unit = shard_queue_path(master_unit, shard_id)
+        shard_control = shard_queue_path(master_control, shard_id)
+        shard_orders = set(shard_order_range(shard_pool, shard_id, shard_count))
 
         if not shard_family.exists():
             missing_family_shards.append(shard_id)
@@ -244,6 +446,11 @@ def phase3_merge_shards(shard_count: int = DEFAULT_SHARD_COUNT) -> None:
 
         fq = pd.read_csv(shard_family)
         fq = fq.loc[fq["treatment_order"].astype(int).isin(shard_orders)]
+        if task_keys is not None:
+            fq_keys = pd.MultiIndex.from_arrays(
+                [fq["treatment_order"].astype(int), fq["outcome_family"].astype(str)]
+            )
+            fq = fq.loc[fq_keys.isin(task_keys)]
         family_parts.append(fq)
 
         if not shard_unit.exists():
@@ -254,6 +461,14 @@ def phase3_merge_shards(shard_count: int = DEFAULT_SHARD_COUNT) -> None:
         uq = uq.loc[uq["treatment_order"].astype(int).isin(shard_orders)]
         unit_parts.append(uq)
 
+        if not shard_control.exists():
+            raise RuntimeError(
+                f"Missing control-queue shard file for shard {shard_id}: {shard_control}"
+            )
+        cq = pd.read_csv(shard_control)
+        cq = cq.loc[cq["treatment_order"].astype(int).isin(shard_orders)]
+        control_parts.append(cq)
+
     if missing_family_shards:
         raise RuntimeError(
             f"Missing family-queue shard files for shard(s): {missing_family_shards}"
@@ -261,25 +476,31 @@ def phase3_merge_shards(shard_count: int = DEFAULT_SHARD_COUNT) -> None:
     if not family_parts:
         raise RuntimeError("No shard family queues found to merge")
 
-    merged_family = pd.concat(family_parts, ignore_index=True)
-    if merged_family.duplicated(["treatment_order", "outcome_family"]).any():
-        raise RuntimeError(
-            "Merged family queue contains duplicate (treatment_order, outcome_family) keys"
-        )
-    expected_family_rows = 5048 * len(set(merged_family["outcome_family"]))
-    if len(merged_family) != expected_family_rows:
-        raise RuntimeError(
-            f"Merged family queue has {len(merged_family)} rows, expected "
-            f"{expected_family_rows}; a shard queue is truncated, refusing to "
-            "overwrite the master queue"
-        )
-    merged_family = merged_family.sort_values(["treatment_order", "outcome_family"]).reset_index(
-        drop=True
+    merged_family = merge_queue_parts(
+        master_family,
+        family_parts,
+        ["treatment_order", "outcome_family"],
+        selected_orders,
+        selected_task_keys=task_keys,
     )
 
     terminal = {"matched_labelled", "gsc_labelled", "mc_labelled", "skipped"}
-    n_terminal = merged_family["status"].astype(str).isin(terminal).sum()
-    n_total = len(merged_family)
+    if selected_orders is None:
+        report_family = merged_family
+    elif task_keys is not None:
+        report_keys = pd.MultiIndex.from_arrays(
+            [
+                merged_family["treatment_order"].astype(int),
+                merged_family["outcome_family"].astype(str),
+            ]
+        )
+        report_family = merged_family.loc[report_keys.isin(task_keys)]
+    else:
+        report_family = merged_family.loc[
+            merged_family["treatment_order"].astype(int).isin(selected_orders)
+        ]
+    n_terminal = report_family["status"].astype(str).isin(terminal).sum()
+    n_total = len(report_family)
     print(f"  Terminal tasks: {n_terminal} / {n_total} ({100 * n_terminal / n_total:.1f}%)")
 
     # Write merged master queues atomically so an interrupted merge never
@@ -288,27 +509,23 @@ def phase3_merge_shards(shard_count: int = DEFAULT_SHARD_COUNT) -> None:
     print(f"  Written: {master_family}")
 
     if unit_parts:
-        merged_unit = pd.concat(unit_parts, ignore_index=True)
-        if merged_unit["treatment_order"].duplicated().any():
-            raise RuntimeError("Merged unit queue contains duplicate treatment_order keys")
-        if len(merged_unit) != 5048:
-            raise RuntimeError(
-                f"Merged unit queue has {len(merged_unit)} rows, expected 5048; "
-                "refusing to overwrite the master queue"
-            )
-        merged_unit = merged_unit.sort_values("treatment_order").reset_index(drop=True)
+        merged_unit = merge_queue_parts(
+            master_unit, unit_parts, ["treatment_order"], selected_orders
+        )
         atomic_write_csv(merged_unit, master_unit)
         print(f"  Written: {master_unit}")
 
+    if control_parts:
+        merged_control = merge_queue_parts(
+            master_control, control_parts, ["treatment_order"], selected_orders
+        )
+        atomic_write_csv(merged_control, master_control)
+        print(f"  Written: {master_control}")
+
     # Optionally clean up shard files
     for shard_id in range(shard_count):
-        tag = f"_shard_{shard_id:02d}"
-        for base in [
-            "outcome_family_work_queue",
-            "control_design_queue",
-            "counterfactual_work_queue",
-        ]:
-            path = CAUSAL_DIR / f"{base}{tag}.csv"
+        for base in [master_family, master_control, master_unit]:
+            path = shard_queue_path(base, shard_id)
             if path.exists():
                 path.unlink()
     print(f"  Cleaned up {shard_count} shard queue files")
@@ -329,13 +546,114 @@ def main() -> int:
         help=f"Shards for phase 2 (default: {DEFAULT_SHARD_COUNT})",
     )
     parser.add_argument(
-        "--workers", type=int, default=48, help="Control-design R workers (default: 48)"
+        "--workers",
+        type=int,
+        default=DEFAULT_CONTROL_WORKERS,
+        help=f"Control-design R workers (default: {DEFAULT_CONTROL_WORKERS})",
+    )
+    parser.add_argument(
+        "--orders-file",
+        type=Path,
+        help="CSV containing the treatment_order sample to process",
+    )
+    parser.add_argument(
+        "--tasks-file",
+        type=Path,
+        help="CSV containing treatment_order and outcome_family keys for a formal rerun",
+    )
+    parser.add_argument(
+        "--run-mode",
+        choices=("production", "preview"),
+        default="production",
+        help="Preview uses isolated point-estimate artifacts; production uses formal uncertainty.",
+    )
+    parser.add_argument(
+        "--price-measure",
+        choices=("main", "median", "hedonic"),
+        default="main",
+        help="Housing price measure (default: main)",
+    )
+    parser.add_argument(
+        "--window",
+        type=int,
+        default=3,
+        help="Monthly observation-window width (default: 3)",
+    )
+    parser.add_argument(
+        "--anticipation-months",
+        type=int,
+        default=6,
+        help="Monthly anticipation window (default: 6)",
+    )
+    parser.add_argument(
+        "--queue-phase",
+        choices=("all", "matching", "gsc", "mc"),
+        default="all",
+        help="Phase passed to each causal-label shard (default: all)",
+    )
+    parser.add_argument(
+        "--retry-matching",
+        action="store_true",
+        help="Re-run matching for tasks currently marked gsc_pending",
+    )
+    parser.add_argument(
+        "--gsc-cv-cores",
+        type=int,
+        default=1,
+        help="R cores per GSC factor-selection fit (default: 1)",
+    )
+    parser.add_argument(
+        "--gsc-bootstrap-cores",
+        type=int,
+        default=1,
+        help="R cores per GSC bootstrap fit (default: 1)",
+    )
+    parser.add_argument(
+        "--mc-cores",
+        type=int,
+        default=1,
+        help="R cores per MC fit (default: 1)",
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--reset-queues", action="store_true", help="Re-run R queue reset scripts before starting"
     )
     args = parser.parse_args()
+
+    if args.shard_count < 1 or args.workers < 1:
+        parser.error("--shard-count and --workers must be positive")
+    if min(args.gsc_cv_cores, args.gsc_bootstrap_cores, args.mc_cores) < 1:
+        parser.error("estimator core counts must be positive")
+    if not 1 <= args.window <= 6:
+        parser.error("--window must be in 1..6")
+    if args.anticipation_months < 0:
+        parser.error("--anticipation-months must be non-negative")
+
+    if args.orders_file is not None and args.tasks_file is not None:
+        parser.error("--orders-file and --tasks-file are mutually exclusive")
+
+    orders_file = None
+    if args.orders_file is not None:
+        orders_file = args.orders_file if args.orders_file.is_absolute() else ROOT / args.orders_file
+        orders_file = orders_file.resolve()
+        orders = read_orders_file(orders_file)
+        if len(orders) != 400:
+            parser.error(f"--orders-file must contain exactly 400 unique orders; found {len(orders)}")
+        print(f"Selected treatment-order sample: {len(orders)} grids from {orders_file}")
+
+    tasks_file = None
+    if args.tasks_file is not None:
+        tasks_file = args.tasks_file if args.tasks_file.is_absolute() else ROOT / args.tasks_file
+        tasks_file = tasks_file.resolve()
+        task_keys = read_tasks_file(tasks_file)
+        print(f"Selected task subset: {len(task_keys)} treatment-family tasks from {tasks_file}")
+
+    estimator_env = resource_environment(
+        os.environ,
+        args.gsc_cv_cores,
+        args.gsc_bootstrap_cores,
+        args.mc_cores,
+    )
 
     if not args.phase and not args.run_all:
         parser.error("Specify --phase, --run-all, or both phases separately")
@@ -366,11 +684,34 @@ def main() -> int:
 
     for phase in phases:
         if phase == 1:
-            phase1_control_design(args.dry_run, workers=args.workers)
+            phase1_control_design(
+                args.dry_run,
+                workers=args.workers,
+                orders_file=orders_file,
+                env=estimator_env,
+            )
         elif phase == 2:
-            phase2_causal_labels(args.dry_run, shard_count=args.shard_count)
+            phase2_causal_labels(
+                args.dry_run,
+                shard_count=args.shard_count,
+                orders_file=orders_file,
+                tasks_file=tasks_file,
+                run_mode=args.run_mode,
+                price_measure=args.price_measure,
+                window=args.window,
+                anticipation_months=args.anticipation_months,
+                queue_phase=args.queue_phase,
+                retry_matching=args.retry_matching,
+                reset_shards=args.reset_queues,
+                env=estimator_env,
+            )
         elif phase == 3:
-            phase3_merge_shards(shard_count=args.shard_count)
+            phase3_merge_shards(
+                shard_count=args.shard_count,
+                orders_file=orders_file,
+                tasks_file=tasks_file,
+                run_mode=args.run_mode,
+            )
 
     elapsed = time.time() - start
     print(f"\nTotal wall time: {timedelta(seconds=int(elapsed))}")

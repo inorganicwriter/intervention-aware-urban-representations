@@ -72,3 +72,7 @@ data/active/catalog/snapshots/
 data/active/catalog/migrations/
 data/active/catalog/inventories/
 data/active/model_inputs/
+
+# Local deployment bundle: contains a full data/output copy and is not a
+# source-controlled repository artifact.
+MIT_summer_deploy_20260821/

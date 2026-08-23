@@ -7,13 +7,14 @@ source(file.path("scripts", "causal_r", "complete_estimators_lib.R"))
 
 args <- commandArgs(trailingOnly = TRUE)
 causal_run_id <- Sys.getenv("MIT_CAUSAL_RUN_ID", unset = "")
-if (length(args) < 3L || length(args) > 10L) {
+specification_fingerprint <- Sys.getenv("MIT_SPECIFICATION_FINGERPRINT", unset = "")
+if (length(args) < 3L || length(args) > 11L) {
   stop(paste(
     "Usage: run_complete_xu_gsc.R CITY COHORT OUTCOME_FAMILY",
     paste(
       "[SIGNATURE=auto] [FREQUENCY=annual] [ANTICIPATION_MONTHS=6]",
-      "[TREATMENT_ORDER] [DONOR_SCOPE=same_city] [RUN_MODE=production]",
-      "[PRICE_MEASURE=median]"
+       "[TREATMENT_ORDER] [DONOR_SCOPE=same_city] [RUN_MODE=production]",
+       "[PRICE_MEASURE=median] [OBSERVATION_WINDOW=1]"
     )
   ))
 }
@@ -27,17 +28,32 @@ treatment_order <- if (length(args) >= 7L) as.integer(args[[7L]]) else NULL
 donor_scope <- if (length(args) >= 8L) args[[8L]] else "same_city"
 run_mode <- if (length(args) >= 9L) args[[9L]] else "production"
 price_measure <- if (length(args) >= 10L) args[[10L]] else "median"
+observation_window <- if (length(args) >= 11L) as.integer(args[[11L]]) else 1L
 assert_choice(frequency, c("annual", "monthly"), "frequency")
 assert_choice(donor_scope, c("same_city", "all_city_standardized"), "donor_scope")
-assert_choice(run_mode, c("production", "smoke_test"), "run_mode")
+assert_choice(run_mode, c("production", "preview", "smoke_test"), "run_mode")
 assert_choice(price_measure, c("median", "hedonic"), "price_measure")
+if (observation_window < 1L || observation_window > 6L) {
+  stop("observation_window must be in 1..6 months")
+}
 if (frequency == "monthly") {
   assert_choice(outcome_family, c("housing", "viirs"), "monthly outcome_family")
   if (price_measure == "hedonic") assert_choice(outcome_family, "housing", "hedonic outcome_family")
 }
+if (!nzchar(specification_fingerprint)) {
+  specification_fingerprint <- paste0(
+    "main_a6_r1km__a6__w", observation_window, "__price_", price_measure
+  )
+}
 
 spec <- complete_estimator_spec()
-run_nboots <- if (run_mode == "smoke_test") 20L else spec$xu_gsc$nboots
+run_nboots <- if (run_mode == "production") {
+  spec$xu_gsc$nboots
+} else if (run_mode == "smoke_test") {
+  20L
+} else {
+  0L
+}
 if (isTRUE(spec$xu_gsc$parallel_cv) || isTRUE(spec$xu_gsc$parallel_bootstrap)) {
   # gsynth's parallel parametric bootstrap exports large closures
   # (draw.error/FUN can each exceed 2 GiB on wide donor panels); the default
@@ -102,7 +118,9 @@ build_gsc_design <- function() {
     pre <- available[available < as.integer(cohort) - annual_anticipation]
     post <- available[available > as.integer(cohort) & available <= as.integer(cohort) + 3L]
     if (length(pre) < spec$xu_gsc$min.T0) stop("Insufficient clean pre-treatment annual periods")
-    if (!length(post)) stop("No post-treatment full-year outcome")
+    if (length(post) < length(spec$annual$leads)) {
+      stop("Insufficient clean post-treatment annual periods")
+    }
     times <- c(pre, post)
     setnames(outcomes, "year", "period")
     opening_period_excluded <- as.integer(cohort)
@@ -124,18 +142,31 @@ build_gsc_design <- function() {
       cohort_date, lag = spec$monthly$lag, leads = spec$monthly$leads,
       anticipation_months = anticipation_months
     )
+    pre <- calendar$pre_months
     if (outcome_family == "viirs") {
-      pre <- calendar$pre_months[calendar$pre_months >= as.IDate("2012-01-01")]
+      pre <- pre[pre >= as.IDate("2012-01-01")]
       outcomes <- scope_monthly_outcomes(donors, c(pre, calendar$post_months))
     } else {
       outcomes <- scope_monthly_outcomes(donors, calendar$model_months)
-      available_months <- sort(unique(outcomes$month))
-      pre <- calendar$pre_months[calendar$pre_months %in% available_months]
-      outcomes <- outcomes[month %in% c(pre, calendar$post_months)]
     }
-    if (length(pre) < spec$xu_gsc$min.T0) {
-      stop("Insufficient clean pre-treatment monthly periods for gsynth")
+    available_months <- sort(unique(outcomes$month))
+    missing_pre <- setdiff(as.character(pre), as.character(available_months))
+    missing_post <- setdiff(
+      as.character(calendar$post_months), as.character(available_months)
+    )
+    if (length(missing_pre)) {
+      stop(
+        "Insufficient clean pre-treatment monthly periods for gsynth; missing ",
+        length(missing_pre), " month(s)"
+      )
     }
+    if (length(missing_post)) {
+      stop(
+        "Insufficient post-treatment monthly periods for gsynth; missing ",
+        length(missing_post), " month(s)"
+      )
+    }
+    outcomes <- outcomes[month %in% c(pre, calendar$post_months)]
     post <- calendar$post_months
     times <- c(pre, post)
     setnames(outcomes, "month", "period")
@@ -242,6 +273,16 @@ run_one_outcome <- function(outcome) {
   units <- merge(units, pre_support[, .(city_key, grid_id)], by = c("city_key", "grid_id"))
   if (!any(units$role == "treated")) stop("No treated unit has a complete clean pre-treatment path")
   if (!any(units$role == "donor")) stop("No donor has a complete clean pre-treatment path")
+  target <- units[role == "treated", .(city_key, grid_id)]
+  target_post_periods <- values[
+    city_key == target$city_key[[1L]] &
+      grid_id == target$grid_id[[1L]] &
+      period %in% design$post & is.finite(value),
+    uniqueN(period)
+  ]
+  if (target_post_periods != length(design$post)) {
+    stop("No complete post-treatment outcome for treated unit")
+  }
   setorder(units, role, grid_id)
   units[, gsc_unit_id := seq_len(.N)]
 
@@ -288,27 +329,10 @@ run_one_outcome <- function(outcome) {
     stop("gsynth did not return a valid cross-validated factor selection")
   }
   selected_r <- as.integer(selection_fit$r.cv)
-  fit <- gsynth(
-    Y ~ D, data = estimation_data, index = c("gsc_unit_id", "time_id"),
-    force = spec$xu_gsc$force, CV = FALSE, r = selected_r,
-    criterion = spec$xu_gsc$criterion, estimator = spec$xu_gsc$estimator,
-    se = spec$xu_gsc$se, nboots = run_nboots,
-    inference = spec$xu_gsc$inference,
-    parallel = spec$xu_gsc$parallel_bootstrap,
-    cores = spec$xu_gsc$bootstrap_cores,
-    min.T0 = spec$xu_gsc$min.T0, normalize = spec$xu_gsc$normalize,
-    seed = 20260723
-  )
-  if (!inherits(fit, "gsynth") || is.null(fit$Y.ct)) {
-    stop("gsynth did not return a valid bootstrapped counterfactual model")
-  }
-  if (!is.numeric(fit$Y.ct) || !all(is.finite(fit$Y.ct))) {
-    stop("gsynth produced non-finite counterfactual estimates")
-  }
-  fit$r.cv <- selected_r
-  fit$CV.out <- selection_fit$CV.out
   masked_placebo <- NULL
   if (design$donor_scope == "all_city_standardized") {
+    # This gate is deliberately evaluated before the formal bootstrap.  A
+    # failed cross-city placebo should not consume 200 bootstrap refits.
     target_unit_id <- units[role == "treated", gsc_unit_id][[1L]]
     masked_placebo <- cross_city_masked_placebo(
       panel, units, pre_count, target_unit_id
@@ -320,8 +344,40 @@ run_one_outcome <- function(outcome) {
       )
     }
   }
+  fit_args <- list(
+    formula = Y ~ D, data = estimation_data,
+    index = c("gsc_unit_id", "time_id"),
+    force = spec$xu_gsc$force, CV = FALSE, r = selected_r,
+    criterion = spec$xu_gsc$criterion, estimator = spec$xu_gsc$estimator,
+    se = run_mode != "preview",
+    min.T0 = spec$xu_gsc$min.T0, normalize = spec$xu_gsc$normalize,
+    seed = 20260723
+  )
+  if (run_mode == "preview") {
+    fit_args$parallel <- FALSE
+    fit_args$cores <- 1L
+  } else {
+    fit_args$nboots <- run_nboots
+    fit_args$inference <- spec$xu_gsc$inference
+    fit_args$parallel <- spec$xu_gsc$parallel_bootstrap
+    fit_args$cores <- spec$xu_gsc$bootstrap_cores
+  }
+  fit <- do.call(gsynth, fit_args)
+  if (!inherits(fit, "gsynth") || is.null(fit$Y.ct)) {
+    stop("gsynth did not return a valid counterfactual model")
+  }
+  treated_unit_ids <- units[role == "treated", gsc_unit_id]
+  target_columns <- match(as.character(treated_unit_ids), as.character(fit$id))
+  if (anyNA(target_columns)) {
+    stop("gsynth counterfactual is missing a treated target column")
+  }
+  target_counterfactual <- fit$Y.ct[, target_columns, drop = FALSE]
+  if (!is.numeric(target_counterfactual) || !all(is.finite(target_counterfactual))) {
+    stop("gsynth produced non-finite treated-target counterfactual estimates")
+  }
+  fit$r.cv <- selected_r
+  fit$CV.out <- selection_fit$CV.out
   if (design$donor_scope == "all_city_standardized") {
-    treated_unit_ids <- units[role == "treated", gsc_unit_id]
     for (uid in treated_unit_ids) {
       target_column <- match(as.character(uid), as.character(fit$id))
       if (is.na(target_column)) stop("Cross-city target counterfactual column is missing for unit: ", uid)
@@ -335,11 +391,26 @@ run_one_outcome <- function(outcome) {
     outcome_family, outcome,
     post_event_time = if (frequency == "annual") {
       as.integer(design$post) - as.integer(cohort)
-    } else seq_along(design$post)
+    } else seq_along(design$post),
+    pre_event_time = event_time_from_period(
+      design$pre, design$opening_period_excluded, frequency
+    )
   )
-  paths <- attach_single_target_gsc_uncertainty(
-    paths, fit, run_nboots, effect_scale = target_scale
-  )
+  if (run_mode == "preview") {
+    paths[, `:=`(
+      standard_error = NA_real_, confidence_lower = NA_real_,
+      confidence_upper = NA_real_, p_value = NA_real_,
+      bootstrap_repetitions = 0L,
+      uncertainty_source = "preview_point_estimate"
+    )]
+  } else {
+    paths <- attach_single_target_gsc_uncertainty(
+      paths, fit, run_nboots, effect_scale = target_scale
+    )
+  }
+  if (frequency == "monthly") {
+    paths <- apply_post_observation_window(paths, observation_window)
+  }
   prefit <- paths[event_time < 0L, .(
     pre_rmspe = sqrt(mean(causal_response_label^2, na.rm = TRUE)),
     pre_observed_periods = sum(is.finite(observed))
@@ -350,8 +421,8 @@ run_one_outcome <- function(outcome) {
     outcome,
     if (!is.null(treatment_order)) sprintf("_t%05d", treatment_order) else ""
   )
-  output_signature <- if (run_mode == "smoke_test") {
-    paste0(design$signature, "_smoke_test")
+  output_signature <- if (run_mode %in% c("smoke_test", "preview")) {
+    paste0(design$signature, "_", run_mode)
   } else design$signature
   output <- estimator_output_dir(
     "xu_gsc", city_key, cohort, outcome_tag, output_signature
@@ -391,15 +462,17 @@ run_one_outcome <- function(outcome) {
     package = paste0("gsynth ", packageVersion("gsynth")),
     city_key = city_key, cohort = cohort, frequency = frequency,
     treatment_order = treatment_order,
+    specification_fingerprint = specification_fingerprint,
     outcome_family = outcome_family, outcome = outcome,
     signature = design$signature, estimator = spec$xu_gsc$estimator,
     force = spec$xu_gsc$force, CV = spec$xu_gsc$CV,
     criterion = spec$xu_gsc$criterion, factor_candidates = spec$xu_gsc$r,
-    min_T0 = spec$xu_gsc$min.T0, se = spec$xu_gsc$se,
+    min_T0 = spec$xu_gsc$min.T0, se = spec$xu_gsc$se && run_mode != "preview",
     inference = spec$xu_gsc$inference, nboots = run_nboots,
     run_mode = run_mode,
     production_eligible = run_mode == "production",
     price_measure = price_measure,
+    observation_window = if (frequency == "monthly") observation_window else 1L,
     factor_selection_parallel = spec$xu_gsc$parallel_cv,
     factor_selection_cores = spec$xu_gsc$cv_cores,
     bootstrap_parallel = spec$xu_gsc$parallel_bootstrap,
@@ -434,7 +507,7 @@ run_one_outcome <- function(outcome) {
     donor_cap = "none", selected_factors = fit$r.cv,
     formal_queue_written = FALSE
   ))
-  cat("Completed official Xu gsynth and normalized causal labels for", outcome, "at", output, "\n")
+  cat("Completed", run_mode, "Xu gsynth and normalized causal labels for", outcome, "at", output, "\n")
 }
 
 invisible(lapply(design$outcome_names, run_one_outcome))

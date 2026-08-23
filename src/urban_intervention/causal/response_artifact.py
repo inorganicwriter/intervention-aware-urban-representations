@@ -107,6 +107,7 @@ class ArtifactInputs:
     task_root: Path
     donor_universe: Path | None = None
     target_support: Path | None = None
+    treatment_orders: tuple[int, ...] | None = None
 
 
 from urban_intervention.utils import sha256_file  # noqa: E402
@@ -447,6 +448,26 @@ def build_response_frame(
     treatments = pd.read_parquet(inputs.treatments)
     family_queue = pd.read_csv(inputs.family_queue)
     control_queue = pd.read_csv(inputs.control_queue)
+    if inputs.treatment_orders is not None:
+        selected_orders = {int(order) for order in inputs.treatment_orders}
+        if not selected_orders:
+            raise ValueError("Sample release requires at least one treatment order")
+        treatment_orders = set(treatments["treatment_order"].astype(int))
+        missing_orders = selected_orders - treatment_orders
+        if missing_orders:
+            raise ValueError(
+                "Sample treatment orders are absent from the treatment list: "
+                f"{sorted(missing_orders)[:10]}"
+            )
+        treatments = treatments.loc[
+            treatments["treatment_order"].astype(int).isin(selected_orders)
+        ].copy()
+        family_queue = family_queue.loc[
+            family_queue["treatment_order"].astype(int).isin(selected_orders)
+        ].copy()
+        control_queue = control_queue.loc[
+            control_queue["treatment_order"].astype(int).isin(selected_orders)
+        ].copy()
     expected_families = set(OUTCOME_HORIZONS)
     if strict_production:
         if len(treatments) != 5_048:
@@ -719,6 +740,13 @@ def publish_response_artifact(
             "run_id": run_id,
             "created_utc": datetime.now(UTC).isoformat(),
             "strict_production": strict_production,
+            "treatment_scope": {
+                "kind": "subset" if inputs.treatment_orders is not None else "full",
+                "count": int(len(artifact["treatment_order"].unique())),
+                "orders": sorted(int(v) for v in artifact["treatment_order"].unique())
+                if inputs.treatment_orders is not None
+                else None,
+            },
             "specification_id": specification_id,
             "primary_key": KEY_COLUMNS,
             "diagnostics": diagnostics,

@@ -537,7 +537,9 @@ control_design_record <- function(result) {
     opening_month = target$opening_month,
     status = result$status,
     active_families = paste(sort(result$active_families), collapse = "+"),
-    selected_method = if (result$status == "matched") "Matching::Match_M1" else NA_character_,
+    selected_method = if (result$status == "matched") {
+      "Matching::Match_M5_static_refine"
+    } else NA_character_,
     donor_scope = if (result$status == "matched") result$selected_scope else NA_character_,
     control_city_key = NA_character_, control_grid_id = NA_character_,
     control_unit_key = NA_character_, candidate_count = NA_integer_,

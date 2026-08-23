@@ -1,8 +1,12 @@
 # Sample-Run Execution Plan (v2, final)
 
-Date: 2026-08-14
-Status: approved for execution
+Date: 2026-08-19
+Status: archived plan; execution deferred
 Scope: code fixes, infrastructure, housing module, event-study extension, and a 400-grid representative sample run
+
+This document records the v2 sample-run design for reproducibility. It does not
+indicate an active process; the formal queues were reset separately after the
+sample-run review.
 
 ## 1. Frozen specification decisions (from prior reviews)
 
@@ -23,6 +27,7 @@ Scope: code fixes, infrastructure, housing module, event-study extension, and a 
   - W=6: robustness — mean over 6-month windows (coverage ~40%)
 - Window applies only to **housing-family post-treatment observation**; baseline remains the 12-month pre-opening block; matching pre-treatment lags are unaffected.
 - This is a formal change to the frozen DDR: "event period 1 = first complete natural month after opening" becomes "event period 1 = mean of the first W natural months after opening" for the housing family (W=3 main, W=1/6 robustness).
+- Missing calendar months are not imputed: the window mean uses finite available monthly values. A post-treatment window enters only when both observed and counterfactual paths have at least one finite value; `effective_n_observed` and `effective_n_counterfactual` are persisted for audit and distribution reporting.
 - Hedonic time FE: year×quarter for the main W=3 specification; year×month for the W=1 robustness.
 
 ### 1.3 Hedonic adjustment (sensitivity-to-main for Lianjia 22 cities)
@@ -34,7 +39,7 @@ Scope: code fixes, infrastructure, housing module, event-study extension, and a 
 
 ### 1.4 Cross-city handling
 
-- Cross-city labels are **kept and marked, never discarded**: `donor_scope` + `quality_grade` already tag them; new `main_spec` column (=1 iff `donor_scope == "same_city"`) added by the release builder.
+- Cross-city labels are retained and tagged by `donor_scope` and `quality_grade`; the release builder adds `main_spec` (=1 iff `donor_scope == "same_city"`).
 - Training data keeps **all scopes by default** (unchanged behavior); `--scope-view {all,same_city,cross_city}` on the pre-training dataset builder enables explicit sensitivity/ablation views.
 - Reports use three views: same-city main table, cross-city companion table, merged table.
 
@@ -69,7 +74,7 @@ Scope: code fixes, infrastructure, housing module, event-study extension, and a 
 |---|---|---|
 | I1 | `scripts/causal_r/run_grid_control_design_queue.py` | `--orders` (comma-separated, mutually exclusive with start/end range) |
 | I2 | `scripts/causal_r/run_causal_label_queue.py` | `--orders` (same) |
-| I3 | new `scripts/analysis/select_representative_sample.py` | City×opening-year stratified, fixed-seed sample of **400** grids; writes `outputs/causal_labels/representative_sample_400.csv` (order + stratum weights + coverage report) |
+| I3 | new `scripts/analysis/select_representative_sample.py` | City×opening-year stratified, fixed-seed sample of **400** eligible grids; the production sample uses the inclusive opening-month interval `2017-07` through `2022-12` so the current 2014-01–2024-12 processed VIIRS cache covers the full 42-month pre-treatment and 24-month post-treatment window, and writes `outputs/causal_labels/representative_sample_400.csv` (order + stratum weights + coverage report) |
 | I4 | new `scripts/analysis/summarize_causal_labels.py` | (a) success/failure breakdown (research vs data-truncation vs code reasons); (b) label distributions per family (mean/median/quartiles/Tukey outliers, asinh/log note); (c) three scope views (1.4) |
 | B1 | `build_response_artifact.py` / `build_pretraining_dataset.py` / I4 | `main_spec` marker column; `--scope-view` parameter (default all); three-view reports |
 
@@ -89,7 +94,7 @@ Scope: code fixes, infrastructure, housing module, event-study extension, and a 
 | E1 | `scripts/causal_r/run_event_study_matching.R` | (a) extend to VIIRS (monthly read layer exists); (b) attribute stratification from `outputs/causal_labels/station_attributes/` (transfer / new-line / terminal / same-month-opening groups) |
 | E2 | `scripts/causal_r/run_event_study_aggregation.R` + `event_study_lib.R` | Same stratification parameters; per-stratum sample sizes annotated (small strata: trends only, power caveat) |
 
-### Phase 5 — Sample run (400 grids)
+### Archived Phase 5 — Sample run (400 grids)
 
 1. I3 → sample list
 2. Canary: 10 units (control design + label queue dry-run) to measure per-task cost, extrapolate duration
@@ -139,14 +144,14 @@ Phase 6 training fixes (parallel) ──┘
 - Late openings (2023+) hit VIIRS/panel truncation: reported as a dedicated "data-truncation" failure class.
 - All new products ship diagnostics (coverage, sample sizes, parameters) for auditability.
 
-## 7. Implementation status (updated 2026-08-14)
+## 7. Implementation record (historical snapshot: 2026-08-14)
 
 ### Done and verified
 
 - **Phase 1 (F1-F5)**: all five fixes implemented and verified.
   - F1/F2: R repro tests pass; the Sun-Abraham branch was additionally found to
     have mixed calendar scales (absolute treat month vs relative event time),
-    which made `sunab()` error out every time — the branch had never produced
+    which made `sunab()` error out on every run; the branch had not produced
     output; now uses `sunab(treatment_time, calendar_month)` with NA-treated
     never-treated controls retained.
   - F3: annual calendar-skeleton alignment verified (gap scenario yields NA,
@@ -162,14 +167,14 @@ Phase 6 training fixes (parallel) ──┘
   covered, 44 cities x 16 opening years, quota-population corr 0.84);
   three-view summary script; `main_spec` marker column in the response
   artifact; `--scope-view` on the pre-training dataset builder (default
-  `all` — cross-city labels are kept and marked, never discarded).
+  `all` — cross-city labels are retained and tagged).
 - **Phase 3 (H1-H4)**: hedonic panel for the 22 Lianjia cities
   (`outputs/causal_labels/housing_hedonic/`, grid-month median adjusted
   price + n_transactions; beijing R2 0.62, shenzhen 0.92); count
   distribution reported (grid-month median 1-3 transactions; >=2 in
   26-70% of populated grid-months); composition audit
   (`outputs/causal_labels/housing_composition/`) found a **+9.7% mean
-  building-age jump** around openings — raw median prices understate effects
+  building-age jump** around openings: raw median prices understate effects
   and hedonic adjustment is warranted; R housing read layer supports
   `price_measure` (median/hedonic) and `window` (1/3/6) through
   fixed-control labels, GSC and MC runners, with defaults unchanged; the
@@ -204,8 +209,8 @@ Phase 6 training fixes (parallel) ──┘
 
 ### Remaining
 
-- Phase 5: sample run (400 grids) — canary first, then control-design and
-  label queues; deferred by decision.
+- Phase 5: sample run (400 grids) — retained as a reproducible plan; execution
+  was deferred and is not represented as an active process.
 
 ### Follow-up fixes (2026-08-14, canary-driven)
 
@@ -216,19 +221,19 @@ Phase 6 training fixes (parallel) ──┘
   full-panel scan found 1,942 such tasks (1,941 housing + 1 poi), i.e. ~14
   core-hours at the old cost.  VIIRS is not pre-screened (partitions cover
   every grid).
-- **MC uncertainty root cause and fix**: fect's unit-level bootstrap is
-  structurally broken for the one-treated-unit grid design — every resample
-  drops the treated unit with probability ~1/e, so `est.att` comes back with
-  `count=1` and all-NA S.E. (verified on real data).  `parametric` is not
-  available for method "mc"; **`jackknife` produces finite S.E./CI/p** and
-  is now the MC inference method (`spec$mc$inference = "jackknife"`); the
-  label queue's manifest check accepts both bootstrap and jackknife.
+- **MC uncertainty specification**: the formal one-treated-unit MC path uses
+  fixed-lambda `fect` **`jackknife` inference**, which produces finite
+  S.E./CI/p on the supported design. Unit-level bootstrap is not the formal
+  inference path because treated-unit resampling can be unstable; parametric
+  inference is not available for method "mc". The label queue requires
+  `spec$mc$inference = "jackknife"`.
   Runtime cost rises (a 4-outcome annual family took >1 h at 8 cores);
   full-run budgets must account for it.
 - **VIIRS cache ceiling**: `MIT_VIIRS_RAW` is unset and partitions end at
-  2024-12; 2023+ openings will fail their viirs family as a data-truncation
-  class unless the server provides 2025 raw monthly data and sets the
-  variable (the `ensure_viirs` materialisation path already supports it).
+  2024-12; the production sample therefore restricts opening months to
+  2017-07 through 2022-12.  This interval also stays above the lower bound
+  needed for the 42-month pre-treatment window, so the processed cache alone
+  covers the complete monthly GSC window without requiring raw VIIRS data.
 
 ### Verification round 2 (2026-08-15, real-run gaps closed)
 

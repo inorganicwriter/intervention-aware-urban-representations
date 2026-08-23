@@ -30,6 +30,16 @@ source(file.path(dirname(sys.frame(1)$ofile), "paths.R"), chdir = TRUE)
   }
 }
 
+.estimator_env_integer <- function(name, default) {
+  raw <- Sys.getenv(name, unset = "")
+  if (!nzchar(raw)) return(as.integer(default))
+  value <- suppressWarnings(as.integer(raw))
+  if (is.na(value) || value < 1L) {
+    stop(name, " must be a positive integer; received: ", raw)
+  }
+  value
+}
+
 complete_estimator_spec <- function() {
   list(
     schema = "complete_published_estimators_v2_preonly_design",
@@ -60,8 +70,10 @@ complete_estimator_spec <- function() {
       estimator = "gsynth", force = "two-way", CV = TRUE,
       criterion = "mspe", r = 0:5, min.T0 = 5L, se = TRUE,
       nboots = 200L, inference = "parametric", normalize = TRUE,
-      parallel_cv = TRUE, cv_cores = 8L,
-      parallel_bootstrap = TRUE, bootstrap_cores = 4L
+      cv_cores = .estimator_env_integer("MIT_GSC_CV_CORES", 1L),
+      parallel_cv = .estimator_env_integer("MIT_GSC_CV_CORES", 1L) > 1L,
+      bootstrap_cores = .estimator_env_integer("MIT_GSC_BOOTSTRAP_CORES", 1L),
+      parallel_bootstrap = .estimator_env_integer("MIT_GSC_BOOTSTRAP_CORES", 1L) > 1L
     ),
     mc = list(
       estimator = "mc", backend = "fect", force = "two-way",
@@ -69,13 +81,14 @@ complete_estimator_spec <- function() {
       cv_method = "rolling", cv_nobs = 1L, cv_donut = 0L, cv_buffer = 0L,
       two_stage_cv_inference = TRUE,
       min.T0 = 1L, max_donors = 2000L, se = TRUE, nboots = 200L,
-      # Unit-level bootstrap is structurally broken for the one-treated-unit
-      # grid design: every resample drops the treated unit with probability
-      # ~1/e, so the ATT variance is (almost) never computable and fect
-      # returns NA S.E. with count=1.  Jackknife leave-one-out refits stay
-      # tractable at the 2,000-donor cap and produce finite S.E./CI/p
-      # (verified on real data); parametric is not available for method "mc".
-      inference = "jackknife", parallel = TRUE, cores = 8L
+      # The formal one-treated-unit MC specification uses jackknife
+      # inference. Unit-level bootstrap can be unstable when the treated
+      # unit is absent from a resample; jackknife leave-one-out refits are
+      # the reproducible inference path used here. Parametric inference is
+      # not available for method "mc".
+      inference = "jackknife",
+      cores = .estimator_env_integer("MIT_MC_CORES", 1L),
+      parallel = .estimator_env_integer("MIT_MC_CORES", 1L) > 1L
     ),
     families = list(
       housing = "housing_log_price",
@@ -92,6 +105,23 @@ complete_estimator_spec <- function() {
 shift_month <- function(month, n) {
   month <- as.IDate(format(as.IDate(month), "%Y-%m-01"))
   as.IDate(seq(month, by = paste(as.integer(n), "months"), length.out = 2L)[2L])
+}
+
+event_time_from_period <- function(periods, opening_period, frequency) {
+  frequency <- as.character(frequency)
+  if (length(frequency) != 1L || !frequency %in% c("annual", "monthly")) {
+    stop("frequency must be annual or monthly")
+  }
+  if (frequency == "annual") {
+    return(as.integer(periods) - as.integer(opening_period))
+  }
+  periods <- as.IDate(format(as.IDate(periods), "%Y-%m-01"))
+  opening_period <- as.IDate(format(as.IDate(opening_period), "%Y-%m-01"))
+  period_index <- as.integer(format(periods, "%Y")) * 12L +
+    as.integer(format(periods, "%m"))
+  opening_index <- as.integer(format(opening_period, "%Y")) * 12L +
+    as.integer(format(opening_period, "%m"))
+  period_index - opening_index
 }
 
 monthly_event_calendar <- function(opening_month, lag = 36L, leads = 1:24,
@@ -273,8 +303,8 @@ read_city_monthly_housing <- function(city_key, root = project_root(),
     "city_key", "grid_id", "observed_month", "log_price_raw_median"
   )))
   x[, month := as.IDate(format(as.IDate(observed_month), "%Y-%m-01"))]
-  x[, .(
-    housing_log_price = median(log_price_raw_median, na.rm = TRUE)
+  x[is.finite(log_price_raw_median), .(
+    housing_log_price = median(log_price_raw_median)
   ), by = .(city_key, grid_id, month)]
 }
 
@@ -855,13 +885,19 @@ pair_preonly_diagnostics <- function(pairs, frame, features) {
 }
 
 normalize_gsc_labels <- function(fit, panel, treated_units, pre_periods, post_periods,
-                                 outcome_family, outcome, post_event_time = NULL) {
+                                  outcome_family, outcome, post_event_time = NULL,
+                                  pre_event_time = NULL) {
   if (is.null(fit$Y.ct) || is.null(fit$id)) stop("gsynth object lacks counterfactual paths")
   model_periods <- c(pre_periods, post_periods)
-  pre_count <- length(pre_periods)
   if (is.null(post_event_time)) post_event_time <- seq_along(post_periods)
+  if (is.null(pre_event_time)) {
+    stop("pre_event_time is required; use actual calendar offsets")
+  }
   if (length(post_event_time) != length(post_periods)) {
     stop("post_event_time length does not match post periods")
+  }
+  if (length(pre_event_time) != length(pre_periods)) {
+    stop("pre_event_time length does not match pre periods")
   }
   rbindlist(lapply(seq_len(nrow(treated_units)), function(index) {
     target <- treated_units[index]
@@ -878,7 +914,7 @@ normalize_gsc_labels <- function(fit, panel, treated_units, pre_periods, post_pe
       outcome_family = outcome_family,
       outcome = outcome,
       period = model_periods,
-      event_time = c(seq.int(-pre_count, -1L), as.integer(post_event_time)),
+      event_time = c(as.integer(pre_event_time), as.integer(post_event_time)),
       observed = target_panel$value,
       counterfactual = as.numeric(fit$Y.ct[, fitted_column])
     )
@@ -890,6 +926,84 @@ normalize_gsc_labels <- function(fit, panel, treated_units, pre_periods, post_pe
     )]
     result
   }))
+}
+
+# Apply the monthly observation-window semantics after the estimator produces
+# monthly observed/counterfactual paths. Pre-treatment paths remain monthly for
+# event-study diagnostics; post-treatment horizons use the mean over
+# [max(1, h-window+1), h].  The frozen label contract requires every month in
+# the requested window to have finite observed and counterfactual values;
+# effective counts are persisted so unsupported windows remain visible in
+# downstream quality and distribution reports.
+apply_post_observation_window <- function(paths, window = 1L) {
+  window <- as.integer(window)
+  if (window < 1L || window > 6L) stop("window must be in 1..6 months")
+  if (window == 1L || !nrow(paths) || !any(paths$event_time > 0L)) {
+    return(paths)
+  }
+  paths <- as.data.table(paths)
+  pre <- paths[event_time < 0L]
+  post <- paths[event_time > 0L]
+  horizons <- sort(unique(as.integer(post$event_time)))
+  windowed <- rbindlist(lapply(horizons, function(horizon) {
+    start <- max(1L, horizon - window + 1L)
+    part <- post[event_time >= start & event_time <= horizon]
+    if (!nrow(part)) return(NULL)
+    result <- copy(part[which.max(event_time)])
+    # Early horizons contain fewer than `window` months; later horizons contain
+    # exactly `window` months.  Partial windows are not valid W-month labels.
+    minimum_window_n <- min(window, as.integer(horizon))
+    finite_mean <- function(value) {
+      value <- value[is.finite(value)]
+      if (!length(value)) NA_real_ else mean(value)
+    }
+    n_observed <- sum(is.finite(part$observed))
+    n_counterfactual <- sum(is.finite(part$counterfactual))
+    observed_mean <- finite_mean(part$observed)
+    counterfactual_mean <- finite_mean(part$counterfactual)
+    window_supported <- (
+      nrow(part) == minimum_window_n &&
+        n_observed == minimum_window_n &&
+        n_counterfactual == minimum_window_n
+    )
+    result[, `:=`(
+      observed = observed_mean,
+      counterfactual = counterfactual_mean,
+      causal_response_label = if (window_supported &&
+                                  is.finite(observed_mean) &&
+                                  is.finite(counterfactual_mean)) {
+        observed_mean - counterfactual_mean
+      } else NA_real_,
+      minimum_window_n = as.integer(minimum_window_n),
+      effective_n_observed = as.integer(n_observed),
+      effective_n_counterfactual = as.integer(n_counterfactual),
+      window_supported = window_supported
+    )]
+    result[, label_available := window_supported &
+      is.finite(observed) & is.finite(counterfactual) &
+      is.finite(causal_response_label)]
+    if ("standard_error" %in% names(part)) {
+      se_values <- part$standard_error
+      result[, standard_error := if (all(is.finite(se_values))) {
+        sqrt(sum(se_values^2)) / nrow(part)
+      } else NA_real_]
+      result[, confidence_lower := if (is.finite(standard_error)) {
+        causal_response_label - 1.96 * standard_error
+      } else NA_real_]
+      result[, confidence_upper := if (is.finite(standard_error)) {
+        causal_response_label + 1.96 * standard_error
+      } else NA_real_]
+      result[, p_value := if (is.finite(standard_error) && standard_error > 0) {
+        2 * stats::pnorm(-abs(causal_response_label / standard_error))
+      } else NA_real_]
+    }
+    result[, uncertainty_source := paste0(
+      as.character(uncertainty_source[[1L]]), "_window", window
+    )]
+    result
+  }), use.names = TRUE, fill = TRUE)
+  setorder(windowed, event_time)
+  rbindlist(list(pre, windowed), use.names = TRUE, fill = TRUE)
 }
 
 attach_single_target_gsc_uncertainty <- function(paths, fit, nboots,
@@ -909,16 +1023,95 @@ attach_single_target_gsc_uncertainty <- function(paths, fit, nboots,
   if (length(effect_scale) != 1L || !is.finite(effect_scale) || effect_scale <= 0) {
     stop("GSC uncertainty effect_scale must be one finite positive value")
   }
-  uncertainty <- as.data.table(fit$est.att)
+  est_att <- as.data.frame(fit$est.att)
+  uncertainty <- if ("event_time" %in% names(est_att)) {
+    as.data.table(est_att)
+  } else {
+    row_names <- rownames(est_att)
+    if (is.null(row_names) || !length(row_names) ||
+        identical(as.character(row_names), as.character(seq_len(nrow(est_att))))) {
+      stop(
+        "Estimator uncertainty output lacks explicit event-time identifiers; ",
+        "refusing to align uncertainty by default row position"
+      )
+    }
+    as.data.table(est_att, keep.rownames = "event_time")
+  }
   required <- c("S.E.", "CI.lower", "CI.upper", "p.value")
-  if (nrow(uncertainty) != nrow(paths) || !all(required %in% names(uncertainty))) {
-    stop("gsynth uncertainty rows do not align with the normalized target path")
+  if (!all(required %in% names(uncertainty))) {
+    stop("gsynth uncertainty output lacks required inference columns")
+  }
+  if ("event_time" %in% names(fit$est.att)) {
+    uncertainty[, event_time := as.integer(fit$est.att[["event_time"]])]
+  } else {
+    uncertainty[, event_time := suppressWarnings(as.integer(as.character(event_time)))]
+  }
+  if (anyNA(uncertainty$event_time)) {
+    stop("gsynth uncertainty output lacks usable event-time identifiers")
+  }
+  # gsynth/fect report the treatment/opening period as event_time == 0.  The
+  # project specification excludes that partial month/year.  Positive
+  # horizons are aligned by their formal event_time.  Negative estimator
+  # event_time values are model-index offsets, however, and therefore cannot
+  # be compared directly with the calendar offsets used in the normalized
+  # monthly path (e.g. -35:-1 versus -42:-7).  Align negative rows by their
+  # ordered pre-treatment paths and retain the earliest path row as NA when
+  # the estimator omits it.
+  uncertainty <- uncertainty[event_time != 0L]
+  if (anyDuplicated(uncertainty$event_time)) {
+    stop("Estimator uncertainty output has duplicated event-time identifiers")
+  }
+  path_event_time <- as.integer(paths$event_time)
+  if (anyNA(path_event_time) || anyDuplicated(path_event_time)) {
+    stop("Normalized target path has invalid or duplicated event-time identifiers")
+  }
+  post_event_time <- path_event_time[path_event_time > 0L]
+  missing_post <- setdiff(post_event_time, uncertainty$event_time)
+  if (length(missing_post)) {
+    stop(
+      "Estimator uncertainty output lacks formal post-treatment event times: ",
+      paste(sort(missing_post), collapse = ", ")
+    )
+  }
+  matched <- rep(NA_integer_, length(path_event_time))
+  post_index <- which(path_event_time > 0L)
+  matched[post_index] <- match(
+    path_event_time[post_index], uncertainty$event_time
+  )
+  pre_index <- which(path_event_time < 0L)
+  uncertainty_pre_index <- which(uncertainty$event_time < 0L)
+  if (length(pre_index) && length(uncertainty_pre_index)) {
+    direct_pre <- match(
+      path_event_time[pre_index], uncertainty$event_time
+    )
+    if (all(!is.na(direct_pre))) {
+      matched[pre_index] <- direct_pre
+    } else {
+      ordered_uncertainty_pre <- uncertainty_pre_index[
+        order(uncertainty$event_time[uncertainty_pre_index])
+      ]
+      if (length(ordered_uncertainty_pre) == length(pre_index) - 1L) {
+        matched[pre_index[-1L]] <- ordered_uncertainty_pre
+      } else if (length(ordered_uncertainty_pre) == length(pre_index)) {
+        matched[pre_index] <- ordered_uncertainty_pre
+      } else {
+        stop(
+          "Estimator pre-treatment uncertainty cannot be aligned to the ",
+          "normalized target path"
+        )
+      }
+    }
   }
   paths[, `:=`(
-    standard_error = as.numeric(uncertainty[["S.E."]]) * effect_scale,
-    confidence_lower = as.numeric(uncertainty[["CI.lower"]]) * effect_scale,
-    confidence_upper = as.numeric(uncertainty[["CI.upper"]]) * effect_scale,
-    p_value = as.numeric(uncertainty[["p.value"]])
+    standard_error = NA_real_, confidence_lower = NA_real_,
+    confidence_upper = NA_real_, p_value = NA_real_
+  )]
+  present <- !is.na(matched)
+  paths[present, `:=`(
+    standard_error = as.numeric(uncertainty[["S.E."]][matched[present]]) * effect_scale,
+    confidence_lower = as.numeric(uncertainty[["CI.lower"]][matched[present]]) * effect_scale,
+    confidence_upper = as.numeric(uncertainty[["CI.upper"]][matched[present]]) * effect_scale,
+    p_value = as.numeric(uncertainty[["p.value"]][matched[present]])
   )]
   paths[]
 }

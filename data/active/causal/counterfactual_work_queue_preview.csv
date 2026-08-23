@@ -1,4 +1,4 @@
-treatment_order,city_key,grid_id,station_event_id,opening_month,status,selected_method,selected_control_grid_id,failure_reason
+﻿treatment_order,city_key,grid_id,station_event_id,opening_month,status,selected_method,selected_control_grid_id,failure_reason
 1,shanghai,g00136x00165,shanghai_station_c72c54257f13,2010-02,pending,,,
 2,shanghai,g00137x00169,shanghai_station_f47abbacd586,2010-02,pending,,,
 3,shanghai,g00133x00107,shanghai_station_b709999f0a74,2010-03,pending,,,

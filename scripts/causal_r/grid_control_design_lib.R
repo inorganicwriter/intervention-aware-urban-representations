@@ -11,7 +11,7 @@ source(file.path("scripts", "causal_r", "complete_estimators_lib.R"))
 
 grid_control_spec <- function() {
   list(
-    schema = "grid_control_design_v1",
+    schema = "grid_control_design_v3_exact_stable_ties",
     minimum_families = 1L,
     anticipation_months = 6L,
     monthly_blocks = 3L,
@@ -22,7 +22,8 @@ grid_control_spec <- function() {
     scopes = c("same_city", "all_city_standardized"),
     matching = list(
       estimand = "ATT", M = 1L, replace = TRUE, ties = FALSE,
-      Weight = 2L, BiasAdjust = FALSE, Var.calc = 0L
+      Weight = 2L, BiasAdjust = FALSE, Var.calc = 0L,
+      distance.tolerance = 0
     )
   )
 }
@@ -391,6 +392,7 @@ attempt_grid_match <- function(target, active_families, scope,
   matching_spec <- complete_estimator_spec()$abadie_imbens
   matching_spec$ties <- FALSE
   matching_spec$M <- grid_control_spec()$matching_candidates
+  matching_spec$distance.tolerance <- grid_control_spec()$matching$distance.tolerance
   selected <- select_preonly_pairs(
     list(frame = prepared, features = features), matching_spec,
     match_features = training, support_features = training
@@ -529,6 +531,8 @@ control_design_record <- function(result) {
   target <- result$target
   base <- data.table(
     schema = grid_control_spec()$schema,
+    implementation_version = "r-reference-grid-v3",
+    backend = "r_matching",
     viirs_cache_contract = .viirs_cache_contract,
     treatment_order = target$treatment_order,
     city_key = target$city_key,

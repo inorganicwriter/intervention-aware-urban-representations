@@ -1,8 +1,36 @@
 # DDR-003：完整已发表估计器的隔离实现
 
-状态：估计器实现完成；正式批量估计冻结，等待计算路由冻结  
-日期：2026-07-22  
+<!-- GPU 迁移前状态：估计器实现完成；正式批量估计冻结，等待计算路由冻结。 -->
+状态：R 参考实现冻结；Python/GPU 生产实现完成，等待 GSC/MC 服务器资格门  
+日期：2026-07-22；GPU 迁移增补：2026-08-24  
 替代：早期已撤销的 prototype 设计
+
+## 2026-08-24 Python/GPU 迁移增补
+
+本 DDR 下列 A–C 节保留原始 R 官方包工作流，作为论文方法解释、一次性
+资格参考和显式 `r_reference` 后端；它们不再是逐任务默认生产后端。当前默认
+后端为 `python_gpu`：
+
+- Matching 控制设计与最终固定控制标签由 Python/PyTorch 执行，并同时对 R
+  候选集、最终控制、质量门和完整标签路径做 parity；
+- Xu GSC 的交互固定效应、rolling CV、反事实路径和参数 bootstrap 由
+  Python/PyTorch 执行；
+- matrix completion 的 lambda CV、最终拟合和 unit jackknife 由
+  Python/PyTorch 执行，`lambda=0` 是合法的未正则化端点；
+- production 运行必须提供至少 3 个 Matching、3 个 GSC、3 个 MC 代表任务
+  形成的环境绑定资格凭证；preview 不得晋升为正式结果；
+- 每个 shard 完整验证凭证和绑定源码一次，子进程只验证该凭证摘要，避免逐任务
+  重复哈希资格面板。
+
+截至 2026-08-24，本机 R 4.6.1 与 RTX 4060 已完成 3 个真实 Matching 任务
+（orders 507、509、530）的设计和最终标签 parity，三例标签最大绝对误差均为
+0。GSC/MC 各 3 个代表任务和完整凭证仍需在 RTX 4090 服务器运行；因此不得把
+“实现完成”写成“全量生产已完成”。规范入口为：
+
+- `scripts/causal_python/run_causal_label_queue.py`；
+- `scripts/causal_python/run_formal_estimator.py`；
+- `scripts/causal_gpu/run_shadow_queue.py`；
+- `scripts/causal_gpu/audit_formal_qualification.py`。
 
 ## 原则
 

@@ -28,7 +28,8 @@ from urban_intervention.data.paths import (
     STATION_ISSUE_RESOLUTION,
     STATION_RESOLUTION_MANIFEST,
 )
-from urban_intervention.interventions.transit.station_names import normalize_station_name
+from urban_intervention.text import normalize_station_name
+from urban_intervention.utils import require_columns, sha256_file
 
 RESOLUTION_VERSION = "station_issue_resolution_v1"
 EVENT_REQUIRED_COLUMNS = (
@@ -56,12 +57,6 @@ RESOLUTION_REQUIRED_COLUMNS = (
 )
 
 
-def require_columns(frame: pd.DataFrame, columns: Iterable[str], label: str) -> None:
-    missing = sorted(set(columns) - set(frame.columns))
-    if missing:
-        raise ValueError(f"{label} is missing required columns: {missing}")
-
-
 def _split(value: object) -> list[str]:
     return [part.strip() for part in str(value or "").split(";") if part.strip()]
 
@@ -76,9 +71,6 @@ def _ordered_union(values: Iterable[object], separators: str = r"[;+]") -> str:
             if part and part not in result:
                 result.append(part)
     return ";".join(result)
-
-
-from urban_intervention.utils import sha256_file  # noqa: E402
 
 
 def _add_resolution_columns(events: pd.DataFrame) -> pd.DataFrame:
@@ -362,9 +354,9 @@ def write_resolution_products(
         {
             "generated_at_utc": datetime.now(UTC).isoformat(),
             "source_path": str(source_path),
-            "sourcesha256_file": sha256_file(source_path),
+            "source_sha256": sha256_file(source_path),
             "resolution_path": str(resolution_path),
-            "resolutionsha256_file": sha256_file(resolution_path),
+            "resolution_sha256": sha256_file(resolution_path),
             "resolved_path": str(resolved_path),
             "competing_path": str(competing_path),
             "excluded_path": str(excluded_path),

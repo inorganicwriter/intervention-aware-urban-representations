@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = ROOT / "scripts" / "causal_r" / "run_causal_label_queue.py"
+SCRIPT = ROOT / "scripts" / "causal_python" / "run_causal_label_queue.py"
 SPEC = importlib.util.spec_from_file_location("run_causal_label_queue", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
@@ -127,6 +127,74 @@ def test_viirs_structural_boundary_matches_five_clean_preperiods() -> None:
     assert MODULE.viirs_has_min_preperiods("2012-12")
     assert not MODULE.viirs_has_full_matching_window("2015-06")
     assert MODULE.viirs_has_full_matching_window("2015-07")
+
+
+def test_gsc_specific_support_failures_continue_to_mc() -> None:
+    assert (
+        MODULE.classify_gsc_failure(
+            {"reason": "viirs_insufficient_clean_pre_periods_for_gsc"}
+        )
+        is None
+    )
+    assert (
+        MODULE.classify_gsc_failure(
+            {"log": "No complete post-treatment outcome for treated unit"}
+        )
+        is None
+    )
+    assert (
+        MODULE.classify_gsc_failure(
+            {"log": "Insufficient clean pre-treatment monthly periods for GSC"}
+        )
+        is None
+    )
+    assert MODULE.classify_gsc_failure(
+        {"log": "Insufficient post-treatment monthly periods"}
+    ) == "structural_support_failure"
+
+
+def test_cross_city_match_does_not_overwrite_same_city_control_queue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(MODULE, "ROOT", tmp_path)
+    monkeypatch.setattr(MODULE, "OUTPUT_CONTROL_TASKS_DIR", tmp_path / "control_tasks")
+    monkeypatch.setattr(MODULE, "_ESTIMATOR_BACKEND", "python_gpu")
+    monkeypatch.setattr(MODULE, "design_grid_control", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(MODULE, "write_control_design", lambda *_args, **_kwargs: None)
+    output = tmp_path / "control_tasks" / "00007" / "cross_city"
+    output.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "treatment_order": 7,
+                "status": "matched",
+                "control_city_key": "beta",
+                "control_grid_id": "g2",
+                "control_unit_key": "beta::g2",
+                "selected_method": "python_gpu_M5_static_refine",
+            }
+        ]
+    ).to_csv(output / "control_record.csv", index=False)
+    controls = pd.DataFrame(
+        [
+            {
+                "treatment_order": 7,
+                "status": "gsc_pending",
+                "donor_scope": pd.NA,
+                "control_unit_key": pd.NA,
+            }
+        ]
+    )
+    before = controls.copy(deep=True)
+
+    ok, record, details = MODULE.run_cross_city_matching(
+        pd.Series({"treatment_order": 7}), controls, tmp_path / "control.csv"
+    )
+
+    assert ok
+    assert record["control_unit_key"] == "beta::g2"
+    assert details["donor_scope"] == "all_city_standardized"
+    pd.testing.assert_frame_equal(controls, before)
 
 
 def test_unit_queue_aggregates_only_after_four_terminal_families(tmp_path: Path) -> None:
@@ -335,64 +403,42 @@ def test_mc_scope_keeps_successful_poi_outcomes_when_another_outcome_fails(
             "mc_cv_mspe": [0.04, 0.04, 0.04],
         }
     ).to_parquet(output / "causal_response_labels.parquet", index=False)
-    pd.DataFrame(
-        {
-            "field": [
-                "estimator",
-                "fitted_method",
-                "backend",
-                "force",
-                "criterion",
-                "nlambda",
-                "min_T0",
-                "se",
-                "run_id",
-                "CV",
-                "cv_method",
-                "cv_nobs",
-                "cv_donut",
-                "cv_buffer",
-                "selected_lambda",
-                "two_stage_cv_inference",
-                "inference_fit_CV",
-                "cv_min_mspe",
-                "run_mode",
-                "production_eligible",
-                "inference",
-                "nboots",
-                "specification_fingerprint",
-                "price_measure",
-                "observation_window",
-            ],
-            "value": [
-                "mc",
-                "mc",
-                "fect",
-                "two-way",
-                "mspe",
-                "20",
-                "1",
-                "TRUE",
-                "test-mc-run",
-                "TRUE",
-                "rolling",
-                "1",
-                "0",
-                "0",
-                "0.25",
-                "TRUE",
-                "FALSE",
-                "0.04",
-                "production",
-                "TRUE",
-                "jackknife",
-                "200",
-                MODULE.specification_fingerprint(row),
-                "median",
-                "1",
-            ],
-        }
-    ).to_csv(output / "manifest.csv", index=False)
+    manifest = {
+        "schema": "complete_published_estimators_v3_explicit_deterministic_contracts",
+        "estimator": "mc",
+        "fitted_method": "mc",
+        "backend": "fect",
+        "force": "two-way",
+        "criterion": "mspe",
+        "nlambda": "20",
+        "min_T0": "1",
+        "se": "TRUE",
+        "run_id": "test-mc-run",
+        "CV": "TRUE",
+        "cv_method": "rolling",
+        "cv_folds": "20",
+        "cv_prop": "0.1",
+        "cv_rule": "1se",
+        "cv_nobs": "1",
+        "cv_donut": "0",
+        "cv_buffer": "0",
+        "tol": "1e-05",
+        "max_iteration": "5000",
+        "selected_lambda": "0.25",
+        "two_stage_cv_inference": "TRUE",
+        "inference_fit_CV": "FALSE",
+        "cv_min_mspe": "0.04",
+        "run_mode": "production",
+        "production_eligible": "TRUE",
+        "inference": "jackknife",
+        "nboots": "200",
+        "specification_fingerprint": MODULE.specification_fingerprint(row),
+        "price_measure": "median",
+        "observation_window": "1",
+    }
+    pd.DataFrame({"field": manifest.keys(), "value": manifest.values()}).to_csv(
+        output / "manifest.csv", index=False
+    )
 
     ok, labels, details = MODULE.run_mc_scope(row, "same_city")
 

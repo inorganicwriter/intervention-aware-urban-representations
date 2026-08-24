@@ -73,7 +73,7 @@ sample-run review.
 | # | File | Change |
 |---|---|---|
 | I1 | `scripts/causal_r/run_grid_control_design_queue.py` | `--orders` (comma-separated, mutually exclusive with start/end range) |
-| I2 | `scripts/causal_r/run_causal_label_queue.py` | `--orders` (same) |
+| I2 | `scripts/causal_python/run_causal_label_queue.py` | `--orders` (same；旧 causal_r 路径为兼容包装器) |
 | I3 | new `scripts/analysis/select_representative_sample.py` | City×opening-year stratified, fixed-seed sample of **400** eligible grids; the production sample uses the inclusive opening-month interval `2017-07` through `2022-12` so the current 2014-01–2024-12 processed VIIRS cache covers the full 42-month pre-treatment and 24-month post-treatment window, and writes `outputs/causal_labels/representative_sample_400.csv` (order + stratum weights + coverage report) |
 | I4 | new `scripts/analysis/summarize_causal_labels.py` | (a) success/failure breakdown (research vs data-truncation vs code reasons); (b) label distributions per family (mean/median/quartiles/Tukey outliers, asinh/log note); (c) three scope views (1.4) |
 | B1 | `build_response_artifact.py` / `build_pretraining_dataset.py` / I4 | `main_spec` marker column; `--scope-view` parameter (default all); three-view reports |
@@ -99,7 +99,7 @@ sample-run review.
 1. I3 → sample list
 2. Canary: 10 units (control design + label queue dry-run) to measure per-task cost, extrapolate duration
 3. `run_grid_control_design_queue.py --orders <sample>` (workers 4-6, dry-run first)
-4. `run_causal_label_queue.py --orders <sample>` (dry-run first, then phase=all, background + log monitoring)
+4. `scripts/causal_python/run_causal_label_queue.py --orders <sample>` (dry-run first, then phase=all, background + log monitoring)
 5. `build_response_artifact.py --allow-partial` → sample release (non-production marker)
 6. I4 summary → three deliverables: (a) event studies (GSC/MC 4 families + matching housing/VIIRS + attribute strata + composition checks H2), (b) success/failure reasons, (c) label distributions
 7. Full report to `outputs/causal_labels/sample_report_YYYYMMDD/`

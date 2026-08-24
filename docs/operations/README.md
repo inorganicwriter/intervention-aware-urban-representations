@@ -25,4 +25,7 @@ urban-resolve-stations --help
 urban-spatial-donor-audit --help
 ```
 
-正式反事实生产不从 `analysis/` 启动，统一按 [`scripts/causal_r/README.md`](../../scripts/causal_r/README.md) 执行。
+正式反事实生产不从 `analysis/` 启动。Python/GPU 资格按
+[`causal/gpu/README.md`](../../src/urban_intervention/causal/gpu/README.md) 执行，
+并行部署与 R 参考环境按 [`scripts/causal_r/README.md`](../../scripts/causal_r/README.md)
+执行。

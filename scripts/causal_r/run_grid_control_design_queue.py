@@ -8,12 +8,16 @@ import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 
 CODE_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(CODE_ROOT / "src"))
 
+from urban_intervention.causal.gpu.contracts import (  # noqa: E402
+    FORMAL_IMPLEMENTATION_VERSION,
+)
 from urban_intervention.data.paths import (  # noqa: E402
     CONTROL_DESIGN_QUEUE as QUEUE,
 )
@@ -42,6 +46,7 @@ ROOT = PROJECT_ROOT
 VIIRS_START = pd.Period("2012-01", freq="M")
 VIIRS_END = pd.Period("2024-12", freq="M")
 VIIRS_CACHE_CONTRACT = "complete_44_city_2012_2024_monthly_v1"
+CONTROL_DESIGN_SCHEMA = "grid_control_design_v3_exact_stable_ties"
 STRING_COLUMNS = (
     "status",
     "active_families",
@@ -198,7 +203,9 @@ def prepare_complete_viirs_cache() -> None:
     assert_complete_viirs_cache()
 
 
-def validate_durable_record(record: pd.Series, expected_order: int) -> None:
+def validate_durable_record(
+    record: pd.Series, expected_order: int, expected_backend: str
+) -> None:
     if int(record["treatment_order"]) != expected_order:
         raise ValueError(
             f"Durable control record identity mismatch: expected {expected_order}, "
@@ -209,25 +216,55 @@ def validate_durable_record(record: pd.Series, expected_order: int) -> None:
             f"Durable control record {expected_order} lacks the complete monthly "
             "VIIRS cache contract and cannot be reused"
         )
+    if str(record.get("schema", "")) != CONTROL_DESIGN_SCHEMA:
+        raise ValueError(
+            f"Durable control record {expected_order} uses a stale matching schema; "
+            f"expected {CONTROL_DESIGN_SCHEMA}"
+        )
+    expected = {
+        "python_gpu": (FORMAL_IMPLEMENTATION_VERSION, "python_pytorch"),
+        "r_reference": ("r-reference-grid-v3", "r_matching"),
+    }[expected_backend]
+    actual = (
+        str(record.get("implementation_version", "")),
+        str(record.get("backend", "")),
+    )
+    if actual != expected:
+        raise ValueError(
+            f"Durable control record {expected_order} backend/version {actual} "
+            f"does not match requested {expected}"
+        )
 
 
-def apply_durable_record(queue: pd.DataFrame, index: int, record_path: Path) -> None:
+def apply_durable_record(
+    queue: pd.DataFrame, index: int, record_path: Path, backend: str
+) -> None:
     record = pd.read_csv(record_path).iloc[0]
-    validate_durable_record(record, int(queue.loc[index, "treatment_order"]))
+    validate_durable_record(
+        record, int(queue.loc[index, "treatment_order"]), backend
+    )
     for column in record.index:
         if column in queue.columns:
             queue.loc[index, column] = record[column]
 
 
 def run_batch(
-    queue: pd.DataFrame, indices: list[int], reuse_durable: bool = True, workers: int = 1
+    queue: pd.DataFrame,
+    indices: list[int],
+    reuse_durable: bool = True,
+    workers: int = 1,
+    backend: str = "r_reference",
 ) -> None:
     missing: list[int] = []
     for index in indices:
         order = int(queue.loc[index, "treatment_order"])
         record_path = TASK_ROOT / f"{order:05d}" / "control_record.csv"
         if reuse_durable and record_path.exists():
-            apply_durable_record(queue, index, record_path)
+            try:
+                apply_durable_record(queue, index, record_path, backend)
+            except ValueError as error:
+                print(f"Recomputing stale durable record {order}: {error}")
+                missing.append(index)
         else:
             missing.append(index)
     if not missing:
@@ -242,7 +279,9 @@ def run_batch(
     if R_LIB.exists():
         environment["R_LIBS_USER"] = str(R_LIB)
 
-    if workers <= 1:
+    if backend == "python_gpu":
+        _run_python_batches(missing_orders, workers)
+    elif workers <= 1:
         _run_single_batch(missing_orders, environment)
     else:
         _run_parallel_batches(missing_orders, environment, workers)
@@ -255,8 +294,68 @@ def run_batch(
                 "R process produced no output",
             ]
             continue
-        apply_durable_record(queue, index, record_path)
+        apply_durable_record(queue, index, record_path, backend)
     atomic_csv(queue, QUEUE)
+
+
+def _python_batch_command(orders: list[int], device: str) -> list[str]:
+    return [
+        sys.executable,
+        str(ROOT / "scripts" / "causal_python" / "run_control_design_batch.py"),
+        "--orders",
+        ",".join(map(str, orders)),
+        "--task-root",
+        str(TASK_ROOT),
+        "--device",
+        device,
+    ]
+
+
+def _run_python_batches(orders: list[int], workers: int) -> None:
+    treatments = pq.read_table(TREATMENTS, columns=["treatment_order", "city_key"]).to_pandas()
+    order_to_city = dict(
+        zip(
+            treatments["treatment_order"].astype(int),
+            treatments["city_key"].astype(str),
+            strict=False,
+        )
+    )
+    grouped: dict[str, list[int]] = {}
+    for order in orders:
+        grouped.setdefault(order_to_city.get(order, ""), []).append(order)
+    batches: list[list[int]] = [[] for _ in range(max(1, workers))]
+    loads = [0] * len(batches)
+    for city in sorted(grouped, key=lambda key: (-len(grouped[key]), key)):
+        slot = int(np.argmin(loads))
+        batches[slot].extend(grouped[city])
+        loads[slot] += len(grouped[city])
+    batches = [batch for batch in batches if batch]
+    gpu_ids = [
+        value.strip()
+        for value in os.environ.get("MIT_CAUSAL_GPU_IDS", "").split(",")
+        if value.strip()
+    ]
+    processes: list[tuple[list[int], subprocess.Popen[str]]] = []
+    for index, batch in enumerate(batches):
+        device = (
+            f"cuda:{gpu_ids[index % len(gpu_ids)]}"
+            if gpu_ids
+            else os.environ.get("MIT_CAUSAL_DEVICE", "auto")
+        )
+        process = subprocess.Popen(
+            _python_batch_command(batch, device),
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        processes.append((batch, process))
+    for batch, process in processes:
+        stdout, _ = process.communicate()
+        if process.returncode != 0:
+            print(f"Python control worker failed ({batch[:3]}): {stdout[-2000:]}")
+        else:
+            print(f"Python control worker completed {len(batch)} task(s)")
 
 
 def _run_single_batch(orders: list[int], environment: dict) -> None:
@@ -352,7 +451,13 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--retry", action="store_true")
     parser.add_argument(
-        "--workers", type=int, default=1, help="Number of parallel R processes (default: 1)"
+        "--workers", type=int, default=1, help="Number of parallel estimator workers (default: 1)"
+    )
+    parser.add_argument(
+        "--estimator-backend",
+        choices=("python_gpu", "r_reference"),
+        default="python_gpu",
+        help="Use Python/PyTorch matching (default) or the audited R reference.",
     )
     parser.add_argument(
         "--prepare-viirs-cache",
@@ -406,7 +511,13 @@ def main() -> int:
             print({"treatment_order": int(queue.loc[index, "treatment_order"])})
     elif selected:
         assert_complete_viirs_cache()
-        run_batch(queue, selected, reuse_durable=not args.retry, workers=args.workers)
+        run_batch(
+            queue,
+            selected,
+            reuse_durable=not args.retry,
+            workers=args.workers,
+            backend=args.estimator_backend,
+        )
     print(f"Processed {len(indices)} control-design row(s); dry_run={args.dry_run}")
     return 0
 

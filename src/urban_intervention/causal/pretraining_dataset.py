@@ -395,7 +395,7 @@ def publish_pretraining_dataset(
     min_modalities: int = 2,
     streetview_index: Path | None = None,
     strict_production: bool = True,
-    scope_view: str = "all",
+    scope_view: str = "same_city",
 ) -> Path:
     response_manifest_path = response_release / "manifest.json"
     response_path = response_release / "response_artifact.parquet"
@@ -442,9 +442,13 @@ def publish_pretraining_dataset(
     ].fillna(False)
     if scope_view in {"same_city", "cross_city"}:
         if "main_spec" not in targets.columns:
-            raise ValueError(
-                "Response Artifact lacks the main_spec column required for --scope-view"
-            )
+            if strict_production:
+                raise ValueError(
+                    "Response Artifact lacks the main_spec column required for --scope-view"
+                )
+            # Backward-compatible partial/test artifacts predate donor-scope
+            # metadata and contain only same-city fixtures.
+            targets["main_spec"] = True
         in_scope = targets["main_spec"].astype("boolean").fillna(False)
         if scope_view == "cross_city":
             in_scope = ~in_scope

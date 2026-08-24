@@ -30,7 +30,7 @@ price_measure <- if (length(args) >= 10L) args[[10L]] else "median"
 observation_window <- if (length(args) >= 11L) as.integer(args[[11L]]) else 1L
 assert_choice(frequency, c("annual", "monthly"), "frequency")
 assert_choice(donor_scope, c("same_city", "all_city_standardized"), "donor_scope")
-assert_choice(run_mode, c("production", "preview", "smoke_test"), "run_mode")
+assert_choice(run_mode, c("production", "preview", "smoke_test", "gpu_export"), "run_mode")
 assert_choice(price_measure, c("median", "hedonic"), "price_measure")
 if (observation_window < 1L || observation_window > 6L) {
   stop("observation_window must be in 1..6 months")
@@ -45,6 +45,57 @@ if (!nzchar(specification_fingerprint)) {
 }
 
 spec <- complete_estimator_spec()
+mc_lambda_cache_schema <- "mc_lambda_cache_v2_explicit_rolling_seed"
+
+build_mc_gpu_cv_contract <- function(estimation_data, seed) {
+  time_ids <- sort(unique(estimation_data$time_id))
+  unit_ids <- sort(unique(estimation_data$mc_unit_id))
+  TT <- length(time_ids)
+  N <- length(unit_ids)
+  Y <- matrix(0, nrow = TT, ncol = N)
+  D <- matrix(0L, nrow = TT, ncol = N)
+  row_index <- match(estimation_data$time_id, time_ids)
+  column_index <- match(estimation_data$mc_unit_id, unit_ids)
+  Y[cbind(row_index, column_index)] <- estimation_data$Y
+  D[cbind(row_index, column_index)] <- as.integer(estimation_data$D)
+  II <- is.finite(Y) & D == 0L
+  set.seed(as.integer(seed))
+  folds <- fect:::.build_cv_mask_rolling(
+    II = II, D = D, k = spec$mc$k,
+    cv.nobs = spec$mc$cv_nobs, cv.buffer = spec$mc$cv_buffer,
+    cv.prop = spec$mc$cv_prop, min.T0 = spec$mc$min.T0, seed = NULL
+  )
+  fold_contract <- rbindlist(lapply(seq_along(folds), function(fold_id) {
+    masked <- folds[[fold_id]]$cv.id
+    scored <- folds[[fold_id]]$est.id
+    unit_position <- ((masked - 1L) %/% TT) + 1L
+    time_position <- ((masked - 1L) %% TT) + 1L
+    data.table(
+      fold_id = as.integer(fold_id),
+      mc_unit_id = as.integer(unit_ids[unit_position]),
+      time_id = as.integer(time_ids[time_position]),
+      scored = masked %in% scored
+    )
+  }))
+  data.ini <- matrix(NA_real_, nrow = TT * N, ncol = 3L)
+  data.ini[, 1L] <- c(Y)
+  data.ini[, 2L] <- rep(seq_len(N), each = TT)
+  data.ini[, 3L] <- rep(seq_len(TT), N)
+  initial <- fect:::initialFit(data = data.ini, force = 3L, oci = which(c(II) == 1L))
+  Y.lambda <- Y - initial$Y0
+  Y.lambda[!II] <- 0
+  eigen.all <- svd(Y.lambda / (TT * N), nu = 0L, nv = 0L)$d
+  lambda.max <- log10(max(eigen.all))
+  lambda.by <- 3 / (spec$mc$nlambda - 2L)
+  lambda <- c(
+    10^(lambda.max - (0:(spec$mc$nlambda - 2L)) * lambda.by),
+    0
+  )
+  list(
+    folds = fold_contract,
+    lambdas = data.table(sequence = seq_along(lambda), lambda = lambda)
+  )
+}
 run_nboots <- if (run_mode == "production") {
   spec$mc$nboots
 } else if (run_mode == "smoke_test") {
@@ -287,6 +338,41 @@ run_one_outcome <- function(outcome) {
     stop("MC estimation data failed to mask treated post-period outcomes")
   }
 
+  if (run_mode == "gpu_export") {
+    outcome_tag <- paste0(
+      outcome,
+      if (!is.null(treatment_order)) sprintf("_t%05d", treatment_order) else ""
+    )
+    output <- estimator_output_dir(
+      "matrix_completion", city_key, cohort, outcome_tag,
+      paste0(design$signature, "_gpu_input")
+    )
+    write_parquet(panel, file.path(output, "estimation_panel.parquet"), compression = "zstd")
+    cv_contract <- build_mc_gpu_cv_contract(estimation_data, 20260725L)
+    write_parquet(
+      cv_contract$folds, file.path(output, "mc_cv_folds.parquet"), compression = "zstd"
+    )
+    fwrite(cv_contract$lambdas, file.path(output, "mc_lambda_grid.csv"), bom = TRUE)
+    fwrite(units, file.path(output, "unit_map.csv"), bom = TRUE)
+    write_run_manifest(output, list(
+      schema = "causal_gpu_input_v1", method = "Matrix completion GPU input export",
+      run_id = causal_run_id, city_key = city_key, cohort = cohort,
+      frequency = frequency, treatment_order = treatment_order,
+      outcome_family = outcome_family, outcome = outcome,
+      donor_scope = design$donor_scope, run_mode = run_mode,
+      cv_method = spec$mc$cv_method, cv_folds = spec$mc$k,
+      cv_nobs = spec$mc$cv_nobs, cv_buffer = spec$mc$cv_buffer,
+      cv_prop = spec$mc$cv_prop, cv_rule = spec$mc$cv_rule,
+      tol = spec$mc$tol, max_iteration = spec$mc$max.iteration,
+      cv_seed = 20260725L, fect_version = as.character(packageVersion("fect")),
+      production_eligible = FALSE, selected_lambda = NA_real_,
+      inference = "not_run", donor_admission_uses_post_outcome = FALSE,
+      treated_post_outcome_mask = "applied_by_explicit_GPU_treatment_mask"
+    ))
+    cat("Exported MC GPU input for", outcome, "at", output, "\n")
+    return(invisible(output))
+  }
+
   # Lambda selection (CV) depends almost entirely on the donor pool: one
   # treated unit out of up to 2,001 rows shifts the chosen lambda negligibly.
   # Cache the selected lambda per (city, cohort, family, scope) so a cohort
@@ -311,31 +397,35 @@ run_one_outcome <- function(outcome) {
     cached <- readRDS(lambda_cache_path)
     cached_lambda <- if (is.list(cached)) cached$selected_lambda else NULL
     cached_mspe <- if (is.list(cached)) cached$cv_min_mspe else NULL
-    if (is.numeric(cached_lambda) && length(cached_lambda) == 1L &&
+    if (is.list(cached) && identical(cached$schema, mc_lambda_cache_schema) &&
+        is.numeric(cached_lambda) && length(cached_lambda) == 1L &&
         is.numeric(cached_mspe) && length(cached_mspe) == 1L &&
-        is.finite(cached_lambda) && cached_lambda > 0 && is.finite(cached_mspe)) {
+        is.finite(cached_lambda) && cached_lambda >= 0 && is.finite(cached_mspe)) {
       selected_lambda <- as.numeric(cached$selected_lambda)
       mc_cv_mspe <- as.numeric(cached$cv_min_mspe)
     }
   }
   if (is.null(selected_lambda)) {
+    set.seed(20260725L)
     selection_fit <- fect(
       Y ~ D, data = estimation_data, index = c("mc_unit_id", "time_id"),
       method = spec$mc$estimator,
       force = spec$mc$force, CV = spec$mc$CV,
       criterion = spec$mc$criterion, nlambda = spec$mc$nlambda,
+      k = spec$mc$k, cv.prop = spec$mc$cv_prop, cv.rule = spec$mc$cv_rule,
       cv.method = spec$mc$cv_method, cv.nobs = spec$mc$cv_nobs,
       cv.donut = spec$mc$cv_donut, cv.buffer = spec$mc$cv_buffer,
       se = FALSE,
       parallel = spec$mc$parallel, cores = spec$mc$cores,
       min.T0 = spec$mc$min.T0, normalize = FALSE,
+      tol = spec$mc$tol, max.iteration = spec$mc$max.iteration,
       seed = 20260725
     )
     if (!inherits(selection_fit, "fect") ||
         !identical(selection_fit$method, "mc") ||
         length(selection_fit$lambda.cv) != 1L ||
-        !is.finite(selection_fit$lambda.cv) || selection_fit$lambda.cv <= 0) {
-      stop("MC selection stage did not choose one finite positive lambda")
+        !is.finite(selection_fit$lambda.cv) || selection_fit$lambda.cv < 0) {
+      stop("MC selection stage did not choose one finite non-negative lambda")
     }
     selected_lambda <- as.numeric(selection_fit$lambda.cv)
     if (!is.matrix(selection_fit$CV.out.mc) ||
@@ -345,7 +435,10 @@ run_one_outcome <- function(outcome) {
     }
     mc_cv_mspe <- min(selection_fit$CV.out.mc[, "MSPE"], na.rm = TRUE)
     saveRDS(
-      list(selected_lambda = selected_lambda, cv_min_mspe = mc_cv_mspe),
+      list(
+        schema = mc_lambda_cache_schema,
+        selected_lambda = selected_lambda, cv_min_mspe = mc_cv_mspe
+      ),
       lambda_cache_path
     )
   }
@@ -357,6 +450,7 @@ run_one_outcome <- function(outcome) {
     parallel = if (run_mode == "preview") FALSE else spec$mc$parallel,
     cores = if (run_mode == "preview") 1L else spec$mc$cores,
     min.T0 = spec$mc$min.T0, normalize = FALSE,
+    tol = spec$mc$tol, max.iteration = spec$mc$max.iteration,
     seed = 20260725
   )
   if (run_mode != "preview") {
@@ -486,8 +580,11 @@ run_one_outcome <- function(outcome) {
     fitted_method = fit$method,
     CV = spec$mc$CV, criterion = spec$mc$criterion,
     nlambda = spec$mc$nlambda, selected_lambda = selected_lambda,
-    cv_method = spec$mc$cv_method, cv_nobs = spec$mc$cv_nobs,
+    cv_method = spec$mc$cv_method, cv_folds = spec$mc$k,
+    cv_prop = spec$mc$cv_prop, cv_rule = spec$mc$cv_rule,
+    cv_nobs = spec$mc$cv_nobs,
     cv_donut = spec$mc$cv_donut, cv_buffer = spec$mc$cv_buffer,
+    tol = spec$mc$tol, max_iteration = spec$mc$max.iteration,
     two_stage_cv_inference = spec$mc$two_stage_cv_inference,
     inference_fit_CV = FALSE,
     cv_min_mspe = mc_cv_mspe,
@@ -536,7 +633,7 @@ family_tag <- paste0(
   outcome_family,
   if (!is.null(treatment_order)) sprintf("_t%05d", treatment_order) else ""
 )
-family_signature <- if (run_mode %in% c("smoke_test", "preview")) {
+family_signature <- if (run_mode %in% c("smoke_test", "preview", "gpu_export")) {
   paste0(design$signature, "_", run_mode)
 } else design$signature
 family_output <- estimator_output_dir(

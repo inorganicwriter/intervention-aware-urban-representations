@@ -1,5 +1,6 @@
 suppressPackageStartupMessages({
   library(data.table)
+  library(fect)
   library(gsynth)
 })
 
@@ -31,7 +32,7 @@ price_measure <- if (length(args) >= 10L) args[[10L]] else "median"
 observation_window <- if (length(args) >= 11L) as.integer(args[[11L]]) else 1L
 assert_choice(frequency, c("annual", "monthly"), "frequency")
 assert_choice(donor_scope, c("same_city", "all_city_standardized"), "donor_scope")
-assert_choice(run_mode, c("production", "preview", "smoke_test"), "run_mode")
+assert_choice(run_mode, c("production", "preview", "smoke_test", "gpu_export"), "run_mode")
 assert_choice(price_measure, c("median", "hedonic"), "price_measure")
 if (observation_window < 1L || observation_window > 6L) {
   stop("observation_window must be in 1..6 months")
@@ -47,6 +48,65 @@ if (!nzchar(specification_fingerprint)) {
 }
 
 spec <- complete_estimator_spec()
+
+# gsynth 1.4.0 is a thin fect wrapper but does not expose fect's CV geometry.
+# Call fect explicitly so package-default changes cannot silently alter the
+# formal specification, then preserve the gsynth-compatible result contract.
+fit_gsynth_explicit <- function(formula, data, index = c("gsc_unit_id", "time_id"),
+                                force, CV, r, criterion,
+                                estimator, se, parallel = FALSE, cores = 1L,
+                                min.T0, normalize, seed, nboots = 200L,
+                                inference = "parametric") {
+  set.seed(as.integer(seed))
+  output <- fect::fect(
+    formula = formula, data = data, method = estimator,
+    index = index, force = force,
+    CV = CV, r = r, criterion = criterion,
+    k = spec$xu_gsc$k, cv.method = spec$xu_gsc$cv_method,
+    cv.prop = spec$xu_gsc$cv_prop, cv.nobs = spec$xu_gsc$cv_nobs,
+    cv.buffer = spec$xu_gsc$cv_buffer, cv.rule = spec$xu_gsc$cv_rule,
+    se = se, nboots = nboots, vartype = inference,
+    parallel = parallel, cores = cores, min.T0 = min.T0,
+    normalize = normalize, seed = seed, keep.sims = TRUE,
+    tol = spec$xu_gsc$tol, max.iteration = spec$xu_gsc$max.iteration
+  )
+  output$data <- data
+  class(output) <- "gsynth"
+  output
+}
+
+build_gsc_gpu_cv_contract <- function(estimation_data, seed) {
+  time_ids <- sort(unique(estimation_data$time_id))
+  control_ids <- sort(unique(estimation_data[D == 0L, gsc_unit_id]))
+  treated_ids <- unique(estimation_data[D == 1L, gsc_unit_id])
+  control_ids <- setdiff(control_ids, treated_ids)
+  TT <- length(time_ids)
+  Nco <- length(control_ids)
+  II <- matrix(0L, nrow = TT, ncol = Nco)
+  cells <- estimation_data[gsc_unit_id %in% control_ids]
+  row_index <- match(cells$time_id, time_ids)
+  column_index <- match(cells$gsc_unit_id, control_ids)
+  II[cbind(row_index, column_index)] <- as.integer(is.finite(cells$Y))
+  set.seed(as.integer(seed))
+  folds <- fect:::.build_cv_mask_rolling(
+    II = II, D = matrix(0L, nrow = TT, ncol = Nco),
+    k = spec$xu_gsc$k, cv.nobs = spec$xu_gsc$cv_nobs,
+    cv.buffer = spec$xu_gsc$cv_buffer, cv.prop = spec$xu_gsc$cv_prop,
+    min.T0 = spec$xu_gsc$min.T0, seed = NULL
+  )
+  rbindlist(lapply(seq_along(folds), function(fold_id) {
+    masked <- folds[[fold_id]]$cv.id
+    scored <- folds[[fold_id]]$est.id
+    unit_position <- ((masked - 1L) %/% TT) + 1L
+    time_position <- ((masked - 1L) %% TT) + 1L
+    data.table(
+      fold_id = as.integer(fold_id),
+      gsc_unit_id = as.integer(control_ids[unit_position]),
+      time_id = as.integer(time_ids[time_position]),
+      scored = masked %in% scored
+    )
+  }))
+}
 run_nboots <- if (run_mode == "production") {
   spec$xu_gsc$nboots
 } else if (run_mode == "smoke_test") {
@@ -211,7 +271,7 @@ cross_city_masked_placebo <- function(panel, units, pre_count, target_unit_id) {
   masked[, D := as.integer(gsc_unit_id %in% pseudo_ids & time_id > train_end)]
   max_r <- min(max(spec$xu_gsc$r), floor((train_end - 1L) / 2L))
   r_values <- 0:max(0L, max_r)
-  fit <- gsynth(
+  fit <- fit_gsynth_explicit(
     Y ~ D, data = masked, index = c("gsc_unit_id", "time_id"),
     force = spec$xu_gsc$force, CV = TRUE, r = r_values,
     criterion = spec$xu_gsc$criterion, estimator = spec$xu_gsc$estimator,
@@ -316,7 +376,40 @@ run_one_outcome <- function(outcome) {
   }
   estimation_data <- panel[, .(gsc_unit_id, time_id, Y = model_value, D)]
 
-  selection_fit <- gsynth(
+  if (run_mode == "gpu_export") {
+    outcome_tag <- paste0(
+      outcome,
+      if (!is.null(treatment_order)) sprintf("_t%05d", treatment_order) else ""
+    )
+    output <- estimator_output_dir(
+      "xu_gsc", city_key, cohort, outcome_tag,
+      paste0(design$signature, "_gpu_input")
+    )
+    write_parquet(panel, file.path(output, "estimation_panel.parquet"), compression = "zstd")
+    cv_contract <- build_gsc_gpu_cv_contract(estimation_data, 20260723L)
+    write_parquet(
+      cv_contract, file.path(output, "gsc_cv_folds.parquet"), compression = "zstd"
+    )
+    fwrite(units, file.path(output, "unit_map.csv"), bom = TRUE)
+    write_run_manifest(output, list(
+      schema = "causal_gpu_input_v1", method = "Xu GSC GPU input export",
+      run_id = causal_run_id, city_key = city_key, cohort = cohort,
+      frequency = frequency, treatment_order = treatment_order,
+      outcome_family = outcome_family, outcome = outcome,
+      donor_scope = design$donor_scope, run_mode = run_mode,
+      cv_method = spec$xu_gsc$cv_method, cv_folds = spec$xu_gsc$k,
+      cv_nobs = spec$xu_gsc$cv_nobs, cv_buffer = spec$xu_gsc$cv_buffer,
+      cv_prop = spec$xu_gsc$cv_prop, cv_rule = spec$xu_gsc$cv_rule,
+      tol = spec$xu_gsc$tol, max_iteration = spec$xu_gsc$max.iteration,
+      cv_seed = 20260723L, fect_version = as.character(packageVersion("fect")),
+      production_eligible = FALSE, selected_factors = NA_integer_,
+      inference = "not_run", donor_admission_uses_post_outcome = FALSE
+    ))
+    cat("Exported Xu GSC GPU input for", outcome, "at", output, "\n")
+    return(invisible(output))
+  }
+
+  selection_fit <- fit_gsynth_explicit(
     Y ~ D, data = estimation_data, index = c("gsc_unit_id", "time_id"),
     force = spec$xu_gsc$force, CV = spec$xu_gsc$CV, r = spec$xu_gsc$r,
     criterion = spec$xu_gsc$criterion, estimator = spec$xu_gsc$estimator,
@@ -362,7 +455,7 @@ run_one_outcome <- function(outcome) {
     fit_args$parallel <- spec$xu_gsc$parallel_bootstrap
     fit_args$cores <- spec$xu_gsc$bootstrap_cores
   }
-  fit <- do.call(gsynth, fit_args)
+  fit <- do.call(fit_gsynth_explicit, fit_args)
   if (!inherits(fit, "gsynth") || is.null(fit$Y.ct)) {
     stop("gsynth did not return a valid counterfactual model")
   }
@@ -459,7 +552,11 @@ run_one_outcome <- function(outcome) {
   write_run_manifest(output, list(
     schema = spec$schema, method = "Xu generalized synthetic control",
     run_id = causal_run_id,
-    package = paste0("gsynth ", packageVersion("gsynth")),
+    package = paste0("fect ", packageVersion("fect")),
+    implementation_backend = "fect::fect",
+    fect_version = as.character(packageVersion("fect")),
+    compatibility_interface = "gsynth-compatible result class",
+    gsynth_version = as.character(packageVersion("gsynth")),
     city_key = city_key, cohort = cohort, frequency = frequency,
     treatment_order = treatment_order,
     specification_fingerprint = specification_fingerprint,
@@ -467,6 +564,10 @@ run_one_outcome <- function(outcome) {
     signature = design$signature, estimator = spec$xu_gsc$estimator,
     force = spec$xu_gsc$force, CV = spec$xu_gsc$CV,
     criterion = spec$xu_gsc$criterion, factor_candidates = spec$xu_gsc$r,
+    cv_method = spec$xu_gsc$cv_method, cv_folds = spec$xu_gsc$k,
+    cv_prop = spec$xu_gsc$cv_prop, cv_nobs = spec$xu_gsc$cv_nobs,
+    cv_buffer = spec$xu_gsc$cv_buffer, cv_rule = spec$xu_gsc$cv_rule,
+    tol = spec$xu_gsc$tol, max_iteration = spec$xu_gsc$max.iteration,
     min_T0 = spec$xu_gsc$min.T0, se = spec$xu_gsc$se && run_mode != "preview",
     inference = spec$xu_gsc$inference, nboots = run_nboots,
     run_mode = run_mode,

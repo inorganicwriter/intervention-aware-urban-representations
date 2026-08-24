@@ -1,9 +1,8 @@
 import pandas as pd
 import pytest
 
-from scripts.causal_r.run_causal_label_queue import (
+from scripts.causal_python.run_causal_label_queue import (
     _FAMILY_SUPPORT_CACHE,
-    _family_observed_grids,
     family_has_observed_support,
 )
 
@@ -16,7 +15,7 @@ def clear_cache():
 
 
 def test_housing_no_observation_grid_skipped(tmp_path, monkeypatch):
-    import scripts.causal_r.run_causal_label_queue as queue_module
+    import scripts.causal_python.run_causal_label_queue as queue_module
 
     panel = tmp_path / "beijing.parquet"
     pd.DataFrame(
@@ -38,7 +37,7 @@ def test_viirs_never_prescreened():
 
 
 def test_poi_observed_grids(tmp_path, monkeypatch):
-    import scripts.causal_r.run_causal_label_queue as queue_module
+    import scripts.causal_python.run_causal_label_queue as queue_module
 
     poi_dir = tmp_path / "poi"
     poi_dir.mkdir()
@@ -59,7 +58,7 @@ def test_poi_observed_grids(tmp_path, monkeypatch):
 
 
 def test_population_missing_panel_means_no_support(tmp_path, monkeypatch):
-    import scripts.causal_r.run_causal_label_queue as queue_module
+    import scripts.causal_python.run_causal_label_queue as queue_module
 
     empty_dir = tmp_path / "empty"
     empty_dir.mkdir()

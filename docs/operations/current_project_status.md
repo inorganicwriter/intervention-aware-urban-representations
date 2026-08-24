@@ -1,6 +1,7 @@
 # Current Project Status
 
-Updated: 2026-08-19
+<!-- Previous status snapshot date: 2026-08-19. -->
+Updated: 2026-08-24
 
 This page records only the active state needed to resume work. Detailed research
 choices belong in the causal design and DDRs; dataset paths belong in
@@ -59,8 +60,19 @@ matches, GSC estimates, or final labels.
 
 - Spatial donor construction is implemented in
   `src/urban_intervention/causal/spatial_donors.py`.
-- Formal R estimators and the recoverable queue are under `scripts/causal_r/`.
-- PanelMatch, Abadie–Imbens matching, and Xu GSC remain independent estimators.
+<!-- Pre-GPU wording: formal R estimators and the recoverable queue were both
+documented under scripts/causal_r/. -->
+- The default recoverable label queue is
+  `scripts/causal_python/run_causal_label_queue.py`; the old `causal_r` path is
+  a compatibility wrapper.
+- Python/PyTorch Matching, GSC and MC implementations are under
+  `src/urban_intervention/causal/gpu/`; qualification and parity commands are
+  under `scripts/causal_gpu/`.
+- R PanelMatch, Abadie–Imbens, `gsynth` and `fect` remain independent audited
+  references and an explicit `r_reference` backend, not the default per-task
+  production runtime.
+- Production Python execution is fail-closed until an environment-bound receipt
+  contains at least three passing Matching, GSC and MC parity tasks.
 - Control selection must use treatment-preceding information only.
 - Matched-control failure routes an outcome task to GSC; GSC failure routes to
   MC, and only failure of all three paths produces an explicit skip reason.
@@ -85,12 +97,12 @@ pre-period counterfactual gaps) in `outputs/complete_estimators/staging/`;
 these are the raw event-study coefficients. The label queue publishes only
 post horizons, so parallel-trends validation is aggregated separately:
 
-- `scripts/causal_r/run_event_study_aggregation.R` admits only production
-  manifests (`run_mode=production`, `production_eligible=TRUE`) and writes
-  `outputs/event_study/`. Annual and monthly results remain separate through
-  the `frequency` field; the output includes per-frequency × family × outcome ×
-  `event_time` series (mean/SD/SE/95% CI with per-period n), a grid-level joint
-  zero-pre-trend test, a reading guide, and PNG/PDF/SVG event-study figures.
+<!-- Pre-GPU production entry: scripts/causal_r/run_event_study_aggregation.R. -->
+- `scripts/causal_python/run_all_method_event_study.py` is the current R-free
+  all-method entry. It keeps estimator, donor scope, annual/monthly frequency,
+  family and outcome separate; writes pooled effect paths and PNG/PDF figures;
+  and reports grid- and city-cluster pre-trend metadata without silently deleting
+  labels. The R aggregation script remains available for reference comparison.
 - Historical real-data check (2026-08-04, order 906 population MC task): mean pre-period
   label 0.0004 over 5 pre-period rows — consistent with the canary's
   near-zero pre-period claims; joint test deferred until ≥2 grids are labelled.
@@ -158,13 +170,17 @@ city). Grids opening 2015+ have adequate support for both matching and GSC.
 ## Remaining steps before full production
 
 The implementation, data layer, robustness checks and isolated estimator tests
-are complete. Formal production execution is still outstanding:
+are complete. Three real Matching qualification tasks (507, 509 and 530) pass
+R/Python design, quality and final-label parity on CUDA, with zero final-label
+error. Formal production execution is still outstanding:
 
-1. Run the grid-control queue (5,048 rows, all `pending`) for same-city matching
+1. Run three representative GSC and three MC qualification tasks on the RTX 4090
+   server and issue the complete environment-bound qualification receipt.
+2. Run the grid-control queue (5,048 rows) for same-city matching
    (6-round routing: same-city match -> GSC -> MC -> cross-city match -> GSC -> MC)
-2. Run the family-level tasks (20,192 rows, all `pending`) for the same 5,048
+3. Run the family-level tasks (20,192 rows, all `pending`) for the same 5,048
    grids (matched labels + GSC + MC fallback)
-3. Publish the strict Response Artifact and pretraining dataset, then train the
+4. Publish the strict Response Artifact and pretraining dataset, then train the
    representation model on the full production release
 
 

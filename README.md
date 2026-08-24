@@ -10,14 +10,19 @@ response(i, h) = observed_outcome(i, h) - counterfactual_outcome(i, h)
 
 ## Current implementation status
 
+<!-- Pre-GPU migration wording retained for provenance:
+PanelMatch, Abadie–Imbens and Xu GSC were described here as R production estimators;
+event-study aggregation and the resumable label queue were documented under scripts/causal_r/.
+-->
+
 | Module | Status | Notes |
 |---|---|---|
 | Station identity, city assignment and competing-transit-event resolution | Implemented | Manual resolutions are compiled by a traceable applier; the raw station table is never overwritten |
 | 500m grid treatment list and 1km spatial donor exclusion | Implemented | Fixed 5,048 treated grids; spatial donor universe generated |
 | Pre-treatment multivariate control matching | Implemented | **6-round routing**: same-city matching → same-city GSC → same-city MC → cross-city matching → cross-city GSC → cross-city MC → explicit skip; the selection stage never reads post-treatment outcomes |
-| PanelMatch, Abadie–Imbens, Xu GSC | Implemented | Three independent literature estimators; formal parameters, routing and audits in DDR-003/004 |
-| Event-study aggregation and parallel-trends validation | Implemented | `scripts/causal_r/run_event_study_aggregation.R` keeps annual/monthly results separate, writes per-period mean/SE/CI, a grid-level joint test and standard PNG/PDF/SVG figures; only production manifests are admitted |
-| Resumable production queues | Implemented | Atomic updates, resume from breakpoint, failure reasons and task-level provenance; queues reset and pending the formal run |
+| Published-estimator references and Python/GPU production | Implemented; server qualification pending for GSC/MC | R `PanelMatch`, `Matching`, `gsynth` and `fect` remain audited reference implementations. The default label backend is `python_gpu`: PyTorch Matching/GSC/MC under `src/urban_intervention/causal/gpu/`, gated by R/Python parity receipts. See DDR-003/004. |
+| Event-study aggregation and parallel-trends validation | Implemented | `scripts/causal_python/run_all_method_event_study.py` is the R-free production entry for Matching, GSC and MC. R aggregation remains an explicit reference workflow. Annual/monthly and estimator/scope results remain separate; pre-trend tests are diagnostic metadata, not automatic label deletion. |
+| Resumable production queues | Implemented | The canonical label orchestrator is `scripts/causal_python/run_causal_label_queue.py`; atomic updates, shard-level qualification validation, resume, failure reasons and task provenance are implemented. The old `causal_r` path is a compatibility wrapper. |
 | Response Artifact | Implemented | Strict release, complete label skeleton, quality grades, training mask, input/code hashes |
 | Pre-training multimodal dataset | Implemented | Read-only pre-treatment features; split by city; standardization parameters fit on training cities only |
 | Formal full-scale computation on 5,048 grids | **Full run pending** | Queues reset (5,048 controls + 20,192 family-level tasks all pending); two-stage matching canary verified (orders 1–10 routed correctly to GSC; 3/10 same-city matches in orders 906–915, order 906 walked the full match→GSC→MC→skip chain across all families); canary artifacts cleaned; awaiting the formal server run |
@@ -61,7 +66,9 @@ src/urban_intervention/
   data/                   data paths and registry
 
 scripts/
-  causal_r/               formal econometric estimators, control design and resumable queues
+  causal_python/          default Python/GPU production queues and event-study entrypoints
+  causal_gpu/             R/Python shadow parity, GPU qualification and receipt tooling
+  causal_r/               audited R references plus compatibility/deployment wrappers
   collection/             external data collection and source ingestion
   data/                   causal inputs and fixed task-list construction
   data_management/        data layout, registry and snapshot utilities
@@ -143,10 +150,18 @@ Dry-run first, then run a limited canary; do not start the full 5,048-grid run b
 
 ```powershell
 conda run -n mit python scripts/causal_r/run_grid_control_design_queue.py --start-order 1 --max-units 10 --dry-run
-conda run -n mit python scripts/causal_r/run_causal_label_queue.py --start-order 1 --max-tasks 4 --dry-run
+conda run -n mit python scripts/causal_python/run_causal_label_queue.py --start-order 1 --max-tasks 4 --dry-run
 ```
 
-Queue semantics, formal parameters and server-side execution are described in [scripts/causal_r/README.md](scripts/causal_r/README.md).
+<!-- Pre-GPU path retained for compatibility documentation:
+python scripts/causal_r/run_causal_label_queue.py ...
+The wrapper still works, but new automation must use causal_python/.
+-->
+
+Python/GPU qualification is described in
+[the causal GPU guide](src/urban_intervention/causal/gpu/README.md); R reference
+semantics and server-side execution remain documented in
+[scripts/causal_r/README.md](scripts/causal_r/README.md).
 
 ### 4. Release labels and pre-training data
 

@@ -123,7 +123,8 @@ run_one_outcome <- function(outcome) {
         replace = spec$abadie_imbens$replace, ties = spec$abadie_imbens$ties,
         # Common support was enforced explicitly on the pre-treatment X matrix.
         CommonSupport = FALSE,
-        Weight = spec$abadie_imbens$Weight, Var.calc = spec$abadie_imbens$Var.calc
+        Weight = spec$abadie_imbens$Weight, Var.calc = spec$abadie_imbens$Var.calc,
+        distance.tolerance = spec$abadie_imbens$distance.tolerance
       ),
       warning = function(condition) {
         matching_warnings <<- c(matching_warnings, conditionMessage(condition))
@@ -161,8 +162,12 @@ run_one_outcome <- function(outcome) {
     fwrite(data.table(
       outcome = outcome, horizon = horizon,
       estimate = as.numeric(fit$est),
-      analytic_standard_error = as.numeric(fit$se.standard),
-      analytic_t = as.numeric(fit$est / fit$se.standard),
+      # ``fit$se`` is the Abadie--Imbens variance selected by Var.calc.
+      # ``fit$se.standard`` is only the ordinary matched-pair dispersion.
+      analytic_standard_error = as.numeric(fit$se),
+      analytic_t = as.numeric(fit$est / fit$se),
+      pair_standard_error = as.numeric(fit$se.standard),
+      pair_t = as.numeric(fit$est / fit$se.standard),
       treated_observations = sum(Tr), control_observations = sum(1L - Tr),
       matched_rows = length(fit$index.treated)
     ), file.path(output, "estimate.csv"), bom = TRUE)

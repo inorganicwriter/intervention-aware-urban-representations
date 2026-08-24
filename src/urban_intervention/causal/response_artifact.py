@@ -19,6 +19,8 @@ import numpy as np
 import pandas as pd
 import pyarrow
 
+from urban_intervention.causal.gpu.contracts import FORMAL_IMPLEMENTATION_VERSION
+
 OUTCOME_HORIZONS: dict[str, dict[str, tuple[int, ...]]] = {
     "housing": {"housing_log_price": (1, 3, 6, 12, 18, 24)},
     "viirs": {"viirs_avg_asinh": (1, 3, 6, 12, 18, 24)},
@@ -70,11 +72,32 @@ LABEL_COLUMNS = [
     "confidence_upper",
     "p_value",
     "bootstrap_repetitions",
+    "valid_inference_repetitions",
     "uncertainty_source",
     "pre_observed_periods",
     "pre_rmspe",
+    "pre_mean_effect",
+    "pretrend_slope",
+    "pretrend_slope_p_value",
+    "pretrend_task_flag",
     "mc_lambda",
+    "mc_regularized",
     "mc_cv_mspe",
+    "selected_factors",
+    "minimum_window_n",
+    "effective_n_observed",
+    "effective_n_counterfactual",
+    "window_supported",
+    "transaction_count",
+    "transaction_count_min",
+    "control_transaction_count",
+    "transaction_count_threshold",
+    "transaction_count_supported",
+    "control_transaction_count_supported",
+    "price_measure",
+    "donor_scope",
+    "estimator_backend",
+    "implementation_version",
 ]
 CONTROL_COLUMNS = [
     "status",
@@ -402,6 +425,29 @@ def collect_task_products(
             not isinstance(details, dict) or not str(details.get("run_id") or "")
         ):
             raise ValueError(f"Production task lacks estimator run_id: {manifest_path}")
+        task_labels = label_frames[task_index]
+        python_task = task_labels.get(
+            "estimator_backend", pd.Series(index=task_labels.index, dtype="object")
+        ).astype(str).str.contains("python", case=False, na=False).any()
+        if strict_production and python_task:
+            versions = set(
+                task_labels.get(
+                    "implementation_version",
+                    pd.Series(index=task_labels.index, dtype="object"),
+                ).astype(str)
+            )
+            if versions != {FORMAL_IMPLEMENTATION_VERSION}:
+                raise ValueError(
+                    f"Production Python task uses a stale implementation: {manifest_path}"
+                )
+            if (
+                not isinstance(details, dict)
+                or details.get("formal_qualification_eligible") is not True
+                or len(str(details.get("formal_qualification_receipt_sha256", ""))) != 64
+            ):
+                raise ValueError(
+                    f"Production Python task lacks formal qualification proof: {manifest_path}"
+                )
         metadata.append(
             {
                 "treatment_order": order,
@@ -546,6 +592,7 @@ def build_response_frame(
         columns={
             "status": "control_design_status",
             "selected_method": "control_selection_method",
+            "donor_scope": "control_donor_scope",
             "failure_reason": "control_failure_reason",
         }
     )
@@ -575,7 +622,7 @@ def build_response_frame(
     mc = artifact["task_status"].eq("mc_labelled")
     mc_estimator_proof = (
         (pd.to_numeric(artifact["pre_observed_periods"], errors="coerce") >= 1)
-        & (pd.to_numeric(artifact["mc_lambda"], errors="coerce") > 0)
+        & (pd.to_numeric(artifact["mc_lambda"], errors="coerce") >= 0)
         & _finite(artifact["mc_cv_mspe"])
         & artifact["method"].astype("string").str.startswith("athey_2021_mc_", na=False)
     )
@@ -583,15 +630,27 @@ def build_response_frame(
     if invalid_mc.any():
         raise ValueError(
             "MC labels lack cross-validated estimator proof "
-            "(pre periods, positive lambda, finite CV MSPE, or method identity)"
+            "(pre periods, non-negative lambda, finite CV MSPE, or method identity)"
         )
     mc_minimal_pre_support = pd.to_numeric(artifact["pre_observed_periods"], errors="coerce") <= 1
-    same_city = artifact.get("donor_scope", pd.Series(index=artifact.index, dtype="object")).eq(
-        "same_city"
-    )
-    cross_city = artifact.get("donor_scope", pd.Series(index=artifact.index, dtype="object")).eq(
-        "all_city_standardized"
-    )
+    label_scope = artifact.get(
+        "donor_scope", pd.Series(index=artifact.index, dtype="object")
+    ).astype("string")
+    control_scope = artifact.get(
+        "control_donor_scope", pd.Series(index=artifact.index, dtype="object")
+    ).astype("string")
+    method_identity = artifact["method"].astype("string")
+    inferred_cross = method_identity.str.contains("all_city|cross_city", na=False)
+    inferred_same = method_identity.str.contains("same_city", na=False)
+    label_scope = label_scope.fillna(control_scope)
+    label_scope = label_scope.mask(inferred_cross, "all_city_standardized")
+    label_scope = label_scope.mask(inferred_same, "same_city")
+    artifact["donor_scope"] = label_scope
+    # Unlabelled skeleton rows legitimately have no donor scope.  They are
+    # neither same-city nor cross-city and must not leave nullable booleans in
+    # downstream training-mask operations.
+    same_city = label_scope.eq("same_city").fillna(False).astype(bool)
+    cross_city = label_scope.eq("all_city_standardized").fillna(False).astype(bool)
     # Same-city-first quality ordering: any same-city path ranks above any
     # cross-city path (matched > GSC > MC within each scope).
     artifact["quality_grade"] = np.select(
@@ -637,11 +696,7 @@ def build_response_frame(
     # Same-city-first main-specification marker: 1 for any same-city donor
     # scope, 0 for cross-city.  Cross-city labels are kept and trained on;
     # this column only distinguishes them in every downstream view.
-    artifact["main_spec"] = (
-        artifact.get("donor_scope", pd.Series(index=artifact.index, dtype="object"))
-        .eq("same_city")
-        .astype(int)
-    )
+    artifact["main_spec"] = same_city.astype(int)
     artifact["uncertainty_available"] = (
         _finite(artifact["standard_error"])
         & _finite(artifact["confidence_lower"])
@@ -653,6 +708,11 @@ def build_response_frame(
         & artifact["production_eligible"]
         & (~(gsc | mc) | artifact["uncertainty_available"])
     )
+    # The first-stage/main analysis excludes cross-city labels by design;
+    # retain a separate explicit extension mask so they remain auditable and
+    # can be selected deliberately instead of leaking into the default view.
+    artifact["main_training_mask"] = artifact["training_mask"] & same_city
+    artifact["cross_city_extension_mask"] = artifact["training_mask"] & cross_city
     artifact["failure_reason"] = artifact.get("task_failure_reason")
     missing_reason = artifact["failure_reason"].isna() & ~artifact["label_available"]
     artifact.loc[missing_reason, "failure_reason"] = np.where(
@@ -671,6 +731,10 @@ def build_response_frame(
         "label_rows_read": len(labels),
         "available_labels": int(artifact["label_available"].sum()),
         "training_labels": int(artifact["training_mask"].sum()),
+        "main_training_labels": int(artifact["main_training_mask"].sum()),
+        "cross_city_extension_labels": int(
+            artifact["cross_city_extension_mask"].sum()
+        ),
         "task_status_counts": family_queue["status"].value_counts(dropna=False).to_dict(),
         "quality_grade_counts": artifact["quality_grade"].value_counts(dropna=False).to_dict(),
     }

@@ -42,7 +42,7 @@ source(file.path(dirname(sys.frame(1)$ofile), "paths.R"), chdir = TRUE)
 
 complete_estimator_spec <- function() {
   list(
-    schema = "complete_published_estimators_v2_preonly_design",
+    schema = "complete_published_estimators_v3_explicit_deterministic_contracts",
     timing = list(
       opening_month_is_partial = TRUE,
       first_treated_month_offset = 1L,
@@ -64,12 +64,18 @@ complete_estimator_spec <- function() {
     ),
     abadie_imbens = list(
       estimand = "ATT", M = 1L, BiasAdjust = TRUE, replace = TRUE,
-      ties = TRUE, CommonSupport = TRUE, Weight = 2L, Var.calc = 1L
+      ties = TRUE, CommonSupport = TRUE, Weight = 2L, Var.calc = 1L,
+      # Matching's non-zero default expands the squared-distance boundary
+      # and can randomly discard genuine nearest neighbours when ties=FALSE.
+      distance.tolerance = 0
     ),
     xu_gsc = list(
       estimator = "gsynth", force = "two-way", CV = TRUE,
       criterion = "mspe", r = 0:5, min.T0 = 5L, se = TRUE,
       nboots = 200L, inference = "parametric", normalize = TRUE,
+      k = 5L, cv_method = "rolling", cv_prop = 0.1,
+      cv_nobs = 3L, cv_buffer = 1L, cv_rule = "1se",
+      tol = 1e-5, max.iteration = 5000L,
       cv_cores = .estimator_env_integer("MIT_GSC_CV_CORES", 1L),
       parallel_cv = .estimator_env_integer("MIT_GSC_CV_CORES", 1L) > 1L,
       bootstrap_cores = .estimator_env_integer("MIT_GSC_BOOTSTRAP_CORES", 1L),
@@ -78,7 +84,9 @@ complete_estimator_spec <- function() {
     mc = list(
       estimator = "mc", backend = "fect", force = "two-way",
       CV = TRUE, criterion = "mspe", nlambda = 20L,
+      k = 20L, cv_prop = 0.1, cv_rule = "1se",
       cv_method = "rolling", cv_nobs = 1L, cv_donut = 0L, cv_buffer = 0L,
+      tol = 1e-5, max.iteration = 5000L,
       two_stage_cv_inference = TRUE,
       min.T0 = 1L, max_donors = 2000L, se = TRUE, nboots = 200L,
       # The formal one-treated-unit MC specification uses jackknife
@@ -645,15 +653,51 @@ select_preonly_pairs <- function(prepared, matching_spec = complete_estimator_sp
   frame <- frame[keep]
   matrix_info$X <- matrix_info$X[keep, , drop = FALSE]
   if (!any(frame$Tr == 1L)) stop("No treated unit is inside explicit donor common support")
-  fit <- Matching::Match(
-    Y = NULL, Tr = frame$Tr, X = matrix_info$X,
-    estimand = matching_spec$estimand,
-    M = matching_spec$M, replace = matching_spec$replace,
-    # Matching 4.10-15 fails internally for a one-treated-unit risk set when
-    # CommonSupport=TRUE. Support is applied explicitly above using only X.
-    ties = matching_spec$ties, CommonSupport = FALSE,
-    Weight = matching_spec$Weight, BiasAdjust = FALSE, Var.calc = 0L
-  )
+  deterministic_exact <- !isTRUE(matching_spec$ties) &&
+    identical(as.numeric(matching_spec$distance.tolerance), 0) &&
+    identical(as.integer(matching_spec$Weight), 2L)
+  if (deterministic_exact) {
+    # Matching::Match randomly samples controls when an exact kth-distance tie
+    # remains and ties=FALSE.  The GPU contract instead freezes donor-row order;
+    # calculate the same Weight=2 Mahalanobis ranking directly on this design
+    # path so R references and GPU input-only runs have identical semantics.
+    treated_rows <- which(frame$Tr == 1L)
+    donor_rows <- which(frame$Tr == 0L)
+    inverse <- stable_covariance_inverse(matrix_info$X)$inverse
+    deterministic_pairs <- rbindlist(lapply(treated_rows, function(treated_row) {
+      delta <- sweep(
+        matrix_info$X[donor_rows, , drop = FALSE],
+        2L, matrix_info$X[treated_row, ], "-"
+      )
+      distance <- sqrt(pmax(rowSums((delta %*% inverse) * delta), 0))
+      selected <- head(
+        order(distance, donor_rows, method = "radix"),
+        min(as.integer(matching_spec$M), length(donor_rows))
+      )
+      data.table(
+        treated_row = rep.int(as.integer(treated_row), length(selected)),
+        control_row = as.integer(donor_rows[selected]),
+        pair_weight = rep.int(1 / length(selected), length(selected))
+      )
+    }))
+    fit <- list(
+      index.treated = deterministic_pairs$treated_row,
+      index.control = deterministic_pairs$control_row,
+      weights = deterministic_pairs$pair_weight,
+      deterministic_exact_ties = TRUE
+    )
+  } else {
+    fit <- Matching::Match(
+      Y = NULL, Tr = frame$Tr, X = matrix_info$X,
+      estimand = matching_spec$estimand,
+      M = matching_spec$M, replace = matching_spec$replace,
+      # Matching 4.10-15 fails internally for a one-treated-unit risk set when
+      # CommonSupport=TRUE. Support is applied explicitly above using only X.
+      ties = matching_spec$ties, CommonSupport = FALSE,
+      Weight = matching_spec$Weight, BiasAdjust = FALSE, Var.calc = 0L,
+      distance.tolerance = matching_spec$distance.tolerance
+    )
+  }
   if (!length(fit$index.treated) || !length(fit$index.control)) {
     stop("Matching::Match produced no pre-treatment pairs")
   }

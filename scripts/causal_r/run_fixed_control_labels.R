@@ -8,6 +8,10 @@ source(file.path("scripts", "causal_r", "fixed_control_label_lib.R"))
 args <- commandArgs(trailingOnly = TRUE)
 causal_run_id <- Sys.getenv("MIT_CAUSAL_RUN_ID", unset = "")
 specification_fingerprint <- Sys.getenv("MIT_SPECIFICATION_FINGERPRINT", unset = "")
+run_mode <- Sys.getenv("MIT_CAUSAL_RUN_MODE", unset = "production")
+if (!run_mode %in% c("production", "preview")) {
+  stop("MIT_CAUSAL_RUN_MODE must be production or preview")
+}
 if (length(args) < 4L || length(args) > 7L) {
   stop(paste(
     "Usage: run_fixed_control_labels.R TREATMENT_ORDER",
@@ -50,8 +54,8 @@ write_run_manifest(output, list(
   outcome_family = family,
   control_city_key = control_city_key,
   control_grid_id = control_grid_id,
-  run_mode = "production",
-  production_eligible = TRUE,
+  run_mode = run_mode,
+  production_eligible = identical(run_mode, "production"),
   window = window,
   price_measure = price_measure
 ))

@@ -34,13 +34,14 @@ python scripts/causal_r/run_robustness_checks.py --spatial-exclusion
 主规格 6 个月。敏感性：0 / 12 个月（`complete_estimator_spec()$timing`）。
 
 ```
-python scripts/causal_r/run_causal_label_queue.py \
+python scripts/causal_python/run_causal_label_queue.py \
   --start-order 1 --max-tasks 1 --anticipation-months 0
-python scripts/causal_r/run_causal_label_queue.py \
+python scripts/causal_python/run_causal_label_queue.py \
   --start-order 1 --max-tasks 1 --anticipation-months 12
 ```
 
 - 实现：`run_causal_label_queue.py --anticipation-months`
+<!-- 旧路径 scripts/causal_r/run_causal_label_queue.py 由兼容包装器保留。 -->
 - 判定：正式标签后对比 0/6/12 个月窗口的估计
 
 ## 3. 预处理窗口长度敏感性（已实现并可运行）

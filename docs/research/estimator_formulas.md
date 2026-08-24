@@ -147,7 +147,8 @@ SMD_j = (x̄_treated,j − x̄_control,j) / SD_donor,j
 ```
 同城匹配 → 同城 GSC → 同城 MC → 跨城匹配 → 跨城 GSC → 跨城 MC → skip
 ```
-实现：`grid_control_design_lib.R`、`run_causal_label_queue.py`。
+实现：R 参考设计 `grid_control_design_lib.R`、Python/GPU 正式入口
+`scripts/causal_python/run_causal_label_queue.py`。
 
 ---
 

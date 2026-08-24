@@ -24,7 +24,7 @@ from urban_intervention.data.paths import (
     STAGING_DIR,
     TREATMENT_DIR,
 )
-from urban_intervention.interventions.transit.station_names import (
+from urban_intervention.text import (
     normalize_station_name as _normalize_station_name,
 )
 

@@ -29,9 +29,9 @@ def main() -> int:
     parser.add_argument(
         "--scope-view",
         choices=("all", "same_city", "cross_city"),
-        default="all",
-        help="Restrict final_training_mask to a donor scope: all (default, "
-        "cross-city labels included), same_city (main-specification view), "
+        default="same_city",
+        help="Restrict final_training_mask to a donor scope: same_city (default, "
+        "main-specification view), all (cross-city labels included), "
         "or cross_city (extension-only view).",
     )
     parser.add_argument(

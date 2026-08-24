@@ -130,4 +130,32 @@ stopifnot(
   identical(aligned$housing_log_price[[4L]], 112)
 )
 
+# Exact kth-distance ties must not inherit Matching::Match's RNG-dependent
+# ties=FALSE sampling. The frozen grid-design contract uses donor row order.
+tie_frame <- data.table(
+  unit_id = 1:9,
+  unit_key = paste0("u", 1:9),
+  grid_id = paste0("g", 1:9),
+  role = c("treated", rep("donor", 8L)),
+  Tr = c(1L, rep(0L, 8L)),
+  x = c(0, rep(c(-1, 1), 4L))
+)
+tie_spec <- complete_estimator_spec()$abadie_imbens
+tie_spec$ties <- FALSE
+tie_spec$M <- 3L
+set.seed(1L)
+tie_first <- select_preonly_pairs(
+  list(frame = tie_frame, features = "x"), tie_spec,
+  match_features = "x", support_features = "x"
+)$pairs$control_row
+set.seed(99L)
+tie_second <- select_preonly_pairs(
+  list(frame = tie_frame, features = "x"), tie_spec,
+  match_features = "x", support_features = "x"
+)$pairs$control_row
+stopifnot(
+  identical(tie_first, 2:4),
+  identical(tie_second, tie_first)
+)
+
 cat("Grid-level frozen-control and 12-month baseline contracts passed.\n")

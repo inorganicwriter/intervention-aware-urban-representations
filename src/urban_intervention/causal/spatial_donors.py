@@ -25,6 +25,7 @@ from urban_intervention.data.paths import (
     RESOLVED_STATION_EVENTS,
     grid_path,
 )
+from urban_intervention.utils import require_columns
 
 GRID_COLUMNS = ("grid_id", "geometry_wkt")
 STATION_COLUMNS = (
@@ -76,12 +77,6 @@ class SpatialDonorSpec:
             raise ValueError("analysis_start_year must not exceed analysis_end_year")
         if self.distance_metric != "point_to_polygon_minimum":
             raise ValueError("DDR-001 requires point_to_polygon_minimum distance")
-
-
-def require_columns(frame: pd.DataFrame, columns: Iterable[str], label: str) -> None:
-    missing = sorted(set(columns) - set(frame.columns))
-    if missing:
-        raise ValueError(f"{label} is missing required columns: {missing}")
 
 
 def station_value(station: object, name: str, default: object) -> object:

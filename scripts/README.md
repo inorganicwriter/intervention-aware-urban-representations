@@ -1,12 +1,23 @@
 # Script entrypoints
 
-`scripts/` 只保存可重复运行的命令行入口。可复用逻辑应放在 `src/urban_intervention/`；正式计量逻辑集中在 `scripts/causal_r/`。
+<!-- GPU 迁移前的约定：正式计量逻辑与生产队列均集中在 scripts/causal_r/。 -->
 
-分层契约：**可复用、可测试逻辑 → `src/urban_intervention/`（pip install -e 安装的包，正式操作暴露为 `urban-*` console scripts）；正式生产队列 → `scripts/causal_r/`；一次性采集/审计 → `scripts/collection|labels|analysis/`。** 目录下的 Python 文件是薄入口（或 `python scripts/...py` 直接运行），不再定义领域逻辑；`scripts/` 内不得 import 同目录兄弟模块，一律走 `src` 包。
+`scripts/` 只保存可重复运行的命令行入口。可复用逻辑放在
+`src/urban_intervention/`；默认生产队列和事件研究入口位于
+`scripts/causal_python/`，GPU shadow/parity/资格工具位于
+`scripts/causal_gpu/`，`scripts/causal_r/` 保留经审计的 R 参考实现和部署兼容入口。
+
+分层契约：**可复用、可测试逻辑 → `src/urban_intervention/`；Python/GPU
+正式入口 → `scripts/causal_python/`；资格与 parity → `scripts/causal_gpu/`；
+R 学术参考 → `scripts/causal_r/`；一次性采集/审计 →
+`scripts/collection|labels|analysis/`。** 入口脚本应保持薄层；旧路径包装器可以
+导入规范入口，但不得复制第二套领域逻辑。
 
 | 目录 | 职责 | 是否可写正式结果 |
 |---|---|---|
-| `causal_r/` | 控制设计、PanelMatch、Abadie–Imbens、Xu GSC、生产队列和标签发布入口 | 是 |
+| `causal_python/` | 默认 `python_gpu` 控制/标签生产、GSC/MC 正式执行和三方法事件研究 | 是；production 需合格 parity receipt |
+| `causal_gpu/` | GPU shadow、R/Python parity、Matching 参考导出和资格凭证审计 | 否；只写不可晋升的 shadow/qualification 产物 |
+| `causal_r/` | PanelMatch、Abadie–Imbens、`gsynth`/`fect` 参考实现及兼容/部署包装器 | 仅显式 `r_reference` 或参考产物 |
 | `collection/` | 外部数据发现、下载、导入和来源特定解析 | 仅写 `raw/` 或 `staging/` |
 | `data/` | 固定处理清单、donor universe、处理前支持表 | 是，写 `data/active/causal/` |
 | `data_management/` | 数据迁移、快照、注册表与布局验证 | 是，但迁移必须先 dry-run |
@@ -17,7 +28,11 @@
 
 - 站点人工决议：`urban-resolve-stations`
 - 空间 donor 审计：`urban-spatial-donor-audit --city all`
-- 因果队列：`scripts/causal_r/run_grid_control_design_queue.py`、`scripts/causal_r/run_causal_label_queue.py`
+- 控制队列：`scripts/causal_r/run_grid_control_design_queue.py`（默认内部调用 Python/GPU 控制设计）
+- 因果标签队列：`scripts/causal_python/run_causal_label_queue.py`
+- 单任务 GSC/MC：`scripts/causal_python/run_formal_estimator.py`
+- 三方法事件研究：`scripts/causal_python/run_all_method_event_study.py`
+- GPU 资格：`scripts/causal_gpu/run_shadow_queue.py`、`scripts/causal_gpu/audit_formal_qualification.py`
 - Response Artifact：`scripts/causal_r/build_response_artifact.py`
 - 训练前数据集：`scripts/causal_r/build_pretraining_dataset.py`
 
@@ -30,7 +45,21 @@
 `scripts/train_representation.py`、`scripts/build_model_card.py`、`scripts/run_ablation.py`
 是保持向后兼容的薄包装，等价于对应 console script。
 
-更具体的运行顺序与环境变量见 [`causal_r/README.md`](causal_r/README.md)。
+生产资格和 GPU 命令见
+[`../src/urban_intervention/causal/gpu/README.md`](../src/urban_intervention/causal/gpu/README.md)；
+R 参考参数与部署环境见 [`causal_r/README.md`](causal_r/README.md)。
+
+<!-- 旧命令 `scripts/causal_r/run_causal_label_queue.py` 仍由兼容包装器支持。 -->
+
+## POI 面板入口
+
+- 全国 FileGDB 正式批处理：`scripts/collection/poi_batch_panel_builder.py`，核心为
+  `urban_intervention.pipelines.poi.batch`。
+- 单城重建、CSV 年份和定向回填：`scripts/collection/poi_panel_builder.py`，核心为
+  `urban_intervention.pipelines.poi.pipeline`。
+
+两者共享标准化和聚合模块，不是两套竞争的规范面板；全国常规生产默认使用
+batch 入口，单城入口只用于回填和诊断。
 
 ## 维护规则
 

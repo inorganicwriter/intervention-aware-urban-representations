@@ -445,7 +445,7 @@ Athey et al. (2021) 不设 donor 数量上限。项目实践中，`gsynth` 的 M
 | `scripts/causal_r/grid_control_design_lib.R` | 匹配特征构造、共同支持、Match 调用、placebo 校准、跨城标准化 |
 | `scripts/causal_r/fixed_control_label_lib.R` | 冻结控制身份后的标签生成 |
 | `scripts/causal_r/run_grid_control_design_queue.py` | 控制设计事务队列 |
-| `scripts/causal_r/run_causal_label_queue.py` | 标签生产事务队列和 GSC 路由 |
+| `scripts/causal_python/run_causal_label_queue.py` | 默认 Python/GPU 标签生产事务队列和 GSC/MC 路由 |
 | `scripts/causal_r/complete_estimators_lib.R` | 共享的数据读取、面板构造和估计器 spec |
 | `scripts/causal_r/run_complete_abadie_imbens.R` | 完整 Abadie-Imbens cohort ATT（独立估计器） |
 | `scripts/causal_r/run_complete_panelmatch.R` | 完整 PanelMatch（独立估计器） |

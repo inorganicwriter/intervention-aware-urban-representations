@@ -1,0 +1,8 @@
+component,version,role
+Python,3.11.7,example environment that completed local validation
+numpy,1.26.4,numerical arrays
+pandas,2.3.2,artifact tables
+pyarrow,20.0.0,Parquet contracts
+torch,2.11.0+cu130,GPU numerical backend
+CUDA runtime,13.0,example PyTorch bundled runtime; qualification receipt is authoritative
+cuDNN,9.19.0,example recorded runtime dependency; qualification receipt is authoritative

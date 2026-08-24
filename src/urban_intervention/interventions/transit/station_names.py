@@ -1,17 +1,11 @@
-"""Canonical station-name normalization shared by all transit modules."""
+"""Compatibility import for canonical station-name normalization.
+
+The implementation lives in :mod:`urban_intervention.text` so the configuration
+layer does not depend on the transit domain package.
+"""
 
 from __future__ import annotations
 
-import re
+from urban_intervention.text import normalize_station_name
 
-
-def normalize_station_name(value: object) -> str:
-    """Return the frozen cross-source station-name matching key."""
-    text = str(value).strip() if value is not None else ""
-    if not text:
-        return ""
-    text = re.sub(r"站?[（(][^）)]*[）)]", "", text)
-    text = text.translate(str.maketrans("", "", "（）()"))
-    text = text.replace("·", "").replace("-", "")
-    text = text.removesuffix("站").removesuffix("路")
-    return re.sub(r"\s+", "", text).lower()
+__all__ = ["normalize_station_name"]

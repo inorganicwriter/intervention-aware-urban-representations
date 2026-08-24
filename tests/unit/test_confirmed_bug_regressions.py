@@ -126,7 +126,7 @@ def test_poi_year_filter_refuses_to_overwrite_backup(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "relative_path",
     [
-        "scripts/causal_r/run_causal_label_queue.py",
+        "scripts/causal_python/run_causal_label_queue.py",
         "scripts/causal_r/run_grid_control_design_queue.py",
         "scripts/collection/ensure_viirs_monthly_cache.py",
         "scripts/collection/package_streetview.py",

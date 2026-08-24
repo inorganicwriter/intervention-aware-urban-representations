@@ -217,7 +217,8 @@ MIT_VIIRS_RAW VIIRS 原始月度根目录
 - PanelMatch：`scripts/causal_r/run_complete_panelmatch.R`；
 - Abadie–Imbens：`scripts/causal_r/run_complete_abadie_imbens.R`；
 - Xu GSC：`scripts/causal_r/run_complete_xu_gsc.R`；
-- 事务队列：`scripts/causal_r/run_*_queue.py`；
+- 事务队列：控制入口保留在 `scripts/causal_r/run_grid_control_design_queue.py`，
+  标签入口为 `scripts/causal_python/run_causal_label_queue.py`；
 - Response Artifact：`src/urban_intervention/causal/response_artifact.py`；
 - 训练前数据：`src/urban_intervention/causal/pretraining_dataset.py`。
 

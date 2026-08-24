@@ -1,7 +1,7 @@
 """Parallel production launcher for the causal-label pipeline.
 
-Phase 1: Control design (parallel via R processes)
-Phase 2: Causal labels (sharded orchestrator instances)
+Phase 1: Control design (parallel Python/GPU workers by default)
+Phase 2: Causal labels (one Python/GPU shard per GPU by default)
 Phase 3: Merge shard queues back to master queue
 
 Usage:
@@ -28,7 +28,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -38,16 +37,19 @@ import pandas as pd
 CODE_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(CODE_ROOT / "src"))
 
+from urban_intervention.causal.gpu.qualification import (  # noqa: E402
+    validate_formal_qualification_receipt,
+)
 from urban_intervention.data.paths import (  # noqa: E402
-    CAUSAL_DIR,
     CONTROL_DESIGN_QUEUE,
     COUNTERFACTUAL_QUEUE,
     OUTCOME_FAMILY_QUEUE,
-    R_LIB_DIR,
     PROJECT_ROOT,
+    R_LIB_DIR,
     TREATMENT_UNIT_LIST,
     r_script,
 )
+from urban_intervention.utils import atomic_write_csv  # noqa: E402
 
 R_SCRIPT = os.environ.get("MIT_RSCRIPT", "Rscript")
 R_LIB = Path(os.environ.get("MIT_R_LIB", str(R_LIB_DIR)))
@@ -55,24 +57,23 @@ VIIRS_RAW = os.environ.get("MIT_VIIRS_RAW")
 ROOT = PROJECT_ROOT
 
 
-def atomic_write_csv(frame: pd.DataFrame, path: Path) -> None:
-    """Write a CSV via temp file + os.replace so readers never see a partial file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix=path.stem + ".", suffix=".tmp", dir=str(path.parent))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8-sig", newline="") as fh:
-            frame.to_csv(fh, index=False)
-        os.replace(tmp_name, path)
-    except BaseException:
-        os.unlink(tmp_name)
-        raise
+# The deployment server has four GPUs.  One formal estimator process per GPU
+# avoids bootstrap/jackknife jobs competing for the same device memory.
+DEFAULT_GPU_IDS = "0,1,2,3"
+DEFAULT_SHARD_COUNT = 4
+DEFAULT_CONTROL_WORKERS = 4
 
 
-# Safe defaults for the sample release.  Estimator-level parallelism is
-# configured separately so outer queue workers do not silently multiply R
-# workers.
-DEFAULT_SHARD_COUNT = 8
-DEFAULT_CONTROL_WORKERS = 8
+def parse_gpu_ids(value: str) -> list[str]:
+    """Parse a comma-separated list of non-negative CUDA device indices."""
+    gpu_ids = [item.strip() for item in value.split(",") if item.strip()]
+    if not gpu_ids:
+        raise ValueError("at least one GPU id is required")
+    if any(not item.isdigit() for item in gpu_ids):
+        raise ValueError("GPU ids must be comma-separated non-negative integers")
+    if len(set(gpu_ids)) != len(gpu_ids):
+        raise ValueError("GPU ids must not contain duplicates")
+    return gpu_ids
 
 
 def read_orders_file(path: Path) -> list[int]:
@@ -132,7 +133,10 @@ def phase1_control_design(
     dry_run: bool,
     workers: int = DEFAULT_CONTROL_WORKERS,
     orders_file: Path | None = None,
+    estimator_backend: str = "python_gpu",
+    gpu_ids: list[str] | None = None,
     env: dict[str, str] | None = None,
+    force_recompute: bool = False,
 ) -> None:
     """Run control design for the selected treatment orders."""
     print("=" * 60)
@@ -146,6 +150,8 @@ def phase1_control_design(
         "1",
         "--workers",
         str(workers),
+        "--estimator-backend",
+        estimator_backend,
     ]
     if orders_file is not None:
         cmd.extend(["--orders-file", str(orders_file)])
@@ -153,9 +159,13 @@ def phase1_control_design(
         cmd.extend(["--max-units", "5048"])
     if dry_run:
         cmd.append("--dry-run")
+    if force_recompute:
+        cmd.append("--retry")
 
     env = env or os.environ.copy()
     env["R_LIBS_USER"] = str(R_LIB)
+    if estimator_backend == "python_gpu" and gpu_ids:
+        env["MIT_CAUSAL_GPU_IDS"] = ",".join(gpu_ids)
     start = time.time()
     result = subprocess.run(
         cmd, cwd=str(ROOT), env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
@@ -179,7 +189,13 @@ def phase2_causal_labels(
     queue_phase: str = "all",
     retry_matching: bool = False,
     reset_shards: bool = False,
+    estimator_backend: str = "python_gpu",
+    gpu_ids: list[str] | None = None,
     env: dict[str, str] | None = None,
+    qualification_receipt: Path | None = None,
+    max_gsc_cross_city_donors: int = 50_000,
+    gsc_donor_sampling_seed: int = 20260823,
+    transaction_count_threshold: int = 1,
 ) -> None:
     """Launch shard workers for the selected treatment-order sample."""
     print("=" * 60)
@@ -288,7 +304,7 @@ def phase2_causal_labels(
     for shard_id in range(shard_count):
         cmd = [
             sys.executable,
-            str(r_script("run_causal_label_queue.py")),
+            str(ROOT / "scripts" / "causal_python" / "run_causal_label_queue.py"),
             "--shard-id",
             str(shard_id),
             "--shard-count",
@@ -305,6 +321,14 @@ def phase2_causal_labels(
             run_mode,
             "--phase",
             queue_phase,
+            "--estimator-backend",
+            estimator_backend,
+            "--max-gsc-cross-city-donors",
+            str(max_gsc_cross_city_donors),
+            "--gsc-donor-sampling-seed",
+            str(gsc_donor_sampling_seed),
+            "--transaction-count-threshold",
+            str(transaction_count_threshold),
         ]
         if orders_file is not None:
             cmd.extend(["--orders-file", str(orders_file)])
@@ -312,19 +336,32 @@ def phase2_causal_labels(
             cmd.extend(["--tasks-file", str(tasks_file)])
         if retry_matching:
             cmd.append("--retry-matching")
+        if qualification_receipt is not None:
+            cmd.extend(["--qualification-receipt", str(qualification_receipt)])
         if dry_run:
             cmd.append("--dry-run")
+
+        shard_env = env.copy()
+        if estimator_backend == "python_gpu" and gpu_ids:
+            gpu_id = gpu_ids[shard_id % len(gpu_ids)]
+            shard_env["MIT_CAUSAL_DEVICE"] = f"cuda:{gpu_id}"
+            device_note = f", cuda:{gpu_id}"
+        else:
+            device_note = ""
 
         proc = subprocess.Popen(
             cmd,
             cwd=str(ROOT),
-            env=env,
+            env=shard_env,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
         )
         processes.append((shard_id, proc))
-        print(f"  Launched shard {shard_id + 1}/{shard_count} (PID {proc.pid})")
+        print(
+            f"  Launched shard {shard_id + 1}/{shard_count} "
+            f"(PID {proc.pid}{device_note})"
+        )
 
     # Wait for all shards
     print(f"\n  Waiting for {shard_count} shards to complete...")
@@ -549,7 +586,46 @@ def main() -> int:
         "--workers",
         type=int,
         default=DEFAULT_CONTROL_WORKERS,
-        help=f"Control-design R workers (default: {DEFAULT_CONTROL_WORKERS})",
+        help=f"Control-design workers (default: {DEFAULT_CONTROL_WORKERS})",
+    )
+    parser.add_argument(
+        "--estimator-backend",
+        choices=("python_gpu", "r_reference"),
+        default="python_gpu",
+        help="Python/GPU production backend or explicit R reference fallback.",
+    )
+    parser.add_argument(
+        "--qualification-receipt",
+        type=Path,
+        default=(
+            Path(os.environ["MIT_CAUSAL_QUALIFICATION_RECEIPT"])
+            if os.environ.get("MIT_CAUSAL_QUALIFICATION_RECEIPT")
+            else None
+        ),
+        help="Eligible R/Python parity audit receipt required for production Python labels.",
+    )
+    parser.add_argument(
+        "--max-gsc-cross-city-donors",
+        type=int,
+        default=50_000,
+        help="Pre-outcome deterministic cap for cross-city GSC donors.",
+    )
+    parser.add_argument(
+        "--gsc-donor-sampling-seed",
+        type=int,
+        default=20260823,
+        help="Fixed donor-sampling seed recorded in the formal specification.",
+    )
+    parser.add_argument(
+        "--transaction-count-threshold",
+        type=int,
+        default=1,
+        help="Minimum transactions per housing grid-month; use sensitivity runs before changing it.",
+    )
+    parser.add_argument(
+        "--gpu-ids",
+        default=DEFAULT_GPU_IDS,
+        help=f"Comma-separated CUDA device indices (default: {DEFAULT_GPU_IDS}).",
     )
     parser.add_argument(
         "--orders-file",
@@ -600,23 +676,25 @@ def main() -> int:
         "--gsc-cv-cores",
         type=int,
         default=1,
-        help="R cores per GSC factor-selection fit (default: 1)",
+        help="R-reference cores per GSC factor-selection fit (default: 1)",
     )
     parser.add_argument(
         "--gsc-bootstrap-cores",
         type=int,
         default=1,
-        help="R cores per GSC bootstrap fit (default: 1)",
+        help="R-reference cores per GSC bootstrap fit (default: 1)",
     )
     parser.add_argument(
         "--mc-cores",
         type=int,
         default=1,
-        help="R cores per MC fit (default: 1)",
+        help="R-reference cores per MC fit (default: 1)",
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
-        "--reset-queues", action="store_true", help="Re-run R queue reset scripts before starting"
+        "--reset-queues",
+        action="store_true",
+        help="Rebuild formal inputs/support and reset queues with the selected backend.",
     )
     args = parser.parse_args()
 
@@ -628,6 +706,31 @@ def main() -> int:
         parser.error("--window must be in 1..6")
     if args.anticipation_months < 0:
         parser.error("--anticipation-months must be non-negative")
+    if args.max_gsc_cross_city_donors < 20:
+        parser.error("--max-gsc-cross-city-donors must be at least 20")
+    if args.transaction_count_threshold < 1:
+        parser.error("--transaction-count-threshold must be positive")
+    try:
+        gpu_ids = parse_gpu_ids(args.gpu_ids)
+    except ValueError as exc:
+        parser.error(str(exc))
+    if args.estimator_backend == "python_gpu" and args.shard_count > len(gpu_ids):
+        parser.error(
+            "Python/GPU production allows at most one shard per GPU; "
+            "reduce --shard-count or add --gpu-ids."
+        )
+    qualification_receipt = args.qualification_receipt
+    if qualification_receipt is not None:
+        qualification_receipt = qualification_receipt.resolve()
+    if (
+        args.estimator_backend == "python_gpu"
+        and args.run_mode == "production"
+        and not args.dry_run
+        and (args.run_all or args.phase == 2)
+    ):
+        if qualification_receipt is None:
+            parser.error("production Python labels require --qualification-receipt")
+        validate_formal_qualification_receipt(qualification_receipt)
 
     if args.orders_file is not None and args.tasks_file is not None:
         parser.error("--orders-file and --tasks-file are mutually exclusive")
@@ -659,25 +762,33 @@ def main() -> int:
         parser.error("Specify --phase, --run-all, or both phases separately")
 
     if args.reset_queues:
-        env = os.environ.copy()
-        env["R_LIBS_USER"] = str(R_LIB)
-        for script in [
-            r_script("reset_counterfactual_queues.R"),
-            r_script("build_formal_matching_inputs.R"),
-            r_script("audit_formal_target_support.R"),
-        ]:
-            print(f"  Running {script} ...")
+        if args.estimator_backend == "python_gpu":
+            setup_commands = [
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "causal_python" / "prepare_causal_inputs.py"),
+                    "--all",
+                ]
+            ]
+        else:
+            setup_commands = [
+                [R_SCRIPT, str(r_script("reset_counterfactual_queues.R"))],
+                [R_SCRIPT, str(r_script("build_formal_matching_inputs.R"))],
+                [R_SCRIPT, str(r_script("audit_formal_target_support.R"))],
+            ]
+        for command in setup_commands:
+            print(f"  Running {' '.join(command)} ...")
             result = subprocess.run(
-                [R_SCRIPT, str(script)],
+                command,
                 cwd=str(ROOT),
-                env=env,
+                env=estimator_env,
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
             )
             print(result.stdout[-500:] if result.stdout else "(no output)")
             if result.returncode != 0:
-                raise RuntimeError(f"Reset script failed: {script}")
+                raise RuntimeError(f"Causal input setup failed: {' '.join(command)}")
 
     phases = [args.phase] if args.phase else [1, 2, 3]
     start = time.time()
@@ -688,7 +799,10 @@ def main() -> int:
                 args.dry_run,
                 workers=args.workers,
                 orders_file=orders_file,
+                estimator_backend=args.estimator_backend,
+                gpu_ids=gpu_ids,
                 env=estimator_env,
+                force_recompute=args.reset_queues,
             )
         elif phase == 2:
             phase2_causal_labels(
@@ -703,7 +817,13 @@ def main() -> int:
                 queue_phase=args.queue_phase,
                 retry_matching=args.retry_matching,
                 reset_shards=args.reset_queues,
+                estimator_backend=args.estimator_backend,
+                gpu_ids=gpu_ids,
                 env=estimator_env,
+                qualification_receipt=qualification_receipt,
+                max_gsc_cross_city_donors=args.max_gsc_cross_city_donors,
+                gsc_donor_sampling_seed=args.gsc_donor_sampling_seed,
+                transaction_count_threshold=args.transaction_count_threshold,
             )
         elif phase == 3:
             phase3_merge_shards(

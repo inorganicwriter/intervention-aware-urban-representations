@@ -9,6 +9,7 @@ import pytest
 from urban_intervention.causal.response_artifact import (
     ArtifactInputs,
     build_response_frame,
+    collect_task_products,
     git_state,
     publish_response_artifact,
     require_reproducible_code_state,
@@ -146,6 +147,8 @@ def test_response_artifact_preserves_expected_failures_and_quality(tmp_path: Pat
     assert set(matched.quality_grade) == {"matched_same_city_pass"}
     assert set(gsc.quality_grade) == {"gsc_same_city_pass"}
     assert not unavailable.training_mask.any()
+    assert not unavailable.main_training_mask.any()
+    assert not unavailable.cross_city_extension_mask.any()
     assert set(unavailable.failure_reason) == {"no_outcome_support"}
     assert diagnostics["training_labels"] == 6
 
@@ -162,7 +165,8 @@ def test_response_artifact_accepts_cross_validated_mc_labels(tmp_path: Path) -> 
     labels["method"] = "athey_2021_mc_same_city"
     labels["pre_observed_periods"] = 1
     labels["pre_rmspe"] = 0.1
-    labels["mc_lambda"] = 0.25
+    labels["mc_lambda"] = 0.0
+    labels["mc_regularized"] = False
     labels["mc_cv_mspe"] = 0.05
     labels["uncertainty_source"] = "mc_nonparametric_bootstrap"
     labels.to_parquet(label_path, index=False)
@@ -180,10 +184,39 @@ def test_response_artifact_accepts_cross_validated_mc_labels(tmp_path: Path) -> 
     assert mc.training_mask.all()
     assert mc.uncertainty_available.all()
     assert set(mc.quality_grade) == {"mc_same_city_minimal_pre_support"}
-    assert set(mc.mc_lambda) == {0.25}
+    assert set(mc.mc_lambda) == {0.0}
+    assert not mc.mc_regularized.any()
     task_status_counts = diagnostics["task_status_counts"]
     assert isinstance(task_status_counts, dict)
     assert task_status_counts["mc_labelled"] == 1
+
+
+def test_response_artifact_infers_cross_city_scope_from_task_method(tmp_path: Path) -> None:
+    inputs = _fixture(tmp_path)
+    directory = inputs.task_root / "00002" / "population"
+    label_path = directory / "labels.parquet"
+    labels = pd.read_parquet(label_path)
+    labels["method"] = "xu_2017_gsynth_all_city_standardized"
+    labels["donor_scope"] = "all_city_standardized"
+    labels["transaction_count"] = [1, 2, 3]
+    labels.to_parquet(label_path, index=False)
+    manifest_path = directory / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["labels_sha256"] = sha256_file(label_path)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    artifact, diagnostics, _ = build_response_frame(
+        inputs, "main_a6_r1km", strict_production=False, workers=1
+    )
+    cross = artifact[
+        (artifact.treatment_order == 2) & (artifact.outcome_family == "population")
+    ]
+    assert set(cross.donor_scope) == {"all_city_standardized"}
+    assert not cross.main_spec.any()
+    assert not cross.main_training_mask.any()
+    assert cross.cross_city_extension_mask.all()
+    assert cross.transaction_count.tolist() == [1, 2, 3]
+    assert diagnostics["cross_city_extension_labels"] == 3
 
 
 def test_response_artifact_rejects_mc_status_without_estimator_proof(tmp_path: Path) -> None:
@@ -235,6 +268,35 @@ def test_production_release_refuses_small_or_unfinished_queue(tmp_path: Path) ->
     inputs = _fixture(tmp_path)
     with pytest.raises(ValueError, match="5,048"):
         build_response_frame(inputs, "main_a6_r1km", strict_production=True)
+
+
+def test_strict_task_collection_rejects_unqualified_python_manifest(
+    tmp_path: Path,
+) -> None:
+    inputs = _fixture(tmp_path)
+    treatments = pd.read_parquet(inputs.treatments)
+    family_queue = pd.read_csv(inputs.family_queue)
+    for order in (1, 2):
+        directory = inputs.task_root / f"{order:05d}" / "population"
+        label_path = directory / "labels.parquet"
+        labels = pd.read_parquet(label_path)
+        labels["estimator_backend"] = "python_gpu"
+        labels["implementation_version"] = "python-causal-v3"
+        labels.to_parquet(label_path, index=False)
+        manifest_path = directory / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["details"] = {"run_id": f"run-{order}"}
+        manifest["labels_sha256"] = sha256_file(label_path)
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="qualification proof"):
+        collect_task_products(
+            family_queue,
+            treatments,
+            inputs.task_root,
+            "main_a6_r1km",
+            strict_production=True,
+            workers=1,
+        )
 
 
 def test_response_artifact_rejects_labels_swapped_between_task_directories(

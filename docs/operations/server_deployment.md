@@ -6,11 +6,11 @@
 
 | 资源 | 建议 | 说明 |
 |---|---|---|
-| CPU | ≥ 32 核 | Phase 1/2 并行 R 估计器与 VIIRS 缓存校验 |
+| CPU | ≥ 32 核 | 数据读取、面板构建与 VIIRS 缓存校验 |
 | 内存 | ≥ 64 GB | PanelMatch 16k+ donor 基准单任务 >10 分钟 |
 | 磁盘 | ≥ 120 GB | `data/` 约 17 GB + VIIRS 原始月度数据 + outputs |
-| GPU | 可选 | 训练表示模型时使用（`--device cuda`）；无 GPU 自动回退 CPU |
-| OS | Linux (Ubuntu 22.04+) | R 4.6.1 与 Python 3.11 |
+| GPU | 4 × RTX 4090 | 因果估计默认一张卡一个 Python 进程；训练另行调度 |
+| OS | Linux (Ubuntu 22.04+) | Python 3.11；R 仅作参考验证 |
 
 ## 2. 传输清单
 
@@ -67,12 +67,11 @@ python -c "import sys; assert sys.version_info[:2] == (3, 11)"
 
 ### 重要：torch 必须安装 CUDA 版本
 
-`environment.yml` / `pyproject.toml` 的 `torch>=2.0` 默认解析为 CPU wheel。
-服务器有 GPU 时必须在装 torch 后显式替换为 CUDA 版（以 cu121 为例，按服务器 CUDA 驱动选）：
+`environment.yml` / `pyproject.toml` 的 `torch>=2.0` 可能解析为 CPU wheel。
+服务器必须按 PyTorch 官方安装选择器安装与驱动兼容的 CUDA wheel，再做硬门禁：
 
 ```bash
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-python -c "import torch; print(torch.cuda.is_available())"   # 期望 True
+python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.device_count()); assert torch.cuda.is_available(); assert torch.cuda.device_count() == 4"
 ```
 
 ### playwright（仅采集脚本需要）
@@ -81,7 +80,10 @@ python -c "import torch; print(torch.cuda.is_available())"   # 期望 True
 playwright install chromium
 ```
 
-## 4. R 环境（4.6.1）
+## 4. R 参考环境（可选）
+
+Python/GPU 是输入初始化、控制设计与正式标签队列的默认后端。仅在运行
+`--estimator-backend r_reference` 或 R/Python 一致性审计时需要 R。
 
 两种方式：
 
@@ -114,6 +116,7 @@ export MIT_RSCRIPT="$(command -v Rscript)"
 export MIT_R_LIB="$(pwd)/.r-lib"
 export MIT_VIIRS_RAW="/data/VIIRS/monthly"  # 原始月度 VIIRS 根目录（44 城 2012-01~2024-12）
 export MIT_CAUSAL_RUN_ID="$(date +%Y%m%d%H%M%S)"   # 可选：任务级 run-id 溯源
+export MIT_CAUSAL_GPU_IDS="0,1,2,3"                 # Phase 1 worker 分卡
 ```
 
 `config.yaml`：复制 `config.yaml.template` 并填入高德/百度密钥；GEE 使用
@@ -129,11 +132,17 @@ earthengine authenticate           # 交互式
 
 ```bash
 conda run -n mit python scripts/data_management/validate_registry.py
-conda run -n mit python -m pytest -q                  # 本地基线 230 passed
-Rscript tests/causal_r/test_complete_estimators.R
+conda run -n mit python -m pytest -q
+# 仅在维护 R 参考后端时：Rscript tests/causal_r/test_complete_estimators.R
 ```
 
 ## 7. 生产运行序列
+
+完全不调用 R 的输入重建入口如下；并行器的 `--reset-queues` 会自动执行同一流程：
+
+```bash
+conda run -n mit python scripts/causal_python/prepare_causal_inputs.py --all
+```
 
 ### 7.1 VIIRS 月度缓存（控制设计前置，先于一切）
 
@@ -151,8 +160,10 @@ conda run -n mit python scripts/causal_r/run_grid_control_design_queue.py --prep
 conda run -n mit python scripts/causal_r/run_grid_control_design_queue.py --start-order 1 --max-units 10 --dry-run
 
 # 结果族任务（5,048 × 4 family = 20,192 任务）
-conda run -n mit python scripts/causal_r/run_causal_label_queue.py --start-order 1 --max-tasks 4 --dry-run
+conda run -n mit python scripts/causal_python/run_causal_label_queue.py --start-order 1 --max-tasks 4 --dry-run
 ```
+
+<!-- GPU 迁移前命令使用 scripts/causal_r/run_causal_label_queue.py；兼容包装器仍可执行。 -->
 
 canary 审核通过前不要启动全量。2026-08-10 两阶段匹配 canary 已验证
 （orders 1–10 正确路由 GSC；orders 906–915 中 3/10 同城匹配、order 906
@@ -165,13 +176,15 @@ canary 审核通过前不要启动全量。2026-08-10 两阶段匹配 canary 已
 
 ```bash
 conda run -n mit python scripts/causal_r/run_parallel_production.py \
-  --run-all --reset-queues --shard-count 8 --workers 8
+  --run-all --reset-queues --estimator-backend python_gpu \
+  --gpu-ids 0,1,2,3 --shard-count 4 --workers 4
 ```
 
-- `8` 是当前内存友好的默认并行度：8 个标签分片和 8 个控制设计 worker。
-  估计器内部的核心数另行配置，不要把外层 worker 数与 R 内部并行度相乘到超出服务器内存。
+- `4` 是四卡服务器的安全默认并行度：一张卡对应一个控制设计 worker 或标签分片。
+- 启动器会拒绝 `shard-count > GPU 数量`，避免正式 bootstrap/jackknife 在同一卡争抢显存。
 - Phase 1 控制设计 → Phase 2 因果标签（分片并行，可断点续跑）→ Phase 3 合并回 master 队列。
 - 中途中断后重跑同命令（不带 `--reset-queues` 保留进度）即可续跑。
+- GSC 控制面板秩选择和完全相同 MC 面板的 lambda 选择使用内容寻址缓存；配置、实现版本或决定调参的单元格变化会自动失效。
 
 ### 7.4 发布标签与训练前数据（全部任务终态后）
 
@@ -209,8 +222,9 @@ conda run -n mit urban-train-representation \
 | 现象 | 处理 |
 |---|---|
 | `ModuleNotFoundError: urban_intervention` | 未 `pip install -e .`，或 PYTHONPATH 未含 `src/` |
-| R 门禁失败（gsynth/fect 版本） | 用 Dockerfile.R 重建包库，或核对 RUNTIME_LOCK.csv 版本 |
+| R 参考门禁失败（gsynth/fect 版本） | 仅影响 `r_reference` 审计；用 Dockerfile.R 重建并核对 RUNTIME_LOCK.csv |
 | VIIRS 缓存缺失对 | 先跑 `--prepare-viirs-cache-only`；严禁静默跳过 |
 | torch.cuda.is_available() = False | 用 `--index-url` 重装 CUDA wheel |
+| 所有任务只占用 GPU 0 | 使用并行启动器并传 `--gpu-ids 0,1,2,3 --shard-count 4` |
 | 发布会拒绝 `unknown` 代码版本 | 保持源码树完整传输（tree-sha256 校验） |
 | 队列卡住 | 检查 `data/active/causal/queues/` 状态与任务目录日志；断点续跑即可 |

@@ -49,7 +49,10 @@ def test_batch_recovery_reads_each_durable_control_record(tmp_path: Path, monkey
             "status": ["matched"],
             "control_grid_id": ["g00001x00001"],
             "failure_reason": [pd.NA],
-            "viirs_cache_contract": [MODULE.VIIRS_CACHE_CONTRACT],
+                "viirs_cache_contract": [MODULE.VIIRS_CACHE_CONTRACT],
+                "schema": [MODULE.CONTROL_DESIGN_SCHEMA],
+                "implementation_version": ["r-reference-grid-v3"],
+                "backend": ["r_matching"],
         }
     ).to_csv(directory / "control_record.csv", index=False)
 
@@ -81,4 +84,32 @@ def test_monthly_viirs_cache_contract_requires_parquet_and_audit(tmp_path: Path)
 def test_legacy_durable_record_without_viirs_contract_is_rejected() -> None:
     record = pd.Series({"treatment_order": 7, "status": "matched"})
     with pytest.raises(ValueError, match="complete monthly VIIRS cache contract"):
-        MODULE.validate_durable_record(record, 7)
+        MODULE.validate_durable_record(record, 7, "r_reference")
+
+
+def test_stale_matching_schema_is_rejected() -> None:
+    record = pd.Series(
+        {
+            "treatment_order": 7,
+            "status": "matched",
+            "viirs_cache_contract": MODULE.VIIRS_CACHE_CONTRACT,
+            "schema": "grid_control_design_v1",
+        }
+    )
+    with pytest.raises(ValueError, match="stale matching schema"):
+        MODULE.validate_durable_record(record, 7, "r_reference")
+
+
+def test_durable_record_from_other_backend_is_rejected() -> None:
+    record = pd.Series(
+        {
+            "treatment_order": 7,
+            "status": "matched",
+            "viirs_cache_contract": MODULE.VIIRS_CACHE_CONTRACT,
+            "schema": MODULE.CONTROL_DESIGN_SCHEMA,
+            "implementation_version": "r-reference-grid-v3",
+            "backend": "r_matching",
+        }
+    )
+    with pytest.raises(ValueError, match="does not match requested"):
+        MODULE.validate_durable_record(record, 7, "python_gpu")

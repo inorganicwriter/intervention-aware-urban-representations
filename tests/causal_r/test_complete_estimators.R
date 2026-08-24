@@ -77,7 +77,8 @@ balance_text <- capture.output(ai_balance <- MatchBalance(
   paired = FALSE, print.level = 1
 ))
 stopifnot(
-  length(ai$index.treated) > 0L, is.finite(ai$est), is.finite(ai$se.standard),
+  length(ai$index.treated) > 0L, is.finite(ai$est), is.finite(ai$se),
+  is.finite(ai$se.standard),
   length(balance_text) > 0L, !is.null(ai_balance)
 )
 

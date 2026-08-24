@@ -1,5 +1,34 @@
 # Complete causal estimators
 
+> Production backend update: Matching control design, Matching labels, GSC and
+> MC now run through the Python/PyTorch implementation by default. The R
+> runners documented below remain the frozen reference implementation for
+> parity and sensitivity audits. Select them explicitly with
+> `--estimator-backend r_reference`.
+
+Four-GPU production entry point:
+
+```text
+python scripts/causal_r/run_parallel_production.py --run-all --reset-queues \
+  --estimator-backend python_gpu --gpu-ids 0,1,2,3 \
+  --qualification-receipt outputs/causal_gpu/formal_qualification.json \
+  --shard-count 4 --workers 4
+```
+
+Python production is fail-closed until the shadow queue has run with
+`--formal-qualification`, generated passing Matching/GSC/MC point and inference
+comparisons, and `audit_formal_qualification.py` has issued a receipt.
+Matching qualification compares both control-design outputs and final
+fixed-control label paths. The qualification queue samples three tasks per
+estimator by default; use `--max-tasks-per-estimator` to change that count.
+Preview runs and explicit `r_reference` runs do not require that receipt.
+GSC/MC inference qualification uses unwindowed (`--window 1`) R reference
+labels; formal Python moving windows are reconstructed from joint replicate
+paths rather than marginal standard errors.
+After the receipt is issued, the default production queue and pooled
+event-study workflow are Python-only; R remains an explicit audit/reference
+backend rather than a per-task runtime dependency.
+
 The production estimators are specified in
 `docs/research/decisions/DDR-003_complete_published_estimators.md`.
 They are independent estimators; they are not components of a single hybrid
@@ -74,9 +103,11 @@ as a credible matched label.
 
 ## Xu generalized synthetic control
 
-This runner calls `gsynth()` with two-way effects, MSPE cross-validation over
-`r=0:5`, `min.T0=5`, and 200 parametric bootstrap replications. It uses every
-same-city donor with a complete outcome path and applies no donor cap.
+This runner implements the Xu GSC specification through `fect::fect()` and
+preserves a gsynth-compatible result class for downstream readers. It uses
+two-way effects, MSPE cross-validation over `r=0:5`, `min.T0=5`, and 200
+parametric bootstrap replications. Formal manifests record both the actual
+`fect` backend/version and the `gsynth` compatibility version.
 
 ```powershell
 & $rscript scripts/causal_r/run_complete_xu_gsc.R xiamen 2019 population population+viirs annual
@@ -87,6 +118,12 @@ city-month cache partitions, preserves finite negative radiance, and uses an
 `asinh` transform. GSC donor admission is based only on complete clean
 pre-treatment paths; normalized output is keyed by treatment order and event
 time.
+
+For the 3,771,800-unit all-city donor universe, Python GSC applies a
+pre-outcome stable-hash sample (default 50,000, seed 20260823) before reading
+outcome panels. The cap and seed are included in the specification fingerprint;
+same-city GSC is uncapped, and cross-city cap sensitivity remains a required
+robustness check.
 
 The runner separates factor selection from inference: cross-validation may use
 eight cores, while the 200-replication bootstrap is sequential to avoid copying
@@ -112,8 +149,11 @@ inference. The formal `nboots=200` setting is retained for run compatibility,
 but it is not interpreted as 200 bootstrap replications under jackknife.
 Treated post-period outcomes are
 masked with a pre-treatment-only value before lambda construction, CV, and
-fitting. A successful production manifest must record `fitted_method=mc`, a
-finite positive `selected_lambda`, and finite CV MSPE.
+  fitting. A successful production manifest must record `fitted_method=mc`, a
+  finite non-negative `selected_lambda`, and finite CV MSPE. `lambda=0` is the
+  unregularized endpoint of the frozen `fect` grid and is retained with an
+  explicit `mc_regularized=FALSE` marker rather than being misclassified as a
+  failed fit.
 
 ```powershell
 & $rscript scripts/causal_r/run_complete_mc.R xiamen 2019 population auto annual 6 2346 same_city smoke_test
@@ -156,14 +196,16 @@ one control-design queue process against a given queue.
 
 ## Transactional production queue
 
-The orchestrator calls the R estimators one treatment grid and outcome family
-at a time, updates the live CSV queue atomically, resumes interrupted tasks,
-routes matching failures to Xu GSC and then MC, and binds each accepted
-estimator manifest to a unique queue-generated `run_id`:
+The orchestrator calls the Python/GPU estimators by default, one treatment grid
+and outcome family at a time. It updates the live CSV queue atomically, resumes
+interrupted tasks, routes matching failures to Xu GSC and then MC, and binds
+each accepted estimator manifest to a unique queue-generated `run_id`:
 
 ```powershell
-conda run -n mit python scripts/causal_r/run_causal_label_queue.py --start-order 1 --max-tasks 1 --dry-run
+conda run -n mit python scripts/causal_python/run_causal_label_queue.py --start-order 1 --max-tasks 1 --dry-run
 ```
+
+<!-- GPU 迁移前入口 scripts/causal_r/run_causal_label_queue.py 仍由兼容包装器支持。 -->
 
 The formal queues contain 5,048 unique treated grids and 20,192 family-level
 tasks (`5,048 × 4` outcome families). One production GSC population canary for
@@ -206,6 +248,17 @@ the estimator staging directly:
 & $rscript scripts/causal_r/run_event_study_aggregation.R
 ```
 
+The R-free production equivalent covers all three selected methods:
+
+```powershell
+python scripts/causal_python/run_all_method_event_study.py
+```
+
+It writes method/scope-specific GSC and MC pooled paths plus Matching TWFE
+results, grid- and city-clustered pre-trend diagnostics, robustly scaled PNG/PDF
+figures, and `effect_paths_with_pretrend.parquet`. Pre-trend flags are
+diagnostic metadata and are not an automatic sample-selection rule.
+
 Only outputs with production manifests (`run_mode=production`,
 `production_eligible=TRUE`) are admitted; smoke/canary artifacts are excluded.
 It writes `outputs/event_study/`:
@@ -242,4 +295,4 @@ All estimator outputs go to `outputs/complete_estimators/staging`. None of the
 three standalone estimator runners writes the formal treatment or outcome-family
 queues. Superseded prototype queue runners have been removed; production routing
 is owned only by `run_grid_control_design_queue.py` and
-`run_causal_label_queue.py`.
+`scripts/causal_python/run_causal_label_queue.py`.

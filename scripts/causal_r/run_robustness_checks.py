@@ -105,7 +105,7 @@ def anticipation() -> dict[str, object]:
     results: dict[str, object] = {}
     for months in (0, 6, 12):
         result = run_python(
-            "scripts/causal_r/run_causal_label_queue.py",
+            "scripts/causal_python/run_causal_label_queue.py",
             ["--start-order", "1", "--max-tasks", "1", "--anticipation-months", str(months), "--dry-run"],
         )
         results[str(months)] = {

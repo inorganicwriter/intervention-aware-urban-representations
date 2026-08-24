@@ -209,8 +209,8 @@ panel <- rbindlist(panel_parts, use.names = TRUE, fill = TRUE)
 panel <- panel[
   event_time != 0L &
     event_time >= min_pre &
-    event_time <= clean_pre_end_event_time &
-    event_time <= max_post
+    event_time <= max_post &
+    (event_time <= clean_pre_end_event_time | event_time >= 1L)
 ]
 panel <- panel[is.finite(outcome)]
 if (!nrow(panel)) {

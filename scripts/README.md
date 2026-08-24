@@ -1,17 +1,19 @@
 # Script entrypoints
 
-<!-- GPU 迁移前的约定：正式计量逻辑与生产队列均集中在 scripts/causal_r/。 -->
-
 `scripts/` 只保存可重复运行的命令行入口。可复用逻辑放在
 `src/urban_intervention/`；默认生产队列和事件研究入口位于
 `scripts/causal_python/`，GPU shadow/parity/资格工具位于
 `scripts/causal_gpu/`，`scripts/causal_r/` 保留经审计的 R 参考实现和部署兼容入口。
 
-分层契约：**可复用、可测试逻辑 → `src/urban_intervention/`；Python/GPU
-正式入口 → `scripts/causal_python/`；资格与 parity → `scripts/causal_gpu/`；
-R 学术参考 → `scripts/causal_r/`；一次性采集/审计 →
-`scripts/collection|labels|analysis/`。** 入口脚本应保持薄层；旧路径包装器可以
-导入规范入口，但不得复制第二套领域逻辑。
+代码职责：
+
+- 可复用逻辑：`src/urban_intervention/`；
+- Python/GPU 生产入口：`scripts/causal_python/`；
+- 资格与 parity：`scripts/causal_gpu/`；
+- R 参考实现：`scripts/causal_r/`；
+- 采集和审计：`scripts/collection/`、`scripts/labels/`、`scripts/analysis/`。
+
+入口脚本应保持薄层。兼容包装器可以导入规范入口，但不得复制领域逻辑。
 
 | 目录 | 职责 | 是否可写正式结果 |
 |---|---|---|
@@ -30,6 +32,7 @@ R 学术参考 → `scripts/causal_r/`；一次性采集/审计 →
 - 空间 donor 审计：`urban-spatial-donor-audit --city all`
 - 控制队列：`scripts/causal_r/run_grid_control_design_queue.py`（默认内部调用 Python/GPU 控制设计）
 - 因果标签队列：`scripts/causal_python/run_causal_label_queue.py`
+- 标签队列模块化入口：`scripts/causal_python/run_causal_label_queue_modular.py`（非生产入口）
 - 单任务 GSC/MC：`scripts/causal_python/run_formal_estimator.py`
 - 三方法事件研究：`scripts/causal_python/run_all_method_event_study.py`
 - GPU 资格：`scripts/causal_gpu/run_shadow_queue.py`、`scripts/causal_gpu/audit_formal_qualification.py`
@@ -49,8 +52,6 @@ R 学术参考 → `scripts/causal_r/`；一次性采集/审计 →
 [`../src/urban_intervention/causal/gpu/README.md`](../src/urban_intervention/causal/gpu/README.md)；
 R 参考参数与部署环境见 [`causal_r/README.md`](causal_r/README.md)。
 
-<!-- 旧命令 `scripts/causal_r/run_causal_label_queue.py` 仍由兼容包装器支持。 -->
-
 ## POI 面板入口
 
 - 全国 FileGDB 正式批处理：`scripts/collection/poi_batch_panel_builder.py`，核心为
@@ -58,8 +59,7 @@ R 参考参数与部署环境见 [`causal_r/README.md`](causal_r/README.md)。
 - 单城重建、CSV 年份和定向回填：`scripts/collection/poi_panel_builder.py`，核心为
   `urban_intervention.pipelines.poi.pipeline`。
 
-两者共享标准化和聚合模块，不是两套竞争的规范面板；全国常规生产默认使用
-batch 入口，单城入口只用于回填和诊断。
+两者共享标准化和聚合模块。全国生产使用 batch 入口；单城入口用于回填和诊断。
 
 ## 维护规则
 

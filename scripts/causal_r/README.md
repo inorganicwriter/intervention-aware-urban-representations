@@ -205,8 +205,6 @@ each accepted estimator manifest to a unique queue-generated `run_id`:
 conda run -n mit python scripts/causal_python/run_causal_label_queue.py --start-order 1 --max-tasks 1 --dry-run
 ```
 
-<!-- GPU 迁移前入口 scripts/causal_r/run_causal_label_queue.py 仍由兼容包装器支持。 -->
-
 The formal queues contain 5,048 unique treated grids and 20,192 family-level
 tasks (`5,048 × 4` outcome families). One production GSC population canary for
 order 906 is terminal; the larger task count does not represent additional

@@ -84,7 +84,7 @@ data/
 | donor universe | `causal/grid_universe/` | 377 万 donor |
 | eligible donors | `causal/formal_matching_inputs/` | 3,771,800 候选 + housing_annual 输入 |
 | feature_store | `causal/feature_store/` | 88 文件；**无消费者**（R 匹配直接读 panels/VIIRS 分区），仅历史预计算输出，可跳过 |
-| 队列 | `causal/*_queue.csv` | 控制/族级/反事实（已重置全 pending） |
+| 队列 | `causal/*_queue.csv` | 控制、结果族和反事实队列；实时状态见运行状态文档 |
 
 ## 3a. 房价标签（`data/active/labels/housing/`）
 

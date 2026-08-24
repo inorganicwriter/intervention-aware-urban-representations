@@ -1,10 +1,8 @@
 # Learning How Cities Respond：完整项目与生产管线
 
-状态：因果标签、训练前数据、表示模型与训练器均已实现；正式 5,048 网格生产尚未完成
-更新日期：2026-08-19
-
-本文保留稳定的研究与生产合同；当前队列状态和已完成的 canary 记录见
-[`docs/operations/current_project_status.md`](../operations/current_project_status.md)，服务器命令见
+本文定义研究对象、因果路由、发布合同和执行顺序。实时队列状态见
+[`docs/operations/current_project_status.md`](../operations/current_project_status.md)，
+服务器命令见
 [`docs/operations/server_deployment.md`](../operations/server_deployment.md)。
 
 ## 1. 项目目标

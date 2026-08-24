@@ -2,41 +2,37 @@
 
 **Intervention-Conditioned Urban Representations**: construct per-grid causal response labels from metro station opening events, and learn cross-city transferable representations from pre-treatment multimodal urban features.
 
-The project ultimately aims to learn not "whether two places look similar" but whether two places **respond similarly to the same intervention**. This repository first solves the label problem: for each treated grid, find or construct a credible untreated counterfactual and compute
+The representation target is similarity in response to the same intervention.
+For each treated grid, the label layer constructs an untreated counterfactual and computes
 
 ```text
 response(i, h) = observed_outcome(i, h) - counterfactual_outcome(i, h)
 ```
 
-## Current implementation status
+## Production boundary
 
-<!-- Pre-GPU migration wording retained for provenance:
-PanelMatch, Abadie–Imbens and Xu GSC were described here as R production estimators;
-event-study aggregation and the resumable label queue were documented under scripts/causal_r/.
--->
+The production label backend is `python_gpu`. Matching, GSC and MC run through
+PyTorch implementations under `src/urban_intervention/causal/gpu/`; R
+`PanelMatch`, `Matching`, `gsynth` and `fect` are reference implementations and
+the explicit `r_reference` backend.
 
-| Module | Status | Notes |
-|---|---|---|
-| Station identity, city assignment and competing-transit-event resolution | Implemented | Manual resolutions are compiled by a traceable applier; the raw station table is never overwritten |
-| 500m grid treatment list and 1km spatial donor exclusion | Implemented | Fixed 5,048 treated grids; spatial donor universe generated |
-| Pre-treatment multivariate control matching | Implemented | **6-round routing**: same-city matching → same-city GSC → same-city MC → cross-city matching → cross-city GSC → cross-city MC → explicit skip; the selection stage never reads post-treatment outcomes |
-| Published-estimator references and Python/GPU production | Implemented; server qualification pending for GSC/MC | R `PanelMatch`, `Matching`, `gsynth` and `fect` remain audited reference implementations. The default label backend is `python_gpu`: PyTorch Matching/GSC/MC under `src/urban_intervention/causal/gpu/`, gated by R/Python parity receipts. See DDR-003/004. |
-| Event-study aggregation and parallel-trends validation | Implemented | `scripts/causal_python/run_all_method_event_study.py` is the R-free production entry for Matching, GSC and MC. R aggregation remains an explicit reference workflow. Annual/monthly and estimator/scope results remain separate; pre-trend tests are diagnostic metadata, not automatic label deletion. |
-| Resumable production queues | Implemented | The canonical label orchestrator is `scripts/causal_python/run_causal_label_queue.py`; atomic updates, shard-level qualification validation, resume, failure reasons and task provenance are implemented. The old `causal_r` path is a compatibility wrapper. |
-| Response Artifact | Implemented | Strict release, complete label skeleton, quality grades, training mask, input/code hashes |
-| Pre-training multimodal dataset | Implemented | Read-only pre-treatment features; split by city; standardization parameters fit on training cities only |
-| Formal full-scale computation on 5,048 grids | **Full run pending** | Queues reset (5,048 controls + 20,192 family-level tasks all pending); two-stage matching canary verified (orders 1–10 routed correctly to GSC; 3/10 same-city matches in orders 906–915, order 906 walked the full match→GSC→MC→skip chain across all families); canary artifacts cleaned; awaiting the formal server run |
-| Multimodal representation model and trainer | Implemented | Intervention-conditioned representation model + trainer (`src/urban_intervention/representation/`, `urban-train-representation` entry point), end-to-end validated on a demo dataset (30 epochs converged, no NaN; training samples filtered by `final_training_mask`); every run outputs `evaluation_report.json` (full-pool retrieval + per-family `nn_corr@k`, bootstrap CI, response-shuffle permutation test, raw-feature baseline, linear-probe transfer metrics, **chance/appearance baselines** (random projection / PCA / frozen DINOv2 / appearance autoencoder), **per-city retrieval + few-shot probe curves + response-direction prediction AUC**), `runs.jsonl` experiment tracking (config hash + headline metrics), `--seeds` multi-seed aggregation; `urban-build-model-card` builds model cards, `urban-run-ablation` runs ablation grids (templates in `configs/representation/`), `urban-export-embeddings` exports embedding parquet, `urban-summarize-runs` aggregates comparison tables; optional `--conditioning opening_year` explicit intervention conditioning and `--image-pooling max/mean/meanmax` image pooling; algorithm options: `--se-shrinkage` (SE-aware similarity shrinkage, default on), `--queue-size` (MemoryBank-style negative queue), `--learnable-temperature`, `--uncertainty-weighted`; evaluation protocol in [docs/research/representation_learning.md](docs/research/representation_learning.md) |
-| Matching covariates (new this round) | Implemented and wired into matching | Location (distance to primary/secondary city centres), pre-opening rail conditions (nearest-station distance / station count / line count / closeness), station attributes (transfer / terminal / new line / extension / concurrent opening) collected; **two-stage control selection**: first match M=5 candidates on pre-treatment outcome lags, then refine within candidates for the best location/rail covariate balance; common support and holdout/placebo gates still act on outcome-history features only; SMD diagnostics report both outcomes and static covariates. See `docs/research/transit_accessibility_method.md` |
-| Station attributes (treatment-level, time-of-opening) | Implemented | `scripts/analysis/build_station_attributes.py` derives per-station `is_transfer_at_opening` / `is_new_line_opening` / `is_extension_opening` / `is_terminal_at_opening` / `same_month_openings` (batch heuristic for line first-opening dates; station-degree terminals with transfer-ambiguous and no-adjacency NA flags) into `outputs/causal_labels/station_attributes/`; used for event-study stratification, robustness subsamples and representation-model conditioning tokens (not for treated-control matching — controls have no station) |
-| Hedonic housing prices (Lianjia 22 cities) | Implemented as the housing-family main price measure for its cities | `scripts/labels/build_housing_hedonic.py`: per-city transaction hedonic (area/age/bedrooms/floor/orientation/decoration/building-type/elevator + community FE + year×quarter FE) → grid-month median adjusted price + n_transactions → `outputs/causal_labels/housing_hedonic/`; **observation-window parameter W** (1/3/6 months; W=3 main, W=1/6 robustness) implemented in the fixed-control label path and R outcome readers (`price_measure`/`window` arguments); raw median stays the 44-city unified matching measure |
-| Transaction-composition audit | Implemented | `scripts/analysis/audit_housing_composition.py` plots n_transactions / mean area / mean building age around openings; found a +9.7% mean-age jump post-opening (composition shift), motivating the hedonic main measure |
-| Same-city-first quality grading | Implemented | Response Artifact grades rank same-city paths above cross-city paths (`matched_same > gsc_same > mc_same > matched_cross > gsc_cross > mc_cross`); labels carry `donor_scope` and `main_spec`; `--scope-view {all,same_city,cross_city}` supports explicit sensitivity views |
-| Sample-run tooling | Implemented (run deferred) | `scripts/analysis/select_representative_sample.py` (400 grids, city×opening-year Hamilton quotas with per-stratum floor; the production sample defaults to the complete-cache interval `2017-07` through `2022-12`, covering the full monthly GSC window), `--orders` on both queue runners, `scripts/analysis/summarize_causal_labels.py` (success/failure reasons, label distributions, same-city/cross-city/merged views); plan in `docs/operations/sample_run_execution_plan.md` |
-| No-data task pre-screen | Implemented | Label queue skips tasks whose grid has no observation in the family panel (`family_no_observed_support`) instead of a ~3-minute doomed GSC/MC run; 1,942 tasks affected (verified 1.4 s vs 209 s) |
-| MC uncertainty (single-treated-unit design) | Implemented | The formal MC path uses fixed-lambda `fect` jackknife inference (`spec$mc$inference=jackknife`), which produces finite S.E./CI/p on the supported design; unit-level bootstrap is not the formal inference path, and the label queue requires the jackknife manifest |
+The production system includes:
 
-The "counterfactual label and pre-training data production" code is therefore closed-loop; the end-to-end pipeline for the representation model, training, cross-city evaluation and chance/appearance baselines is implemented (see the [representation learning docs](docs/research/representation_learning.md)); formal training on the full 5,048 grids can start once the formal response labels are released.
+- a fixed 44-city, 5,048-grid treatment design and 1km donor exclusion;
+- pre-treatment-only six-round routing through same-city and cross-city
+  Matching, GSC and MC;
+- resumable queues with atomic updates, task provenance and structured failure
+  reasons;
+- strict Response Artifact and pretraining-dataset publishers;
+- all-method event-study aggregation with pre-trend metadata;
+- intervention-conditioned representation training, evaluation, baselines,
+  transfer analysis and model-card generation.
+
+Formal production remains contingent on three GSC and three MC parity tasks on
+the RTX 4090 environment, issuance of the qualification receipt, execution of
+the 5,048-grid queues, and publication of the strict response release. Current
+queue counts and remaining work are maintained in
+[`docs/operations/current_project_status.md`](docs/operations/current_project_status.md).
 
 ## Frozen research scope
 
@@ -152,11 +148,6 @@ Dry-run first, then run a limited canary; do not start the full 5,048-grid run b
 conda run -n mit python scripts/causal_r/run_grid_control_design_queue.py --start-order 1 --max-units 10 --dry-run
 conda run -n mit python scripts/causal_python/run_causal_label_queue.py --start-order 1 --max-tasks 4 --dry-run
 ```
-
-<!-- Pre-GPU path retained for compatibility documentation:
-python scripts/causal_r/run_causal_label_queue.py ...
-The wrapper still works, but new automation must use causal_python/.
--->
 
 Python/GPU qualification is described in
 [the causal GPU guide](src/urban_intervention/causal/gpu/README.md); R reference

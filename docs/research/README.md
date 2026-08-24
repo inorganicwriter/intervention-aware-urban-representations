@@ -15,10 +15,7 @@ prototype feasibility notes, and result-driven improvement plans have been remov
 
 - [`project_abstract.md`](project_abstract.md): project title and abstract.
 - [`related_work_literature.md`](related_work_literature.md): literature review.
-- 匹配与 GSC 均失败后的 MC（矩阵补全）回退路径已实现（路由、参数与质量门禁见
-  [`DDR-004`](decisions/DDR-004_causal_response_labels.md) 与
-  [`../operations/current_project_status.md`](../operations/current_project_status.md)）；
-  早期研究提案归档于 [`../archive/ml_completion_for_skipped_grids.md`](../archive/ml_completion_for_skipped_grids.md)。
+- [`robustness_plan.md`](robustness_plan.md): robustness specifications and reporting requirements.
 
 Dataset-specific documentation belongs in [`../data/`](../data/) or
 [`../operations/`](../operations/), not in the active causal design.

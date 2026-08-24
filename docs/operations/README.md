@@ -3,7 +3,7 @@
 本目录只保存当前仍有效的操作说明：
 
 - [`server_deployment.md`](server_deployment.md)：服务器部署、上传清单、生产运行序列与监控。
-- [`current_project_status.md`](current_project_status.md)：固定资产、队列状态、已完成与未完成边界。
+- [`current_project_status.md`](current_project_status.md)：固定研究资产、生产入口、队列状态和待执行任务。
 - [`station_data.md`](station_data.md)：站点人工决议及三个可追溯产品。
 - [`housing_price_collection.md`](housing_price_collection.md)：房价采集、开放数据导入与验收。
 - [`viirs_monthly.md`](viirs_monthly.md)：月度 VIIRS 缓存和网格聚合。

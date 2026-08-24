@@ -13,7 +13,7 @@
 安居客小区详情页公开提供**小区级历史月度挂牌均价**（多数小区 2012 年起），
 这是当前唯一能实质性补 2012–2018 小区级数据的零购买路径。
 
-**可验收目标（阶段 3 结束时）：**
+### 可验收目标
 
 | 指标 | 目标值 |
 |---|---|
@@ -22,7 +22,7 @@
 | 16 个缺口城市中每城有 2012–2018 数据的小区数 | ≥ 500 |
 | 新增月度观测（小区-月） | ≥ 500 万 |
 
-## 1. 现有基础设施盘点（已就绪）
+## 1. 现有基础设施
 
 - **小区注册表**：166,079 小区（44 城全覆盖，每城 1,373–9,245），字段含
   `normalized_name`、`aliases`、`district`、`centroid_lon/lat`、
@@ -54,7 +54,7 @@
 | 0d. 名称匹配 | 抓取小区名 vs `registry.normalized_name`/`aliases` 匹配率 | 匹配策略定稿 |
 | 0e. 单城试跑 | 南昌全量（~2,000 小区）跑通：采集→解析→匹配→网格聚合 | 端到端演示数据 |
 
-**Go/No-Go 门槛（全部满足才进入阶段 1）：**
+### Go/No-Go 门槛
 
 - [ ] 打码 + 代理下详情页成功率 ≥ 80%
 - [ ] ≥ 60% 试点小区有 ≥ 36 个月历史价格
@@ -118,7 +118,7 @@
 
 ## 8. 代码实现状态（2026-08-10）
 
-采集代码已实现并通过单元测试（构造数据验证解析/匹配逻辑），位于：
+采集代码位于：
 
 ```
 scripts/collection/anjuke_history/
@@ -153,7 +153,10 @@ conda run -n mit python scripts/collection/run_anjuke_history.py --stage all --c
 - `data/archive/staging/anjuke_history/matched/` — 匹配审计
 - `data/active/labels/housing/listing_price/anjuke_history/{city}/` — 正式标签
 
-**待办（试点后）**：按真实页面结构锁定解析器选择器；按实际验证码类型接线打码平台后端（`solve_captcha` 预留接口）；按试点结果调 `LIST_PAGE_SIZE` 与质量门。
+### 试点后任务
+
+按真实页面结构锁定解析器选择器；按实际验证码类型接线打码平台后端
+（`solve_captcha` 预留接口）；按试点结果调整 `LIST_PAGE_SIZE` 与质量门。
 
 ## 7. 验收（投入有效性的最终判据）
 
@@ -161,4 +164,3 @@ conda run -n mit python scripts/collection/run_anjuke_history.py --stage all --c
 **16 个缺口城市中 ≥ 14 城进入 2012–2018 有数据状态（每城 ≥ 500 小区），
 且新增小区-月观测 ≥ 500 万、交叉验证中位价差 < 15%。**
 未达标的城市如实写入论文数据支持边界，不强行合并。
-

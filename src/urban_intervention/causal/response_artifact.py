@@ -713,7 +713,14 @@ def build_response_frame(
     # can be selected deliberately instead of leaking into the default view.
     artifact["main_training_mask"] = artifact["training_mask"] & same_city
     artifact["cross_city_extension_mask"] = artifact["training_mask"] & cross_city
-    artifact["failure_reason"] = artifact.get("task_failure_reason")
+    # The merged task-failure column can be all-NA and therefore inferred as
+    # float64 by pandas.  Cast explicitly before assigning string fallback
+    # reasons such as ``task_not_terminal`` (pandas 2.x rejects the upcast).
+    failure_source = artifact.get(
+        "task_failure_reason",
+        pd.Series(pd.NA, index=artifact.index, dtype="string"),
+    )
+    artifact["failure_reason"] = failure_source.astype("string")
     missing_reason = artifact["failure_reason"].isna() & ~artifact["label_available"]
     artifact.loc[missing_reason, "failure_reason"] = np.where(
         artifact.loc[missing_reason, "task_status"].eq("skipped"),

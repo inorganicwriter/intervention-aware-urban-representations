@@ -11,8 +11,7 @@ Control（GSC）回退路径、标签定义、质量门禁、失败规则、软�
 
 本文件定义当前因果设计。对应 DDR 冻结关键决定；测试和历史输出用于验证与诊断，不修改已冻结的估计对象。
 
-本设计的最终目的不是报告一个总体 DID 系数，而是为表示学习构造带有质量和不确定性信息的
-局部干预响应标签。
+本设计为表示学习构造带有质量和不确定性信息的局部干预响应标签。
 
 ## 2. 项目研究问题
 
@@ -20,8 +19,8 @@ Control（GSC）回退路径、标签定义、质量门禁、失败规则、软�
 
 > Learning How Cities Respond: Intervention-Conditioned Urban Representations
 
-核心问题是：给定一个地点在干预前的多模态城市状态，能否学习一种表示，使得在相同地铁
-干预下响应相似的地点在表示空间中接近，而不只是让视觉或功能相似的地点接近。
+研究问题是：给定地点在干预前的多模态城市状态，学习一种表示，使相同地铁干预下
+响应相似的地点在表示空间中接近。视觉和功能相似性作为输入信息，不定义监督目标。
 
 因此需要先为已有地铁开通事件构造尽可能可信的局部反事实：如果该地点没有开通地铁，其
 房价、夜间活动、POI 和人口会如何变化。观测路径与反事实路径之差构成响应标签。
@@ -311,7 +310,7 @@ normalize = TRUE
 
 ### 9.4 跨城 GSC
 
-跨城 GSC 已实现为同城路径失败后的标准化扩展，并单独记录和报告：
+跨城 GSC 是同城路径失败后的标准化扩展，并单独记录和报告：
 
 - 城市内处理前尺度标准化；
 - 城市/时间系统差异处理；
@@ -521,36 +520,7 @@ gsc_pending → gsc_running → gsc_labelled 或 skipped
 - 城市不跨 train/validation/test，归一化只拟合训练城市；
 - 失败原因是结构化经济学/数据原因，而不是泛化 runtime error。
 
-## 18. 当前状态与生产边界
-
-已完成：
-
-- 5,048 个处理网格冻结；
-- 约 377 万非实验 donor 空间审计；
-- 房价面板重建；
-- VIIRS 原始月度数据下载和按需缓存代码；
-- PanelMatch、Matching 和 gsynth 正式包调用；
-- 处理后泄漏、事件时间、GSC 映射和队列恢复测试；
-- 5,048 行处理网格级控制设计队列及事务恢复；
-- 同城优先、全城市处理前标准化的 Matching fallback；
-- 月度房价和 VIIRS 三个 12 月块，以及最近干净 12 月标签基期；
-- 10 个真实成都网格审计：9 个匹配成功，其中 1 个使用跨城控制，1 个进入 GSC；
-- 一个真实 81,285 donor 的成都 Xu-GSC smoke test，因子交叉验证、20 次参数 bootstrap、
-  反事实路径和标签均成功落盘；该结果明确标记为 `production_eligible=FALSE`。
-- GSC 不确定性规范化、Response Artifact 严格发布器、质量/训练掩码、输入/代码/run 哈希；
-- 处理前多模态特征、街景时间过滤、城市级防泄漏切分和 train-only 归一化发布器；
-- 上述发布模块的微型合成合同测试。
-
-正式全量运行前仅需：
-
-1. 在目标服务器记录 R、包版本、CPU、内存和输入文件哈希；
-2. 清空 10 行本机审计状态并重新生成 5,048 行全 pending 队列；
-3. 先运行一批服务器 canary，复核耗时、峰值内存和输出 manifest；
-4. 获得明确的全量启动确认后再运行 5,048 个控制设计任务；
-5. 对 `gsc_pending` 按结果变量运行生产模式的 200 次参数 bootstrap；
-6. 不把 smoke/pilot 状态或旧住房 DID 结果当成最终标签。
-
-## 19. 主要参考文献
+## 18. 主要参考文献
 
 - Abadie, A. and Imbens, G. W. (2006). Large Sample Properties of Matching Estimators for Average Treatment Effects.
 - Abadie, A. and Imbens, G. W. (2011). Bias-Corrected Matching Estimators for Average Treatment Effects.

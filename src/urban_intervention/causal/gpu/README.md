@@ -6,7 +6,7 @@ The R estimators remain available as an explicit `r_reference` backend for
 qualification and sensitivity checks; the normal label queue no longer invokes
 R estimator processes.
 
-## Implemented contracts
+## Estimator contracts
 
 | Path | Python implementation | Formal uncertainty |
 | --- | --- | --- |
@@ -141,10 +141,9 @@ launcher rejects more
 Python label shards than GPUs because GSC bootstrap and MC jackknife jobs can
 otherwise compete for the same 24 GB device.
 
-Use `--estimator-backend r_reference` only for explicit reference runs. The
-older `scripts/causal_gpu/run_shadow_queue.py` workflow is retained for
-historical/exported-contract parity tests and is not the production entry
-point.
+Use `--estimator-backend r_reference` only for explicit reference runs.
+`scripts/causal_gpu/run_shadow_queue.py` runs exported-contract parity tests;
+it is not a production entry point.
 
 ## Validation boundary
 

@@ -3,13 +3,10 @@
 ## 1. 模块边界
 
 - 可复用 Python 逻辑放在 `src/urban_intervention/`。
-<!-- GPU 迁移前：正式计量估计器和 R 数据构造统一放在 scripts/causal_r/。 -->
 - 默认 Python/GPU 生产入口放在 `scripts/causal_python/`，资格/parity 工具放在
   `scripts/causal_gpu/`；`scripts/causal_r/` 只保留 R 数据构造、学术参考估计器
   和兼容/部署包装器。
 - `scripts/collection/` 只负责采集和来源适配；`scripts/analysis/` 只负责审计。
-<!-- 迁移前状态：正式训练代码尚未建立，计划创建独立的
-src/urban_intervention/representation/。 -->
 - 正式训练代码位于 `src/urban_intervention/representation/`；不得复用旧
   TWFE 或旧年度 DID 占位模块。
 - 一次性调试代码不得进入长期主树；稳定检查应转换成测试或参数化审计。

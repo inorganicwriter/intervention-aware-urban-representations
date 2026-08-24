@@ -15,6 +15,7 @@ ENTRYPOINTS = (
     "scripts/causal_python/run_formal_estimator.py",
     "scripts/causal_python/run_matching_event_study.py",
     "scripts/causal_python/run_causal_label_queue.py",
+    "scripts/causal_python/run_causal_label_queue_modular.py",
 )
 
 

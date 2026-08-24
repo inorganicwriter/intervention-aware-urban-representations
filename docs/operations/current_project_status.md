@@ -1,244 +1,111 @@
-# Current Project Status
+# Current project state
 
-<!-- Previous status snapshot date: 2026-08-19. -->
 Updated: 2026-08-24
 
-This page records only the active state needed to resume work. Detailed research
-choices belong in the causal design and DDRs; dataset paths belong in
-`data/active/catalog/datasets.yaml`.
+This page contains the state required to resume production. Research definitions
+are maintained in `docs/research/`; dataset locations and source identities are
+maintained in `data/active/catalog/datasets.yaml`.
 
-## Fixed research assets
+## Research frame
 
-- The project contains 44 active cities and fixed 500m × 500m grids.
-- Station identity and city-boundary issues have been reviewed and resolved.
-- The immutable treatment list contains 5,048 station grids.
-- The primary 1km spatial audit produced 3,771,800 initial non-treatment donor
-  candidates before temporal and covariate gates.
-- The fixed treatment list, donor universe, metadata, and queues live in
-  `data/active/causal/`.
+| Item | Current value |
+|---|---|
+| Cities | 44 |
+| Spatial unit | fixed 500m × 500m grid |
+| Treated grids | 5,048 |
+| Initial spatially eligible donor rows | 3,771,800 |
+| Main spatial exclusion | 1km from the treated station grid polygon |
+| Outcome families | housing, VIIRS, POI, population |
+| Routing | same-city Matching → GSC → MC → cross-city Matching → GSC → MC → skip |
 
-These counts define the spatial design only. They are not counts of successful
-matches, GSC estimates, or final labels.
+The treatment list, donor universe, metadata and queues are under
+`data/active/causal/`. These counts describe the spatial design and do not imply
+successful estimation or label availability.
 
-## Available covariate and outcome products
+## Data products
 
-- POI grid-year products cover the 44 cities for 2012–2024.
-- Population and annual VIIRS products are available under `data/active/curated/`.
-  Annual VIIRS (`data/active/curated/viirs_annual_aggregated/`) is aggregated from
-  the duplicate-free monthly VNP46A2 cache (2012–2024) by
-  `scripts/analysis/build_viirs_annual_from_monthly.py`; the legacy per-city
-  annual exports with duplicated geographic samples were removed.
-- Monthly VIIRS source files are stored outside the repository at the directory
-  configured by `MIT_VIIRS_RAW`; the causal pipeline materializes only required
-  cache partitions.
-- Canonical housing grid-month, grid-quarter, and grid-year panels exist under
-  `data/active/panels/` and are documented in `docs/data/housing_price_panel.md`.
-- Housing source provenance and admission rules are maintained under
-  `data/active/catalog/` and `docs/data/`.
-- Population panel (`data/active/curated/population/`) is rebuilt from clean sources:
-  2010–2014 from GEE WorldPop (`WorldPop/GP/100m/pop`), 2015–2024 from WorldPop
-  R2024B (Global 2) rasters aggregated to 500m grids, with a `source_version`
-  column (see `scripts/collection/rebuild_population_panel.py`).  The 2014→2015
-  transition is a product jump accepted by design.
-- Sentinel-2 panel (`data/active/curated/sentinel2/`) is rebuilt from
-  `reduceRegions` exports against the uploaded grid assets (one row per grid
-  per year, duplicate-free), 2014–2024 (Landsat 8 for 2014–2017).
-- Location features (`data/active/curated/location_features/`): per-grid distance to
-  main centre / nearest subcentre / nearest centre, from the composite
-  (POI + VIIRS + population) McMillen (2001) centre registry.
-- Transit accessibility features (`data/active/causal/accessibility_features/`):
-  per-treated-grid pre-treatment station distance, buffer counts, line
-  diversity, network closeness (Wikidata P197 topology), and station
-  attributes (transfer / terminal / new line / extension / same-month
-  openings).  See `docs/research/transit_accessibility_method.md`.
-- Transit snapshots (`data/active/causal/transit_snapshots/`): 482 per-opening-month
-  pre-treatment transit feature files covering ALL grids (including donors)
-  per city, so matching can align donor and target at the same pre-treatment
-  time point (plan A on-demand snapshot cache).
+- Canonical housing month, quarter and year panels: `data/active/panels/`;
+- POI grid-year panel, 2012–2024: `data/active/curated/`;
+- annual VIIRS, 2012–2024: `data/active/curated/viirs_annual_aggregated/`;
+- monthly VIIRS source: external path configured by `MIT_VIIRS_RAW`;
+- population panel: `data/active/curated/population/`;
+- Sentinel-2/Landsat panel, 2014–2024: `data/active/curated/sentinel2/`;
+- location features: `data/active/curated/location_features/`;
+- pre-treatment transit snapshots and accessibility features:
+  `data/active/causal/transit_snapshots/` and
+  `data/active/causal/accessibility_features/`.
 
-## Active causal implementation
+Detailed source and coverage information belongs in `docs/data/`.
 
-- Spatial donor construction is implemented in
-  `src/urban_intervention/causal/spatial_donors.py`.
-<!-- Pre-GPU wording: formal R estimators and the recoverable queue were both
-documented under scripts/causal_r/. -->
-- The default recoverable label queue is
-  `scripts/causal_python/run_causal_label_queue.py`; the old `causal_r` path is
-  a compatibility wrapper.
-- Python/PyTorch Matching, GSC and MC implementations are under
-  `src/urban_intervention/causal/gpu/`; qualification and parity commands are
-  under `scripts/causal_gpu/`.
-- R PanelMatch, Abadie–Imbens, `gsynth` and `fect` remain independent audited
-  references and an explicit `r_reference` backend, not the default per-task
-  production runtime.
-- Production Python execution is fail-closed until an environment-bound receipt
-  contains at least three passing Matching, GSC and MC parity tasks.
-- Control selection must use treatment-preceding information only.
-- Matched-control failure routes an outcome task to GSC; GSC failure routes to
-  MC, and only failure of all three paths produces an explicit skip reason.
-- `control_design_queue.csv` has exactly one row per treated grid and freezes one
-  physical control before any post-treatment outcome is read.
-- Matching uses same-city donors first, then a pre-treatment-only standardized
-  all-city fallback. Monthly housing and VIIRS use three 12-month blocks.
-- GSC bootstrap uncertainty is normalized into one-grid label paths.
-- The strict Response Artifact publisher now validates the complete expected
-  label skeleton, task/control terminal states, label identities, provenance,
-  hashes, and immutable release semantics.
-- The pretraining-data publisher builds lagged pre-event multimodal features,
-  modality masks, city-held-out splits, train-only normalization, and final
-  training masks.
-- Annual GSC now supports `annual_anticipation_years` for year-granularity
-  anticipation sensitivity (default 0; set 1 to exclude opening_year-1).
+## Production entry points
 
-## Event-study aggregation (parallel-trends validation)
+| Task | Entry point |
+|---|---|
+| Grid control design | `scripts/causal_r/run_grid_control_design_queue.py` |
+| Causal label queue | `scripts/causal_python/run_causal_label_queue.py` |
+| Single Python/GPU estimator | `scripts/causal_python/run_formal_estimator.py` |
+| Matching/GSC/MC event study | `scripts/causal_python/run_all_method_event_study.py` |
+| GPU parity and qualification | `scripts/causal_gpu/` |
+| Response Artifact | `scripts/causal_r/build_response_artifact.py` |
+| Pretraining dataset | `scripts/causal_r/build_pretraining_dataset.py` |
+| Representation training | `urban-train-representation` |
 
-GSC and MC estimator outputs keep negative-`event_time` rows (per-grid
-pre-period counterfactual gaps) in `outputs/complete_estimators/staging/`;
-these are the raw event-study coefficients. The label queue publishes only
-post horizons, so parallel-trends validation is aggregated separately:
+The default estimator backend is `python_gpu`. R `PanelMatch`, `Matching`,
+`gsynth` and `fect` remain reference implementations and the explicit
+`r_reference` backend. Python/GPU production is fail-closed until the active
+environment has a valid qualification receipt containing at least three
+Matching, three GSC and three MC parity tasks.
 
-<!-- Pre-GPU production entry: scripts/causal_r/run_event_study_aggregation.R. -->
-- `scripts/causal_python/run_all_method_event_study.py` is the current R-free
-  all-method entry. It keeps estimator, donor scope, annual/monthly frequency,
-  family and outcome separate; writes pooled effect paths and PNG/PDF figures;
-  and reports grid- and city-cluster pre-trend metadata without silently deleting
-  labels. The R aggregation script remains available for reference comparison.
-- Historical real-data check (2026-08-04, order 906 population MC task): mean pre-period
-  label 0.0004 over 5 pre-period rows — consistent with the canary's
-  near-zero pre-period claims; joint test deferred until ≥2 grids are labelled.
-- The matched path contributes pre-trend evidence through the selection-stage
-  holdout and donor-donor placebo q95 gates (see `grid_control_design_lib.R`),
-  plus PanelMatch `placebo.test = TRUE`.
+The following parallel modular implementations are not production entry points:
 
-## Current queue status
+- `scripts/causal_python/run_causal_label_queue_modular.py`;
+- `urban_intervention.config.project_modular`;
+- `urban_intervention.representation.trainer_modular`.
 
-Queue state after the deliberate reset for the 6-round routing (same-city
-matching → same-city GSC → same-city MC → cross-city matching → cross-city
-GSC → cross-city MC → skip):
+## Queue state
 
-- `control_design_queue.csv` (5,048 rows): 4,648 `pending`, 218 `matched`, 182 `gsc_pending`.
-- `outcome_family_work_queue.csv` (20,192 rows): 20,192 `pending`.
-- `counterfactual_work_queue.csv` (5,048 rows): 5,048 `pending`.
+| Queue | Rows | State |
+|---|---:|---|
+| `control_design_queue.csv` | 5,048 | 4,648 `pending`; 218 `matched`; 182 `gsc_pending` |
+| `outcome_family_work_queue.csv` | 20,192 | 20,192 `pending` |
+| `counterfactual_work_queue.csv` | 5,048 | 5,048 `pending` |
 
-The demo and canary artifacts (releases, model inputs, representation
-training outputs, demo figures) were removed from the tree; they were
-non-production evidence and are not current queue rows.  Formal production
-starts from the reset queues.
+Queue CSV files are single-writer resources. Parallel execution must use the
+provided shard orchestrator rather than multiple independent writers.
 
-## Canary verification
+## Work required before formal production
 
-Two-stage matching (outcome-history M=5 candidates + static location/transit
-refinement) was wired into `grid_control_design_lib.R` on 2026-08-10; the
-canary below reflects the **current** two-stage logic:
+1. Run three representative GSC and three MC parity tasks on the RTX 4090
+   server and issue the environment-bound qualification receipt.
+2. Run a server dry-run and limited canary with the frozen inputs and production
+   parameters.
+3. Run the 5,048-row control queue and the 20,192 family-level label queue.
+4. Aggregate Matching, GSC and MC event studies and review pre-trend metadata.
+5. Publish the strict Response Artifact and pretraining dataset.
+6. Train and evaluate the representation model on the formal release.
 
-1. **Matched path**: queue canary on orders 906–915 (2026-08-10) matched 3/10
-   same-city (hangzhou 910, chongqing 912, nanjing 915) with
-   `control_selection_uses_post_outcome = FALSE`; the remaining 7 routed to
-   `gsc_pending` (holdout/placebo gate rejections — expected with the new
-   static covariates). `feature_balance.parquet` reports standardized gaps for
-   the 9 static covariates (loc_*/transit_*) alongside the outcome lags.
-   For orders 1–10 (Shanghai 2010 openings), the control queue records
-   `gsc_pending` with reason `fewer_than_1_complete_pre_treatment_families`
-   (VIIRS/POI start 2012); the corresponding family tasks skip directly with
-   `no_complete_pre_treatment_families`.
-2. **GSC path**: Xu (2017) gsynth smoke test on order 906 (Guangzhou 2015,
-   population, annual, same-city) completed successfully — 49,329 donors,
-   CV selected r=0, 20 parametric bootstrap replications, 8 label rows
-   (5 pre-period + 3 post-period), all `label_available = TRUE` with finite
-   standard errors. Pre-period labels near zero (-0.02 to +0.05); post-period
-   population response +0.21 to +0.23 (log1p scale).
+GSC production inference uses 200 parametric bootstrap replications. MC uses
+fixed-lambda unit jackknife inference; its `nboots=200` field is compatibility
+metadata.
 
-   A production-parameter queue canary was subsequently completed for the same
-   order's population family. It used 49,329 pre-only donors, selected `r=0`
-   by MSPE cross-validation, ran 200 parametric bootstrap replications, and
-   produced three finite post-treatment labels. The Python task and R estimator
-   manifests share one queue-generated `run_id`; both estimator-manifest and
-   estimator-label hashes were revalidated.
-3. **MC path**: matrix completion smoke execution selected a positive lambda by
-   treatment-pre MSPE cross-validation and produced finite counterfactuals and
-   jackknife uncertainty. End-to-end queue canary (2026-08-10, order 906 all
-   families): matching failed the placebo gate → GSC → MC; poi/population/viirs
-   reached `mc_labelled`, housing `skipped` (MC support failure) — the full
-   6-round chain (match → GSC → MC → skip) ran atomically with task provenance.
-4. **Skip path**: an outcome is skipped only after matching, same/all-city GSC,
-   and same/all-city MC all fail their support or estimator gates.
+## Representation output contract
 
-Early-opening grids (2010–2014) mostly route to gsc_pending or skipped due to
-insufficient pre-treatment data (VIIRS starts 2012, housing coverage varies by
-city). Grids opening 2015+ have adequate support for both matching and GSC.
+Each training run writes:
 
-## Remaining steps before full production
+- `best_model.pt`;
+- `training_config.json` and `training_history.json`;
+- `test_metrics.json` and `evaluation_report.json`;
+- `runs.jsonl`.
 
-The implementation, data layer, robustness checks and isolated estimator tests
-are complete. Three real Matching qualification tasks (507, 509 and 530) pass
-R/Python design, quality and final-label parity on CUDA, with zero final-label
-error. Formal production execution is still outstanding:
+Evaluation reports retrieval metrics, bootstrap intervals, response-label
+permutation tests, raw-feature and appearance baselines, and transfer metrics.
+Formal conclusions require the full production release; demo and partial
+releases are not inferential evidence.
 
-1. Run three representative GSC and three MC qualification tasks on the RTX 4090
-   server and issue the complete environment-bound qualification receipt.
-2. Run the grid-control queue (5,048 rows) for same-city matching
-   (6-round routing: same-city match -> GSC -> MC -> cross-city match -> GSC -> MC)
-3. Run the family-level tasks (20,192 rows, all `pending`) for the same 5,048
-   grids (matched labels + GSC + MC fallback)
-4. Publish the strict Response Artifact and pretraining dataset, then train the
-   representation model on the full production release
+## Result admission
 
-
-GSC in production mode uses 200 parametric bootstrap replications (vs 20 in
-smoke test). MC uses fixed-lambda jackknife inference; its `nboots=200` field
-is compatibility metadata, not 200 bootstrap replications. See
-`scripts/causal_r/README.md` for commands. Every estimator invocation receives
-a unique queue-generated `run_id`; stale, smoke-mode, non-production, or
-incorrectly inferred artifacts are rejected before a task can be marked labelled.
-
-## Representation-learning status
-
-The intervention-conditioned representation model, loss, trainer, and
-`urban-train-representation` entrypoint are implemented
-(`src/urban_intervention/representation/`) and verified end-to-end on the
-demo release (30 epochs on RTX 4060, no NaN, best val loss 0.188).
-
-**Evaluation infrastructure** (`src/urban_intervention/representation/evaluation.py`):
-every training run writes `evaluation_report.json` containing, for the
-validation and test pools separately:
-
-- `nn_corr@k` retrieval metrics overall and per outcome family, with the
-  random-neighbour baseline (`baseline_corr` = mean pairwise response
-  similarity);
-- unit-resampling bootstrap CIs for `nn_corr@k`;
-- a permutation test (response labels shuffled across units) giving a
-  chance-level distribution and p-value;
-- the same retrieval metrics for the raw z-scored features, i.e. the
-  "no learned representation" baseline;
-- a linear-probe transfer metric (per-cell ridge fitted on the train pool)
-  comparing frozen embeddings against raw features on each target pool.
-
-`urban-train-representation --seeds 1 2 3` runs one full training +
-evaluation per seed into `seed_<n>/` subdirectories and writes a
-`seed_summary.json` with mean/std across seeds. `urban-build-model-card`
-renders a model card (`model_card.json`/`.md`) with architecture, training
-config, history, per-family evaluation tables and explicit limitations;
-`urban-run-ablation` runs a spec grid (e.g. `pred_weight` 0/0.5/1,
-with/without images) and summarizes `ablation_summary.json`/`.md`. A short
-CPU smoke on the demo release shows the report behaves as intended: validation `nn_corr@k` (0.065)
-exceeds chance (0.020, p ≈ 0.02) but the raw-feature baseline (0.074) is not
-yet beaten after 2 epochs, and the 5-unit test split has no measurable signal
-(ratio 1.0) — the full production release is required for meaningful numbers.
-
-Known methodological caveats for the full-production run:
-
-- **Model selection**: the checkpoint is selected by validation total loss;
-  retrieval gains should be reported with CI + permutation p-values, not raw
-  point estimates.
-- **Test set size**: a meaningful cross-city retrieval evaluation needs a
-  much larger test pool than the demo's 5 units.
-- **DINOv2**: image-path training requires torch.hub access to download
-  `facebookresearch/dinov2` on first use (see README environment notes).
-
-## Validity boundary
-
-Outputs from earlier pooled DID, annual housing DID, prototype matching, disabled
-runners, or pilot GSC runs are not final response labels. A result becomes usable
-only after its design record, estimator object, quality diagnostics, and normalized
-Response Artifact are all present and pass the frozen gates. Demo/partial releases
-carry `production_eligible = FALSE` and cannot enter formal training.
+A label is admissible only when its frozen design record, estimator output,
+quality diagnostics, task identity, input hashes and run ID are mutually
+consistent and pass the Response Artifact checks. Partial, smoke, preview and
+stale outputs must carry `production_eligible = FALSE` and cannot enter formal
+training.

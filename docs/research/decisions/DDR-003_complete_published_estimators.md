@@ -1,40 +1,37 @@
-# DDR-003：完整已发表估计器的隔离实现
+# DDR-003：估计器与生产后端边界
 
-<!-- GPU 迁移前状态：估计器实现完成；正式批量估计冻结，等待计算路由冻结。 -->
-状态：R 参考实现冻结；Python/GPU 生产实现完成，等待 GSC/MC 服务器资格门  
-日期：2026-07-22；GPU 迁移增补：2026-08-24  
-替代：早期已撤销的 prototype 设计
+状态：frozen
 
-## 2026-08-24 Python/GPU 迁移增补
+日期：2026-07-22
 
-本 DDR 下列 A–C 节保留原始 R 官方包工作流，作为论文方法解释、一次性
-资格参考和显式 `r_reference` 后端；它们不再是逐任务默认生产后端。当前默认
-后端为 `python_gpu`：
+修订：2026-08-24
 
-- Matching 控制设计与最终固定控制标签由 Python/PyTorch 执行，并同时对 R
-  候选集、最终控制、质量门和完整标签路径做 parity；
-- Xu GSC 的交互固定效应、rolling CV、反事实路径和参数 bootstrap 由
-  Python/PyTorch 执行；
-- matrix completion 的 lambda CV、最终拟合和 unit jackknife 由
-  Python/PyTorch 执行，`lambda=0` 是合法的未正则化端点；
-- production 运行必须提供至少 3 个 Matching、3 个 GSC、3 个 MC 代表任务
-  形成的环境绑定资格凭证；preview 不得晋升为正式结果；
-- 每个 shard 完整验证凭证和绑定源码一次，子进程只验证该凭证摘要，避免逐任务
-  重复哈希资格面板。
+## 生产后端
 
-截至 2026-08-24，本机 R 4.6.1 与 RTX 4060 已完成 3 个真实 Matching 任务
-（orders 507、509、530）的设计和最终标签 parity，三例标签最大绝对误差均为
-0。GSC/MC 各 3 个代表任务和完整凭证仍需在 RTX 4090 服务器运行；因此不得把
-“实现完成”写成“全量生产已完成”。规范入口为：
+默认后端为 `python_gpu`：
+
+- Matching 控制设计与固定控制标签由 Python/PyTorch 执行，并与 R 参考结果
+  比较候选集、最终控制、质量门和标签路径；
+- Xu GSC 使用交互固定效应、rolling CV、反事实路径和参数 bootstrap；
+- matrix completion 使用 lambda CV、最终拟合和 unit jackknife，`lambda=0`
+  是合法端点；
+- production 运行要求环境绑定资格凭证至少包含 3 个 Matching、3 个 GSC 和
+  3 个 MC 代表任务；
+- shard 启动时验证完整凭证与源码绑定，子进程验证凭证摘要。
+
+R 官方包流程保留为方法解释、资格参考和显式 `r_reference` 后端，不作为逐任务
+默认生产后端。规范入口为：
 
 - `scripts/causal_python/run_causal_label_queue.py`；
 - `scripts/causal_python/run_formal_estimator.py`；
 - `scripts/causal_gpu/run_shadow_queue.py`；
 - `scripts/causal_gpu/audit_formal_qualification.py`。
 
-## 原则
+## 方法边界
 
-项目不再把多个论文组件拼接后称为某篇论文的完整算法。三种方法作为相互独立的完整估计器运行，分别保存输入、官方软件对象、诊断、估计量和推断结果。项目路由规则只决定哪个数据子样本交给哪个估计器，不修改估计器内部步骤。
+Matching、GSC 和 MC 作为独立估计器运行，分别保存输入、参考软件对象、诊断、
+估计量和推断结果。项目路由只决定数据子样本与估计器的对应关系，不改变估计器
+内部步骤。
 
 ## A. Imai–Kim–Wang PanelMatch
 
@@ -87,22 +84,6 @@
 - 同城市是主规范，跨城市是稳健性规范；
 - 数据不足只决定估计器是否可运行，不改变任何算法公式；
 - 三种估计器的结果不得混合成一个没有理论定义的标准误或ATT。
-
-## 实现与门禁记录
-
-实现文件：
-
-- `scripts/causal_r/run_complete_panelmatch.R`；
-- `scripts/causal_r/run_complete_abadie_imbens.R`；
-- `scripts/causal_r/run_complete_xu_gsc.R`；
-- 共享的只读数据构造层 `scripts/causal_r/complete_estimators_lib.R`。
-
-2026-07-22 门禁结果：
-
-1. 三套官方流程均通过合成数据测试。PanelMatch 测试覆盖 matched sets、官方平衡诊断、逐集合动态效应、bootstrap 和 placebo；Abadie–Imbens 测试覆盖偏差修正和解析方差；GSC 测试覆盖 CV、反事实路径和参数 bootstrap。
-2. 厦门 2019 cohort 的 Abadie–Imbens 真实运行成功：26 个处理网格、2,882 个完整 donor，`BiasAdjust=TRUE` 和 `Var.calc=1` 均未降级。零方差变量不进入不可逆的协方差矩阵，并在 manifest 中逐项记录。
-3. 厦门 2019 cohort 的 Xu GSC 真实全 donor 运行成功：16,514 个 donor、9 个处理前年度、`r=0:5` 完整 CV、200 次参数 bootstrap，完整官方对象和反事实路径已经保存。
-4. PanelMatch 的 300-donor 真实数据集成门禁通过；该结果明确标记为 `formal_estimate=FALSE`。全 16,514 donor 的官方 PanelMatch 生产基准在当前机器运行 10 分钟仍未完成，且没有产生正式结果。正式批量运行前必须冻结一个具有论文依据、只依赖处理前信息的 coarse risk-set 规则，或配置可承受全 donor 计算的运行资源。不得把测试 fixture 结果当作估计结果。
 
 ## 不允许的静默降级
 

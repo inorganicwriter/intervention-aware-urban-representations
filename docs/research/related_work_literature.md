@@ -79,7 +79,7 @@
 | **Wu, Q. et al. (2022).** *Regional impact of urban rail transit network accessibility on residential property price.* ICRT 2021. | 网络可达性对房价的区域影响 | **网络 closeness → 网格赋值** |
 | **Zhang, X. et al. (2018).** *Urban rail transit network vulnerability measurement based on complex network theory.* DEStech (Chongqing case). | 复杂网络理论（度/介数/接近中心性）在轨道网络的应用 | 中心性指标选型参考 |
 
-**测度结构**（与上表文献一一对应，不新造方法）：
+**测度结构**：
 1. `dist_nearest_station_m`：到最近已开通地铁站的直线距离（Smersh & Smith 2000；Yang et al. 2021）
 2. `stations_500m/800m/1500m`：处理前各缓冲区半径内已开通站点数（Debrezion et al. 2007 元分析确认的主流口径）
 3. `lines_in_1500m`：处理前 1.5km 缓冲区内经过的线路条数（Debrezion et al. 2007 多站点/多线路维度）

@@ -163,12 +163,8 @@ conda run -n mit python scripts/causal_r/run_grid_control_design_queue.py --star
 conda run -n mit python scripts/causal_python/run_causal_label_queue.py --start-order 1 --max-tasks 4 --dry-run
 ```
 
-<!-- GPU 迁移前命令使用 scripts/causal_r/run_causal_label_queue.py；兼容包装器仍可执行。 -->
-
-canary 审核通过前不要启动全量。2026-08-10 两阶段匹配 canary 已验证
-（orders 1–10 正确路由 GSC；orders 906–915 中 3/10 同城匹配、order 906
-全族走完 match→GSC→MC→skip 链路）；canary 产物已清理，队列已重置全 pending，
-服务器上从下述 dry-run 开始。
+canary 审核通过前不要启动全量。服务器执行从下述 dry-run 开始，并检查路由、
+manifest、GPU 使用、峰值显存和任务耗时。
 
 ### 7.3 全量并行生产
 
@@ -212,7 +208,7 @@ conda run -n mit urban-train-representation \
 
 ## 8. 监控与续跑
 
-- 队列状态：`data/active/causal/queues/*.csv`（原子更新，可随时中断）
+- 队列状态：`data/active/causal/*_queue.csv`（原子更新，可随时中断）
 - 任务产物：`data/active/causal/tasks/<order>/<family>/`（manifest.json 终态判定）
 - 断点续跑：重复上一命令即可；`--retry-matching` / `--phase` 可定向重试
 - 全量完成后按 README「发布标签与训练前数据」一节执行严格发布校验
@@ -227,4 +223,4 @@ conda run -n mit urban-train-representation \
 | torch.cuda.is_available() = False | 用 `--index-url` 重装 CUDA wheel |
 | 所有任务只占用 GPU 0 | 使用并行启动器并传 `--gpu-ids 0,1,2,3 --shard-count 4` |
 | 发布会拒绝 `unknown` 代码版本 | 保持源码树完整传输（tree-sha256 校验） |
-| 队列卡住 | 检查 `data/active/causal/queues/` 状态与任务目录日志；断点续跑即可 |
+| 队列卡住 | 检查 `data/active/causal/*_queue.csv` 与任务目录日志；断点续跑即可 |

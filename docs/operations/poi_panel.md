@@ -2,11 +2,9 @@
 
 Grid-year POI panels for 44 metro cities, 2012-2024.
 
-## Status
-
-**Complete.** All 44 cities × 13 years processed and validated.
-
 ## Output
+
+Coverage: 44 cities × 13 years (2012–2024).
 
 ```text
 data/active/curated/poi/{city}_poi_grid_yearly.parquet

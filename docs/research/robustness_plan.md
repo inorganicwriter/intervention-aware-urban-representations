@@ -1,119 +1,110 @@
-# Robustness Checks（稳健性检验）
+# 稳健性检验
 
-预注册的稳健性检验。入口：`scripts/causal_r/run_robustness_checks.py`，
-输出：`outputs/robustness/`。全部方法均有文献依据，不新造方法。
+统一入口：`scripts/causal_r/run_robustness_checks.py`
 
-## 0. 推断有效性与聚类（Abadie et al. 2023）
+输出目录：`outputs/robustness/`
 
-地铁开通是**城市级政策**：同一城市网格共享城市冲击（土地政策、经济增长、
-规划预期）。按网格聚类可能低估标准误，因此事件研究同时报告：
+## 0. 推断有效性与聚类
 
-- **网格聚类**（主）：`cluster ~ grid_id`
-- **城市聚类**（稳健）：`cluster ~ city_key`（Abadie, Athey, Imbens &
-  Wooldridge 2023, QJE 138(1)，DOI: 10.1093/qje/qjac038）
+同一城市的网格共享土地政策、经济增长和规划预期等城市冲击。事件研究同时报告：
 
-GSC/MC 聚合侧对应增加**城市级均值检验**
-（`joint_pretrend_tests_city`），与网格级检验并列报告。
+- 网格聚类：`cluster ~ grid_id`；
+- 城市聚类：`cluster ~ city_key`。
 
-## 1. 空间排除半径敏感性（已实现并可运行）
+GSC 和 MC 聚合同时输出网格级与城市级预趋势联合检验，城市级结果写入
+`joint_pretrend_tests_city`。
 
-主规格 donor 排除 1km（DDR-001）。敏感性：1.5km / 2km（Yu et al. 2013 的
-空间溢出检验框架）。
+## 1. 空间排除半径
 
-```
+主规格排除处理站点网格多边形 1km 内的 donor。敏感性规格使用 1.5km 和
+2km。
+
+```bash
 python scripts/causal_r/run_robustness_checks.py --spatial-exclusion
 ```
 
-- 实现：`spatial_donors.py --exclusion-radius`（SpatialDonorSpec 支持）
-- 产出：`outputs/robustness/spatial_exclusion/exclusion_{radius}m/`
-- 实测（2026-08-09）：donor 数随半径变化（1km 最严）
-- 判定：正式匹配后对比三种半径下的 ATT 稳定性
+输出写入 `outputs/robustness/spatial_exclusion/exclusion_{radius}m/`。正式报告比较
+不同半径下的 donor 支持、样本构成和 ATT 路径。
 
-## 2. Anticipation 窗口敏感性（已实现，待正式产物）
+## 2. Anticipation 窗口
 
-主规格 6 个月。敏感性：0 / 12 个月（`complete_estimator_spec()$timing`）。
+主规格为 6 个月，敏感性规格为 0 个月和 12 个月。
 
-```
+```bash
 python scripts/causal_python/run_causal_label_queue.py \
   --start-order 1 --max-tasks 1 --anticipation-months 0
 python scripts/causal_python/run_causal_label_queue.py \
   --start-order 1 --max-tasks 1 --anticipation-months 12
 ```
 
-- 实现：`run_causal_label_queue.py --anticipation-months`
-<!-- 旧路径 scripts/causal_r/run_causal_label_queue.py 由兼容包装器保留。 -->
-- 判定：正式标签后对比 0/6/12 个月窗口的估计
+正式报告比较 0、6、12 个月窗口的可用样本、估计路径和动态响应。
 
-## 3. 预处理窗口长度敏感性（已实现并可运行）
+## 3. 处理前窗口长度
 
-主规格 36 个月。敏感性：24 / 48 个月。
+月度主规格使用 36 个月处理前窗口，敏感性规格使用 24 个月和 48 个月。
 
-```
+```bash
 python scripts/causal_r/run_robustness_checks.py --window-length
 ```
 
-- 实现：`robustness_window_smoke.R`（验证 monthly_event_calendar 在
-  24/36/48 个月下正确构建）
+该检查验证 24、36、48 个月事件日历。正式比较必须在控制设计与标签规格中使用
+相同的窗口参数。
 
-## 4. 协变量集敏感性（已实现并可运行）
+## 4. 协变量集
 
-主规格全变量（含区位/轨道新变量）。敏感性：剔除轨道/区位变量。
+主规格包含处理前结果历史、区位和轨道特征。敏感性规格分别移除轨道特征和区位
+特征。
 
-```
+```bash
 python scripts/causal_r/run_robustness_checks.py --covariate-set
 ```
 
-- 实现：`robustness_covariate_smoke.R`
-- 实测（2026-08-09）：full=8 特征 / no_transit=6 特征，匹配均成功
+比较内容包括控制选择、结果历史平衡、静态协变量平衡、holdout 误差和 placebo
+门禁结果。
 
-## 5. Donor 池敏感性（已实现并可运行）
+## 5. Donor 范围
 
-主规格同城优先（6 轮路由）。敏感性：跨城 standardized 对比。
+主规格采用同城优先的六轮路由。跨城规格使用仅由处理前数据拟合的标准化参数，
+并与同城结果分开报告。
 
-```
+```bash
 python scripts/causal_r/run_robustness_checks.py --donor-pool
 ```
 
-- 实现：`robustness_donor_scope_smoke.R`
-- 实测（2026-08-09）：same=40 donors / cross=80 donors，均成功
+比较内容包括 donor 支持、匹配接受率、方法路由、平衡诊断和动态响应。
 
-## 6. 竞争事件排除（已实现并可运行）
+## 6. 竞争事件
 
-de Chaisemartin & D'Haultfœuille (2020, AER) 指出 TWFE 在"处理单位被再次
-处理"时存在偏误。本项目处理定义为网格**首站**开通，已核实同网格无第二站
-（0 例多站网格）；竞争事件标记仅 2 例。检验逻辑：
+主处理定义为网格内首个正式地铁站开通。竞争事件敏感性剔除存在其他轨道事件
+标记的网格后重新估计。
 
-```
+```bash
 python scripts/causal_r/run_robustness_checks.py --competing-events
 ```
 
-- 实现：`robustness_competing_events.R`（剔除竞争事件网格后重估）
-- 判定：全样本 vs 剔除子样本估计一致 → 多重处理不构成威胁
+正式报告并列给出全样本和剔除竞争事件后的结果。
 
-## 7. Spillover / 网络效应异质性（已实现）
+## 7. Spillover 与网络规模异质性
 
-地铁网络效应可能使邻近网格受益（Yu et al. 2013, JTG：
-交通基础设施的空间溢出）。检验方式：
+事件研究按同期开通站数 `stations_opened_same_month` 的中位数分层，比较小规模
+与大规模开通批次。输出写入：
 
-- 事件研究按**同期开通站数**（`stations_opened_same_month`）中位数分层
-  （small vs large），对比两层的 Sun-Abraham 事件研究
-- 输出：`outputs/event_study/matching/{family}/spillover_{stratum}_*.csv`
+```text
+outputs/event_study/matching/{family}/spillover_{stratum}_*.csv
+```
 
-## 运行状态
+该分层用于描述网络规模异质性，不替代空间排除半径敏感性。
 
-| 检查 | 代码 | 可运行（无正式产物） | 正式运行 |
-|---|---|---|---|
-| 聚类（网格 vs 城市） | ✅ | ✅（smoke） | 匹配后 |
-| 空间排除 | ✅ | ✅（真实数据已跑） | 匹配后对比 |
-| Anticipation | ✅ | ✅（smoke） | 标签后对比 |
-| 窗口长度 | ✅ | ✅（smoke 24/36/48） | 需接入匹配 lag 参数 |
-| 协变量集 | ✅ | ✅（smoke full/no_transit） | 匹配后对比 |
-| Donor 池 | ✅ | ✅（smoke same/cross） | 匹配后对比 |
-| 竞争事件 | ✅ | ✅（smoke） | 匹配后对比 |
-| Spillover 分层 | ✅ | ✅（逻辑内置） | 匹配后 |
+## 正式执行要求
+
+- 所有规格使用同一冻结处理清单和结果定义；
+- 每个规格单独保存配置、输入哈希、样本构成和方法路由；
+- Matching、GSC 和 MC 分开汇总，不合并标准误；
+- smoke 输出只验证执行合同，不进入论文估计；
+- 正式比较在 Response Artifact 发布后运行，并报告不可用任务及原因。
 
 ## 文献
 
-1. Abadie, A., Athey, S., Imbens, G.W. & Wooldridge, J.M. (2023). When should you adjust standard errors for clustering? *QJE* 138(1):1-35.
-2. de Chaisemartin, C. & D'Haultfœuille, X. (2020). Two-way fixed effects estimators with heterogeneous treatment effects. *AER* 110(9):2964-2996.
-3. Yu, N., de Jong, M., Storm, S. & Mi, J. (2013). Spatial spillover effects of transport infrastructure: evidence from Chinese regions. *Journal of Transport Geography* 29:56-66.
+1. Abadie, A., Athey, S., Imbens, G.W. & Wooldridge, J.M. (2023). When should you adjust standard errors for clustering? *Quarterly Journal of Economics* 138(1): 1–35.
+2. de Chaisemartin, C. & D'Haultfœuille, X. (2020). Two-way fixed effects estimators with heterogeneous treatment effects. *American Economic Review* 110(9): 2964–2996.
+3. Yu, N., de Jong, M., Storm, S. & Mi, J. (2013). Spatial spillover effects of transport infrastructure: evidence from Chinese regions. *Journal of Transport Geography* 29: 56–66.

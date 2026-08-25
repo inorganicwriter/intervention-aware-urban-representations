@@ -73,9 +73,11 @@ def build_city_year(
     print(f"{city_key} {year}: loading grids", flush=True)
     grids = load_city_grid(city_key)
     parts: list[pd.DataFrame] = []
+    source_labels: list[str] = []
 
     if year in CSV_YEARS:
         with open_city_csv(city_key, year) as (fh, label):
+            source_labels.append(label)
             print(f"{city_key} {year}: reading {label}", flush=True)
             reader = pd.read_csv(
                 fh,
@@ -105,6 +107,7 @@ def build_city_year(
         for chunk, label, crs_method in iter_gdb_normalized(
             city_key, year, categories, max_rows=max_rows, bbox=bbox
         ):
+            source_labels.append(label)
             print(
                 f"{city_key} {year}: reading {label} ({len(chunk):,} rows, crs={crs_method})",
                 flush=True,
@@ -115,6 +118,17 @@ def build_city_year(
             print(f"  matched parts={len(parts)}", flush=True)
 
     result = finalize_year(city_key, year, parts)
+    result.attrs["poi_provenance"] = {
+        str(year): {
+            "producer": (
+                "poi_panel_builder" if year in CSV_YEARS else "poi_single_city_internal"
+            ),
+            "source_format": "city_csv" if year in CSV_YEARS else "filegdb",
+            "sources": source_labels,
+            "categories": sorted(categories) if categories else None,
+            "max_rows": max_rows,
+        }
+    }
     print(f"{city_key} {year}: {len(result):,} grid rows with POIs", flush=True)
     return result
 

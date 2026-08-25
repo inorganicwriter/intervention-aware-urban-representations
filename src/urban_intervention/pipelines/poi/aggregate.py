@@ -1,5 +1,6 @@
 """Grid aggregation and panel persistence for normalized POI rows."""
 
+import json
 import os
 from contextlib import contextmanager
 from pathlib import Path
@@ -260,25 +261,70 @@ def save_city_panel(city_key: str, frames: list[pd.DataFrame]) -> Path | None:
         print(f"{city_key}: no POI rows to save")
         return None
     out_path = OUT_DIR / f"{city_key}_poi_grid_yearly.parquet"
+    provenance_path = out_path.with_suffix(".provenance.json")
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     lock_path = out_path.with_suffix(out_path.suffix + ".lock")
     with _exclusive_file_lock(lock_path):
+        incoming_provenance: dict[str, object] = {}
+        for frame in frames:
+            value = frame.attrs.get("poi_provenance", {})
+            if isinstance(value, dict):
+                incoming_provenance.update({str(year): entry for year, entry in value.items()})
+
         panel = pd.concat(frames, ignore_index=True)
+        incoming_years = {str(int(year)) for year in panel["year"].unique()}
         if out_path.exists():
             existing_years = set(pd.read_parquet(out_path, columns=["year"])["year"].unique())
-            new_years = set(panel["year"].unique())
-            years_to_keep = existing_years - new_years
+            incoming_year_values = set(panel["year"].unique())
+            years_to_keep = existing_years - incoming_year_values
             if years_to_keep:
                 old = pd.read_parquet(out_path)
                 old = old[old["year"].isin(years_to_keep)]
                 panel = pd.concat([old, panel], ignore_index=True)
 
         panel = add_change_metrics(panel)
+        panel_years = {str(int(year)) for year in panel["year"].unique()}
         tmp_path = out_path.with_suffix(out_path.suffix + f".{uuid4().hex}.tmp")
+        provenance_tmp_path = provenance_path.with_suffix(
+            provenance_path.suffix + f".{uuid4().hex}.tmp"
+        )
         try:
+            if provenance_path.exists():
+                provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+                if provenance.get("city") != city_key:
+                    raise ValueError(
+                        f"POI provenance city mismatch: {provenance.get('city')!r} != {city_key!r}"
+                    )
+            else:
+                provenance = {
+                    "schema_version": 1,
+                    "city": city_key,
+                    "panel_file": out_path.name,
+                    "years": {},
+                }
+            provenance_years = provenance.setdefault("years", {})
+            unknown_provenance = {
+                "producer": "unknown",
+                "source_format": "unknown",
+                "sources": [],
+            }
+            for year in panel_years:
+                if year in incoming_years:
+                    provenance_years[year] = incoming_provenance.get(
+                        year, unknown_provenance
+                    )
+                else:
+                    provenance_years.setdefault(year, unknown_provenance)
+
             panel.to_parquet(tmp_path, index=False)
+            provenance_tmp_path.write_text(
+                json.dumps(provenance, ensure_ascii=False, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
             os.replace(tmp_path, out_path)
+            os.replace(provenance_tmp_path, provenance_path)
         finally:
             tmp_path.unlink(missing_ok=True)
+            provenance_tmp_path.unlink(missing_ok=True)
     print(f"Saved {out_path} ({len(panel):,} rows)")
     return out_path

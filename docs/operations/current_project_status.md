@@ -62,6 +62,11 @@ The following parallel modular implementations are not production entry points:
 - `urban_intervention.config.project_modular`;
 - `urban_intervention.representation.trainer_modular`.
 
+The original files remain canonical until the modular candidates pass bounded
+real-data validation on the production server. Cutover must replace the original
+implementation bodies and remove the `_modular` entry points in the same change;
+stable import and script paths may remain as delegation-only compatibility facades.
+
 ## Queue state
 
 | Queue | Rows | State |

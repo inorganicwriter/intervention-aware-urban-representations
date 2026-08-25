@@ -1,6 +1,8 @@
+import json
 import math
 
 import pytest
+from poi_batch_panel_builder import main as batch_main
 from poi_batch_panel_builder import parse_args as parse_batch_args
 from poi_batch_panel_builder import resolve_cities, validate_years
 from poi_panel_builder import (
@@ -14,6 +16,7 @@ from poi_panel_builder import (
     parse_args,
     shannon_entropy,
 )
+from poi_panel_builder import validate_years as validate_csv_years
 
 from urban_intervention.pipelines.poi.batch import CityBatch, build_batch_year, make_city_batches
 from urban_intervention.pipelines.poi.cache import _gdb_mtime
@@ -256,8 +259,14 @@ def test_poi_audit_columns():
 
 
 def test_poi_panel_builder_accepts_dry_run_flag():
-    args = parse_args(["--city", "beijing", "--years", "2020", "--dry-run"])
+    args = parse_args(["--city", "beijing", "--years", "2017", "--dry-run"])
     assert args.dry_run is True
+
+
+def test_city_csv_builder_rejects_filegdb_years():
+    validate_csv_years([2012, 2017])
+    with pytest.raises(ValueError, match="poi_batch_panel_builder.py"):
+        validate_csv_years([2017, 2018])
 
 
 def test_batch_panel_builder_accepts_batch_controls():
@@ -334,6 +343,137 @@ def test_build_batch_year_reads_with_loaded_grid_bounds(monkeypatch):
         )
 
 
+def test_build_batch_year_fails_closed_when_a_source_fails(monkeypatch):
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    import urban_intervention.pipelines.poi.batch as batch_module
+
+    source = ExtractedGdbSource(Path("broken.gdb"), 2020, "餐饮服务", False)
+    monkeypatch.setattr(
+        batch_module,
+        "load_city_grids",
+        lambda _cities: SimpleNamespace(total_bounds=[1.0, 2.0, 3.0, 4.0]),
+    )
+    monkeypatch.setattr(
+        batch_module,
+        "discover_extracted_gdb_sources",
+        lambda year=None, categories=None: [source],
+    )
+
+    def fail_source(*_args, **_kwargs):
+        raise OSError("unreadable source")
+
+    monkeypatch.setattr(batch_module, "_process_gdb", fail_source)
+
+    with pytest.raises(RuntimeError, match="refusing to finalize a partial panel"):
+        build_batch_year(
+            CityBatch(index=1, cities=("beijing",), bbox=(115.8, 39.3, 117.0, 40.5)),
+            2020,
+            workers=1,
+            use_cache=False,
+        )
+
+
+def test_process_gdb_forwards_refresh_to_cache(monkeypatch, tmp_path):
+    import pandas as pd
+
+    import urban_intervention.pipelines.poi.batch as batch_module
+    import urban_intervention.pipelines.poi.cache as cache_module
+
+    source = ExtractedGdbSource(tmp_path / "source.gdb", 2020, "餐饮服务", False)
+    observed = {}
+
+    def fake_read_source_cached(*_args, **kwargs):
+        observed.update(kwargs)
+        return pd.DataFrame(), "source", "cached"
+
+    monkeypatch.setattr(cache_module, "read_source_cached", fake_read_source_cached)
+    monkeypatch.setattr(
+        batch_module, "aggregate_chunk_multi_city", lambda _frame, _grids: pd.DataFrame()
+    )
+
+    batch_module._process_gdb(
+        source,
+        2020,
+        "batch-01",
+        (1.0, 2.0, 3.0, 4.0),
+        object(),
+        use_cache=True,
+        refresh_cache=True,
+    )
+
+    assert observed["refresh"] is True
+
+
+def test_batch_cli_forwards_refresh_cache(monkeypatch):
+    import pandas as pd
+    import poi_batch_panel_builder as batch_script
+
+    observed = {}
+
+    def fake_build_batch_year(*_args, **kwargs):
+        observed.update(kwargs)
+        return pd.DataFrame(columns=["city"])
+
+    monkeypatch.setattr(batch_script, "build_batch_year", fake_build_batch_year)
+
+    assert (
+        batch_main(
+            [
+                "--city",
+                "beijing",
+                "--years",
+                "2020",
+                "--batch-size",
+                "1",
+                "--refresh-cache",
+                "--dry-run",
+            ]
+        )
+        == 0
+    )
+    assert observed["refresh_cache"] is True
+
+
+def test_single_and_multi_city_aggregation_are_equivalent_for_one_city():
+    import geopandas as gpd
+    import pandas as pd
+    from pandas.testing import assert_frame_equal
+    from shapely.geometry import box
+
+    from urban_intervention.pipelines.poi.aggregate import (
+        aggregate_chunk,
+        aggregate_chunk_multi_city,
+    )
+
+    points = pd.DataFrame(
+        {
+            "name": ["a", "b"],
+            "category": ["food", "retail"],
+            "is_commercial": [1, 1],
+            "is_chain": [0, 1],
+            "is_community_commerce": [1, 0],
+            "lon": [0.25, 0.75],
+            "lat": [0.25, 0.75],
+        }
+    )
+    single_grid = gpd.GeoDataFrame(
+        {"grid_id": ["g1"]}, geometry=[box(0.0, 0.0, 1.0, 1.0)], crs="EPSG:4326"
+    )
+    multi_grid = single_grid.copy()
+    multi_grid.insert(0, "city", "beijing")
+
+    single = aggregate_chunk(points, single_grid).sort_index(axis=1)
+    multi = (
+        aggregate_chunk_multi_city(points, multi_grid)
+        .drop(columns="city")
+        .sort_index(axis=1)
+    )
+
+    assert_frame_equal(single, multi)
+
+
 def test_save_city_panel_writes_via_temporary_file():
     import inspect
 
@@ -358,3 +498,38 @@ def test_save_city_panel_preserves_other_years_under_lock(tmp_path, monkeypatch)
 
     result = pd.read_parquet(tmp_path / "beijing_poi_grid_yearly.parquet")
     assert result.year.tolist() == [2019, 2020]
+
+
+def test_save_city_panel_writes_and_merges_year_provenance(tmp_path, monkeypatch):
+    import pandas as pd
+
+    import urban_intervention.pipelines.poi.aggregate as aggregate_module
+
+    monkeypatch.setattr(aggregate_module, "OUT_DIR", tmp_path)
+    base = {"city": ["beijing"], "grid_id": ["g1"], "poi_count": [10]}
+    frame_2017 = pd.DataFrame({**base, "year": [2017]})
+    frame_2017.attrs["poi_provenance"] = {
+        "2017": {
+            "producer": "poi_panel_builder",
+            "source_format": "city_csv",
+            "sources": ["2017/beijing.csv"],
+        }
+    }
+    frame_2018 = pd.DataFrame({**base, "year": [2018]})
+    frame_2018.attrs["poi_provenance"] = {
+        "2018": {
+            "producer": "poi_batch_panel_builder",
+            "source_format": "filegdb",
+            "sources": [{"path": "2018/food.gdb", "category": "餐饮服务", "layer": None}],
+        }
+    }
+
+    aggregate_module.save_city_panel("beijing", [frame_2017])
+    aggregate_module.save_city_panel("beijing", [frame_2018])
+
+    provenance = json.loads(
+        (tmp_path / "beijing_poi_grid_yearly.provenance.json").read_text(encoding="utf-8")
+    )
+    assert provenance["city"] == "beijing"
+    assert provenance["years"]["2017"]["producer"] == "poi_panel_builder"
+    assert provenance["years"]["2018"]["producer"] == "poi_batch_panel_builder"

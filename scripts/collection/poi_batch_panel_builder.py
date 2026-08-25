@@ -135,6 +135,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_rows=args.max_rows,
                 workers=args.workers,
                 use_cache=use_cache,
+                refresh_cache=args.refresh_cache,
             )
             if args.dry_run:
                 city_count = panel["city"].nunique() if not panel.empty else 0

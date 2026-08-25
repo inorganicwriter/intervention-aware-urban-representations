@@ -1,6 +1,10 @@
-"""Command line entry point for building grid-year POI features.
+"""Build 2012-2017 city CSV POI panels.
 
-The implementation is split across ``scripts/collection/poi/``:
+This is the canonical production entry point for the pre-2018 city CSV
+assets.  Nationwide FileGDB years are built by
+``poi_batch_panel_builder.py``.
+
+The implementation is split across ``urban_intervention.pipelines.poi``:
 
 * ``sources`` discovers CSV/FileGDB assets without modifying the raw files.
 * ``normalize`` harmonizes schemas and CRS to WGS84.
@@ -20,6 +24,7 @@ sys.path.insert(0, str(BASE_DIR / "scripts"))
 
 from urban_intervention.config.project import ACTIVE_CITIES, CITIES
 from urban_intervention.pipelines.poi.aggregate import save_city_panel
+from urban_intervention.pipelines.poi.config import CSV_YEARS
 from urban_intervention.pipelines.poi.normalize import (
     normalize_crs_to_wgs84,
     normalize_csv_poi_chunk,
@@ -55,7 +60,9 @@ __all__ = [
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build grid-year POI panels from Amap POI assets.")
+    parser = argparse.ArgumentParser(
+        description="Build 2012-2017 grid-year POI panels from city CSV assets."
+    )
     parser.add_argument(
         "--inventory",
         action="store_true",
@@ -94,6 +101,16 @@ def resolve_cities(value: str | None) -> list[str]:
     return cities
 
 
+def validate_years(years: list[int]) -> None:
+    unsupported = [year for year in years if year not in CSV_YEARS]
+    if unsupported:
+        raise ValueError(
+            "poi_panel_builder.py is only for 2012-2017 city CSV assets; "
+            f"unsupported year(s): {unsupported}. Use poi_batch_panel_builder.py "
+            "for 2018+ FileGDB assets."
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     if args.inventory:
@@ -106,6 +123,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     years = parse_years(args.years)
+    validate_years(years)
     categories = parse_categories(args.categories)
     for city_key in cities:
         frames = [

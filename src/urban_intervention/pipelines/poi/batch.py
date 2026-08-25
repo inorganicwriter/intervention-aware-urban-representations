@@ -70,13 +70,19 @@ def _process_gdb(
     bbox,
     grids,
     use_cache: bool = True,
+    refresh_cache: bool = False,
     max_rows: int | None = None,
 ):
     if use_cache:
         from .cache import read_source_cached
 
         df, _, crs_method = read_source_cached(
-            source, year, city_label, bbox=bbox, max_rows=max_rows
+            source,
+            year,
+            city_label,
+            bbox=bbox,
+            refresh=refresh_cache,
+            max_rows=max_rows,
         )
     else:
         from .normalize import read_filegdb
@@ -102,7 +108,10 @@ def build_batch_year(
     max_rows: int | None = None,
     workers: int | None = None,
     use_cache: bool = True,
+    refresh_cache: bool = False,
 ) -> pd.DataFrame:
+    if refresh_cache and not use_cache:
+        raise ValueError("refresh_cache requires use_cache=True")
     if workers is None:
         workers = min(6, (os.cpu_count() or 4))
 
@@ -121,6 +130,7 @@ def build_batch_year(
         flush=True,
     )
     parts: list[pd.DataFrame] = []
+    failures: list[tuple[Path, Exception]] = []
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
@@ -132,6 +142,7 @@ def build_batch_year(
                 read_bbox,
                 grids,
                 use_cache,
+                refresh_cache,
                 max_rows,
             ): source
             for source in sources
@@ -148,9 +159,35 @@ def build_batch_year(
                     parts.append(part)
             except Exception as exc:
                 print(f"{batch.label} {year}: FAILED {source.path}: {exc}", flush=True)
+                failures.append((Path(source.path), exc))
         print(f"{batch.label} {year}: matched parts={len(parts)}/{len(sources)}", flush=True)
 
+    if failures:
+        details = "; ".join(
+            f"{path}: {type(exc).__name__}: {exc}" for path, exc in failures
+        )
+        raise RuntimeError(
+            f"{batch.label} {year}: {len(failures)}/{len(sources)} FileGDB source(s) "
+            f"failed; refusing to finalize a partial panel: {details}"
+        ) from failures[0][1]
+
     result = finalize_multi_city_year(year, parts)
+    result.attrs["poi_provenance"] = {
+        str(year): {
+            "producer": "poi_batch_panel_builder",
+            "source_format": "filegdb",
+            "sources": [
+                {
+                    "path": str(source.path),
+                    "category": source.category,
+                    "layer": source.layer,
+                }
+                for source in sources
+            ],
+            "categories": sorted(categories) if categories else None,
+            "max_rows": max_rows,
+        }
+    }
     print(f"{batch.label} {year}: {len(result):,} city-grid rows with POIs", flush=True)
     return result
 
@@ -159,8 +196,11 @@ def save_batch_year(panel: pd.DataFrame) -> list[Path]:
     saved: list[Path] = []
     if panel.empty:
         return saved
+    provenance = panel.attrs.get("poi_provenance", {})
     for city_key, city_frame in panel.groupby("city"):
-        path = save_city_panel(str(city_key), [city_frame.copy()])
+        city_output = city_frame.copy()
+        city_output.attrs["poi_provenance"] = provenance
+        path = save_city_panel(str(city_key), [city_output])
         if path is not None:
             saved.append(path)
     return saved

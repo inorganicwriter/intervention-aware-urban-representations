@@ -8,7 +8,11 @@ Coverage: 44 cities × 13 years (2012–2024).
 
 ```text
 data/active/curated/poi/{city}_poi_grid_yearly.parquet
+data/active/curated/poi/{city}_poi_grid_yearly.provenance.json
 ```
+
+The JSON sidecar records the producer, source format and source identifiers for
+each year without adding non-feature columns to the Parquet panel.
 
 28 category columns per grid-year row, including food, retail, life_service,
 leisure, education_culture, healthcare, lodging, transport, finance, indoor,
@@ -23,6 +27,9 @@ change proxies.
 | 2012-2017 | WGS84 city CSV | `poi_panel_builder.py` | ~8 key categories |
 | 2018-2024 | Nationwide FileGDB | `poi_batch_panel_builder.py` | Full 22+ categories |
 
+These are the only production routes. `poi_panel_builder.py` rejects years
+after 2017, and `poi_batch_panel_builder.py` rejects years before 2018.
+
 ## Pipeline
 
 ```bash
@@ -36,6 +43,10 @@ python scripts/collection/poi_batch_panel_builder.py --city all --years 2018-202
 python scripts/collection/poi_batch_panel_builder.py --years 2023 --cache-status
 python scripts/collection/poi_batch_panel_builder.py --city all --years 2023 --batch-index 3 --refresh-cache
 ```
+
+FileGDB batch construction is fail-closed: if any selected source fails, the
+year is not finalized or saved. `--refresh-cache` forces each selected cache
+slice to be rebuilt during that run.
 
 Generated features include:
 

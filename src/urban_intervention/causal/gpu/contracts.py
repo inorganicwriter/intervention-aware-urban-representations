@@ -15,6 +15,20 @@ GPU_IMPLEMENTATION_VERSION = "gpu-v6"
 SHADOW_SCHEMA = "causal_gpu_shadow_v6_label_parity_contract"
 FORMAL_IMPLEMENTATION_VERSION = "python-causal-v3"
 FORMAL_RESULT_SCHEMA = "causal_python_formal_result_v3_qualified"
+CONTROL_DESIGN_SCHEMA = "grid_control_design_v3_exact_stable_ties"
+CONTROL_DESIGN_VIIRS_CACHE_CONTRACT = "complete_44_city_2012_2024_monthly_v1"
+CONTROL_DESIGN_PROVENANCE = {
+    "python_gpu": {
+        "backend": "python_pytorch",
+        "implementation_version": FORMAL_IMPLEMENTATION_VERSION,
+        "selected_method": "python_gpu_M5_static_refine",
+    },
+    "r_reference": {
+        "backend": "r_matching",
+        "implementation_version": "r-reference-grid-v3",
+        "selected_method": "Matching::Match_M5_static_refine",
+    },
+}
 
 
 def _as_float64(value: Any, *, ndim: int, name: str) -> FloatArray:

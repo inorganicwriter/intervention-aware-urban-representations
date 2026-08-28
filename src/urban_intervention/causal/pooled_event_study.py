@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +12,8 @@ import numpy as np
 import pandas as pd
 
 from urban_intervention.causal.gpu.provenance import file_sha256
+
+LOGGER = logging.getLogger(__name__)
 
 GROUP_COLUMNS = [
     "frequency",
@@ -56,38 +59,73 @@ def read_production_effect_paths(
 ) -> pd.DataFrame:
     """Read production GSC/MC paths whose manifests prove the exact labels."""
     parts: list[pd.DataFrame] = []
+    rejection_reasons = (
+        "missing_manifest",
+        "unreadable_manifest",
+        "nonproduction",
+        "production_ineligible",
+        "unsupported_estimator",
+        "invalid_manifest_frequency",
+        "frequency_filter_mismatch",
+        "specification_filter_mismatch",
+        "labels_hash_mismatch",
+        "labels_unreadable",
+        "missing_required_columns",
+        "invalid_event_time",
+    )
+    admission = {
+        key: 0
+        for key in (
+            "candidate_files",
+            "admitted_files",
+            "admitted_rows",
+            "rejected_files",
+            *rejection_reasons,
+        )
+    }
     for labels_path in sorted(Path(staging_root).rglob("causal_response_labels.parquet")):
+        admission["candidate_files"] += 1
         manifest_path = labels_path.with_name("manifest.csv")
         if not manifest_path.is_file():
+            admission["missing_manifest"] += 1
             continue
         try:
             manifest = _read_manifest(manifest_path)
         except (OSError, ValueError):
+            admission["unreadable_manifest"] += 1
             continue
         if manifest.get("run_mode", "").lower() != "production":
+            admission["nonproduction"] += 1
             continue
         if manifest.get("production_eligible", "").upper() != "TRUE":
+            admission["production_ineligible"] += 1
             continue
         estimator = manifest.get("estimator", "")
         if estimator not in {"gsc", "mc"}:
+            admission["unsupported_estimator"] += 1
             continue
         manifest_frequency = manifest.get("frequency", "")
         if manifest_frequency not in {"monthly", "annual"}:
+            admission["invalid_manifest_frequency"] += 1
             continue
         if frequency is not None and manifest_frequency != frequency:
+            admission["frequency_filter_mismatch"] += 1
             continue
         manifest_specification = manifest.get("specification_fingerprint", "")
         if (
             specification_fingerprint is not None
             and specification_fingerprint not in manifest_specification
         ):
+            admission["specification_filter_mismatch"] += 1
             continue
         expected_hash = manifest.get("labels_sha256", "")
         if not expected_hash or file_sha256(labels_path) != expected_hash:
+            admission["labels_hash_mismatch"] += 1
             continue
         try:
             labels = pd.read_parquet(labels_path)
         except (OSError, ValueError):
+            admission["labels_unreadable"] += 1
             continue
         required = {
             "treatment_order",
@@ -99,9 +137,11 @@ def read_production_effect_paths(
             "label_available",
         }
         if not required.issubset(labels.columns):
+            admission["missing_required_columns"] += 1
             continue
         event_time = pd.to_numeric(labels["event_time"], errors="coerce")
         if event_time.isna().any() or not np.equal(event_time, np.floor(event_time)).all():
+            admission["invalid_event_time"] += 1
             continue
         part = labels.copy()
         part["event_time"] = event_time.astype(int)
@@ -123,9 +163,37 @@ def read_production_effect_paths(
         part["specification_fingerprint"] = manifest_specification
         part["run_id"] = manifest.get("run_id", "")
         parts.append(part[PATH_COLUMNS])
-    if not parts:
-        return pd.DataFrame(columns=PATH_COLUMNS)
-    return pd.concat(parts, ignore_index=True)
+        admission["admitted_files"] += 1
+        admission["admitted_rows"] += len(part)
+    admission["rejected_files"] = admission["candidate_files"] - admission["admitted_files"]
+    if admission["rejected_files"]:
+        reason_summary = ", ".join(
+            f"{reason}={admission[reason]}"
+            for reason in rejection_reasons
+            if admission[reason]
+        )
+        expected_filter_exclusions = (
+            admission["frequency_filter_mismatch"]
+            + admission["specification_filter_mismatch"]
+        )
+        log_admission = (
+            LOGGER.info
+            if admission["rejected_files"] == expected_filter_exclusions
+            else LOGGER.warning
+        )
+        log_admission(
+            "Pooled effect-path admission rejected %d/%d candidate file(s): %s",
+            admission["rejected_files"],
+            admission["candidate_files"],
+            reason_summary,
+        )
+    result = (
+        pd.concat(parts, ignore_index=True)
+        if parts
+        else pd.DataFrame(columns=PATH_COLUMNS)
+    )
+    result.attrs["admission_counts"] = admission
+    return result
 
 
 def aggregate_effect_paths(paths: pd.DataFrame) -> pd.DataFrame:
@@ -387,8 +455,15 @@ def run_pooled_path_event_study(
         specification_fingerprint=specification_fingerprint,
         frequency=frequency,
     )
+    admission_counts = paths.attrs.get("admission_counts", {})
     if paths.empty:
-        raise ValueError("no production GSC/MC effect paths were admitted")
+        count_summary = ", ".join(
+            f"{key}={value}" for key, value in admission_counts.items() if value
+        ) or "candidate_files=0"
+        raise ValueError(
+            "no production GSC/MC effect paths were admitted; "
+            f"admission counts: {count_summary}"
+        )
     series = aggregate_effect_paths(paths)
     grid = pretrend_tests(
         paths,
@@ -417,6 +492,9 @@ def run_pooled_path_event_study(
         "figures": len(written_figures),
         "pretrend_policy": "diagnostic_only_not_an_automatic_label_gate",
     }
+    diagnostics.update(
+        {f"admission_{key}": int(value) for key, value in admission_counts.items()}
+    )
     pd.DataFrame([diagnostics]).to_csv(
         output_directory / "diagnostics.csv", index=False, encoding="utf-8-sig"
     )

@@ -133,6 +133,7 @@ audit_family <- function(family) {
 }
 
 families <- names(formal_matching_spec()$families)
+minimum_complete_families <- formal_matching_spec()$minimum_complete_families
 audit <- treatments[, .(treatment_order, city_key, grid_id, opening_month)]
 for (family in families) {
   audit <- merge(audit, audit_family(family), by = "treatment_order", all.x = TRUE)
@@ -164,5 +165,8 @@ fwrite(
   bom = TRUE
 )
 print(audit[, .N, by = complete_families][order(complete_families)])
-cat("First target meeting the one-family matching boundary:\n")
-print(audit[complete_families >= 1L][1L])
+cat(sprintf(
+  "First target meeting the %d-family matching boundary:\n",
+  minimum_complete_families
+))
+print(audit[complete_families >= minimum_complete_families][1L])

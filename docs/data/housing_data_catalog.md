@@ -4,7 +4,7 @@ Updated: 2026-07-22
 
 The canonical outcome panel is documented in
 [`housing_price_panel.md`](housing_price_panel.md). This catalog describes
-immutable inputs; inclusion in raw storage does not imply causal admissibility.
+immutable inputs; raw storage and causal inclusion use separate checks.
 
 ## Source inventory
 
@@ -27,19 +27,18 @@ at `outputs/housing_acquisition/housing_raw_inventory.csv`.
 
 | Source | Observation unit | Time coverage | Default use |
 |---|---|---|---|
-| Purchased Lianjia bundle | property transaction/listing | approximately 2008–2023 | primary historical price observations |
+| Purchased Lianjia bundle | property transaction/listing | approximately 2008-2023 | primary historical price observations |
 | Anjuke cross-section | listing/community | recent cross-section | spatial anchor and auxiliary price observation |
-| Wayback Lianjia/Beike/Anjuke | archived page observation | approximately 2012–2024 | historical price observations with archive provenance |
+| Wayback Lianjia/Beike/Anjuke | archived page observation | approximately 2012-2024 | historical price observations with archive source records |
 | Repository datasets | dataset-specific | dataset-specific | admitted only after source-specific semantic audit |
 | May 2023 grid price | source grid | 2023-05 | cross-sectional price observation |
-| Community AOI | polygon | static/unknown snapshot | spatial linkage only, not a price outcome |
+| Community AOI | polygon | static/unknown snapshot | spatial linkage |
 
 Listings and transactions remain separate observations in the observation layer;
-the panel does not discard either solely because of price stage. HPI and other
-city-level indices are contextual variables and are not expanded into independent
-500 m outcomes.
+the panel retains both price stages. HPI and other city-level indices remain
+contextual variables and stay at the city level.
 
-## Provenance rules
+## Source record rules
 
 - Source-owned filenames and archive-internal paths are unchanged.
 - Provider release labels such as `v4` remain part of external dataset identity.
@@ -52,4 +51,4 @@ city-level indices are contextual variables and are not expanded into independen
 
 See [`housing_raw_naming.md`](housing_raw_naming.md) for the complete naming
 contract and [`housing_acquisition_contract.md`](housing_acquisition_contract.md)
-for admission and acquisition requirements.
+for source acquisition and table inclusion requirements.

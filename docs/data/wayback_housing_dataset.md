@@ -1,12 +1,12 @@
 # Wayback Housing Price Dataset
 
-**Version 1.1 — July 2026**
+**Version 1.1, July 2026**
 
-Historical housing price data for 42 Chinese metro cities (2012–2026), collected by archiving Wayback Machine snapshots of Lianjia, Beike, and Anjuke listing and transaction pages.
+Historical housing price data for 42 Chinese metro cities (2012-2026), collected by archiving Wayback Machine snapshots of Lianjia, Beike, and Anjuke listing and transaction pages.
 
 ---
 
-## 1. Provenance
+## 1. Source records
 
 All data was obtained from the **Internet Archive's Wayback Machine** (`web.archive.org`). No live websites were scraped; every record comes from historical page snapshots archived between 2012 and 2026.
 
@@ -16,7 +16,7 @@ All data was obtained from the **Internet Archive's Wayback Machine** (`web.arch
 | `xiaoqu` | lianjia.com | `/xiaoqu/` (community list) | Community listing snapshots: community name, average unit price, location description |
 | `beike_chengjiao` | ke.com | `/chengjiao/` | Same structure as Lianjia chengjiao; Beike shares Lianjia's underlying database |
 | `beike_xiaoqu` | ke.com | `/xiaoqu/` | Same as Lianjia xiaoqu; covers cities with no Lianjia subdomain |
-| `anjuke` | anjuke.com | `/community/` | Historical community listing pages (2012–2018), filling early-year gaps |
+| `anjuke` | anjuke.com | `/community/` | Historical community listing pages (2012-2018), filling early-year gaps |
 | `detail` | lianjia.com | `/xiaoqu/{id}/` | Individual community detail pages; very low coverage (experimental) |
 
 **Canonical exact-endpoint audit:** 202/202 city-platform-page targets have
@@ -48,7 +48,7 @@ data/archive/raw/housing/web_archives/wayback/
     └── {source}_{city}_{page}.jsonl   # per-capture crawl outcomes and resume state
 ```
 
-The inventory and manifest are part of the dataset provenance: a CSV row can
+The inventory and manifest are part of the dataset source record: a CSV row can
 be traced back to the exact Wayback capture that produced it.
 
 ---
@@ -127,11 +127,11 @@ examples above are descriptive and not the acceptance source.
 
 | Period | Rows | Primary Source |
 |--------|------|----------------|
-| 2012–2015 | ~3,900 | Anjuke Wayback |
-| 2016–2020 | ~14,000 | Lianjia chengjiao + xiaoqu |
-| 2021–2026 | ~5,000 | Lianjia xiaoqu + Beike |
+| 2012-2015 | ~3,900 | Anjuke Wayback |
+| 2016-2020 | ~14,000 | Lianjia chengjiao + xiaoqu |
+| 2021-2026 | ~5,000 | Lianjia xiaoqu + Beike |
 
-**Peak years:** 2019–2021 (2,600–3,300 rows/year). Early years (2012–2015) are sparse because only Anjuke pages were archived.
+**Peak years:** 2019-2021 (2,600-3,300 rows/year). Early years (2012-2015) are sparse because only Anjuke pages were archived.
 
 ---
 
@@ -139,9 +139,9 @@ examples above are descriptive and not the acceptance source.
 
 1. **No coordinates.** Wayback archives are HTML pages; latitude/longitude are not embedded. Community names must be geocoded externally (via Amap/Baidu API or cross-referenced with coordinate databases).
 
-2. **Spatial density.** Most cities have 50–400 communities represented. Each community appeared only on page 1 of the listing (30 items/page). Wayback did not archive paginated pages (pg2+). This is the fundamental constraint of page-level web archiving.
+2. **Spatial density.** Most cities have 50-400 communities represented. Each community appeared only on page 1 of the listing (30 items/page). Wayback archives contain limited paginated pages (pg2+). This limits page-level web coverage.
 
-3. **Chengjiao is spotty.** Transaction pages (chengjiao) show 30 recent sales per snapshot, typically from a single time window. Most communities appear in only 1–2 snapshot years.
+3. **Chengjiao is spotty.** Transaction pages (chengjiao) show 30 recent sales per snapshot, typically from a single time window. Most communities appear in only 1-2 snapshot years.
 
 4. **No duplicate removal across sources.** A community may appear in Lianjia, Beike, and Anjuke snapshots with slightly different names. Cross-source deduplication is the responsibility of downstream processing.
 
@@ -158,7 +158,7 @@ examples above are descriptive and not the acceptance source.
      exact 14-digit timestamp are persisted in the inventory.
 
 2. Snapshot selection:
-   Fetch every in-scope exact-endpoint capture (2012–2026 by default). CDX
+   Fetch every in-scope exact-endpoint capture (2012-2026 by default). CDX
    resumption keys prevent silent truncation at the per-response limit.
 
 3. Page fetch:
@@ -190,7 +190,7 @@ beijing = pd.read_csv(f"{base}/beijing_wayback_chengjiao.csv")
 beijing_xq = pd.read_csv(f"{base}/beijing_wayback_xiaoqu.csv")
 beijing_bk = pd.read_csv(f"{base}/beijing_wayback_beike_chengjiao.csv")
 
-# Each CSV has a different schema — see Section 3.
+# Each CSV has a different schema: see Section 3.
 # Join by community name for cross-source validation.
 ```
 

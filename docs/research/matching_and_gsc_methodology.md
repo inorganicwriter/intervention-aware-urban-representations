@@ -1,13 +1,14 @@
 # 对照组匹配、广义合成控制与矩阵补全：方法说明
 
 状态：active  
-日期：2026-08-19
+日期：2026-08-27
 适用范围：5,048 个地铁站点处理网格的控制组选择、匹配标签生成、GSC 回退和 MC 第三层回退
 
 ## 1. 文档定位
 
 本文件完整描述对照组选择的算法逻辑、文献出处、项目设计与原论文的异同。  
-权威冻结决策见 DDR-003 和 DDR-004；本文件是方法层面的可读说明。
+权威冻结决策见 DDR-003 和 DDR-004；本文件是方法层面的可读说明。Python/GPU 是当前正式
+生产后端，R 包流程保留为参考、资格和敏感性审计。
 
 ---
 
@@ -76,28 +77,28 @@
 
 ### 4.1 Abadie-Imbens 匹配
 
-#### 与论文一致的部分
+#### 匹配与论文一致的部分
 
 - `estimand = "ATT"`，`M = 1`（一对一最近邻）
 - `replace = TRUE`（允许放回），`Weight = 2`（Mahalanobis 距离）
 - `BiasAdjust = TRUE`，`Var.calc = 1`（完整 cohort ATT 估计时使用异方差稳健解析方差）
 - 共同支持（common support）是 Abadie-Imbens 框架的标准要求
 
-#### 项目层设计（与论文步骤分开）
+#### 项目新增规则
 
-| 设计 | 论文是否涉及 | 项目理由 |
+| 设计 | 项目关系 | 本项目说明 |
 |------|------------|---------|
-| `Y = NULL` 两阶段分离 | 否 | 防止处理后结果泄漏到控制身份选择；DDR-004 第 3 节规定 |
-| lag1 holdout + donor-donor placebo q95 门禁 | 否 | 项目预注册的质量规则；用 200 个确定性 donor 伪处理匹配校准阈值 |
-| 同城优先 → 跨城标准化 fallback 路由 | 否 | 城市内经济环境更相似；跨城需处理前城市内标准化（median/MAD） |
-| 三块 12 月特征（lag1/2/3） | 否 | 月度数据稀疏（房价非每月交易），分块求均值避免要求特定月份有观测 |
-| 最少 1 个完整变量族（覆盖优先边界） | 否 | 保留可用标签覆盖；单变量标签记录较低质量等级 |
-| 控制身份冻结后不可因结果改变 | 否 | 防止基于处理后结果重新选择对照 |
+| `Y = NULL` 两阶段分离 | 项目新增 | 控制身份选择只读取处理前数据，依据 DDR-004 第 3 节执行 |
+| lag1 holdout + donor-donor placebo q95 门禁 | 项目新增 | 使用 200 个确定性 donor 伪处理匹配校准项目质量阈值 |
+| 同城优先 → 跨城标准化 fallback 路由 | 项目新增 | 同城优先保留相近经济环境，跨城路径使用处理前城市内标准化（median/MAD） |
+| 三块 12 月特征（lag1/2/3） | 项目新增 | 月度房价交易较稀疏，分块求均值以覆盖实际观测月份 |
+| 最少 1 个完整变量族（覆盖优先边界） | 项目新增 | 保留可用标签覆盖，单变量标签记录较低质量等级 |
+| 控制身份冻结后保持不变 | 项目新增 | 控制身份在读取结果前完成冻结，后续结果只用于生成标签 |
 
-#### 关键区别
+#### 匹配路径的关键区别
 
 论文定义的是**群体 ATT 估计器**：给定处理组和 donor pool，计算平均处理效应及其标准误。  
-项目使用的是**个体控制身份选择**：为每个处理网格找到一个对照网格，冻结其身份后用于生成逐网格响应标签。完整 ATT 估计器独立运行（`run_complete_abadie_imbens.R`），但不替代逐网格标签。
+项目使用**个体控制身份选择**：为每个处理网格找到一个对照网格，冻结其身份后生成逐网格响应标签。完整 ATT 估计器独立运行（`run_complete_abadie_imbens.R`），逐网格标签保留独立的响应路径记录。
 
 具体差异：
 - 控制选择阶段：`BiasAdjust = FALSE`, `Var.calc = 0`（不识别偏差修正和方差，只选控制身份）
@@ -106,7 +107,7 @@
 
 ### 4.2 Xu GSC
 
-#### 与论文一致的部分
+#### GSC 与论文一致的部分
 
 - `estimator = "gsynth"`（交互固定效应模型）
 - `force = "two-way"`（个体效应 + 时间效应）
@@ -115,20 +116,20 @@
 - `min.T0 = 5`（最少 5 个预处理期）
 - `se = TRUE`，`inference = "parametric"`，`nboots = 200`（参数 bootstrap 标准误）
 - `normalize = TRUE`（Xu 2017 推荐的标准化选项）
-- donor admission 只依据处理前完整路径
+- donor 纳入只依据处理前完整路径
 
 #### 项目自行设计的部分
 
-| 设计 | 论文是否涉及 | 项目理由 |
+| 设计 | 项目关系 | 本项目说明 |
 |------|------------|---------|
-| anticipation window（月度 6 个月，年度 0/1 年） | 否 | TOD 文献（Cao & Porter-Nelson 2016）表明开通前已有预期效应；月度路径排除前 6 个月，年度路径用 `annual_anticipation_years` 参数近似 |
-| 跨城标准化（城市内 median/MAD 标准化后跨城 donor） | 否 | 不同城市经济规模差异大，直接混用会导致大城市 donor 主导因子结构 |
-| 跨城 masked-placebo 门禁 | 否 | 掩盖目标最后 12 个月，用 20 个 donor 伪处理校准 q95 RMSPE 门槛 |
-| VIIRS 结构性边界检查 | 否 | VIIRS 数据始于 2012-01，早于此的站点不满足 gsynth `min.T0=5` |
-| 两步 gsynth（先 CV 选 r，再固定 r 跑 bootstrap） | 否 | 控制内存：CV 可并行 8 核，bootstrap 顺序执行避免复制多 GB 面板 |
-| 跨城标准化标签的反标准化 | 否 | `Y.ct` 在标准化空间估计，用目标城市的 `(pre_center, pre_scale)` 乘回原始尺度 |
+| anticipation window（月度 6 个月，年度 0/1 年） | 项目新增 | 月度路径排除前 6 个月，年度路径使用 `annual_anticipation_years` 参数近似预期效应 |
+| 跨城标准化（城市内 median/MAD 标准化后跨城 donor） | 项目新增 | 先消除城市经济规模差异，再使用跨城 donor 拟合因子结构 |
+| 跨城 masked-placebo 门禁 | 项目新增 | 掩盖目标最后 12 个月，用 20 个 donor 伪处理校准 q95 RMSPE 阈值 |
+| VIIRS 结构性边界检查 | 项目新增 | VIIRS 数据始于 2012-01，早期站点按 `min.T0=5` 检查处理前支持 |
+| 两步 gsynth（先 CV 选 r，再固定 r 跑 bootstrap） | 项目新增 | CV 使用并行计算，bootstrap 顺序执行，控制多 GB 面板的内存占用 |
+| 跨城标准化标签的反标准化 | 项目新增 | `Y.ct` 在标准化空间估计，使用目标城市的 `(pre_center, pre_scale)` 恢复原始尺度 |
 
-#### 关键区别
+#### GSC 路径的关键区别
 
 论文的 GSC 是**群体-level 因果推断方法**：给定处理组和 donor pool，估计 ATT、反事实路径和不确定性。  
 项目将 GSC 作为**逐网格标签生成器**：每次为一个处理网格及其 donor pool 拟合一个 gsynth 模型，提取该网格的反事实路径作为标签。
@@ -140,7 +141,7 @@
 
 ### 4.3 PanelMatch
 
-#### 与论文一致的部分
+#### PanelMatch 的一致部分
 
 - `refinement.method = "mahalanobis"`，`size.match = 1`
 - `matching = TRUE`，`match.missing = FALSE`，`listwise.delete = TRUE`
@@ -218,7 +219,7 @@ Matching::Match(
 )
 ```
 
-零方差特征在 `active_matching_matrix` 中被移除（`feature_sd > sqrt(.Machine$double.eps)`），避免协方差矩阵不可逆。
+零方差特征在 `active_matching_matrix` 中被移除（`feature_sd > sqrt(.Machine$double.eps)`），保证协方差矩阵可逆。
 
 ### 5.4.1 静态协变量（区位/轨道）两阶段精炼
 
@@ -287,7 +288,7 @@ scale  = mad(donor_values)      # by city, fallback to sd, fallback to 1
 - 同城 GSC：处理网格所在城市的全部合格 never-treated donor
 - 跨城 GSC：全部 44 城的合格 never-treated donor
 
-donor admission 只要求处理前路径完整（`pre_finite = TRUE` 且 `pre_periods == length(pre)`），不读取处理后结果。
+donor 纳入要求处理前路径完整（`pre_finite = TRUE` 且 `pre_periods == length(pre)`），处理后结果在此阶段保持隔离。
 
 ### 6.3 时间窗口
 
@@ -329,7 +330,7 @@ fit <- gsynth(Y ~ D, CV = FALSE, r = selected_r, se = TRUE, nboots = 200, ...)
 
 ### 6.6 跨城 masked-placebo 门禁
 
-掩盖目标网格最后 12 个月（月度）或 1 年（年度）的预处理数据，用 gsynth 拟合剩余预处理期。从 donor 中抽样 20 个做相同的伪处理。目标网格的 masked RMSPE 不得超过 donor 伪处理的第 95 百分位。
+掩盖目标网格最后 12 个月（月度）或 1 年（年度）的预处理数据，用 gsynth 拟合剩余预处理期。从 donor 中抽样 20 个做相同的伪处理。目标网格的 masked RMSPE 需要处于 donor 伪处理第 95 百分位以内。
 
 ### 6.7 标签生成
 
@@ -341,35 +342,35 @@ L[i,k,h] = Y_observed[i,k,h] - Y_counterfactual[i,k,h]
 
 ---
 
-## 7. 信息边界（防泄漏设计）
+## 7. 信息使用边界
 
-| 阶段 | 允许读取 | 禁止读取 |
+| 阶段 | 使用的信息 | 隔离的信息 |
 |------|---------|---------|
 | 控制身份选择 | 处理前特征（lag2/lag3） | 处理后结果、处理后缺失状态、lag1 holdout |
 | placebo 校准 | donor 的 lag2/lag3 和 lag1 | 处理后结果、目标网格的 lag1 |
-| 匹配标签生成 | 冻结的控制身份 + 处理前基期 + 处理后结果 | 不允许因结果改变控制身份 |
-| GSC donor admission | 处理前完整路径 | 处理后结果、处理后缺失 |
-| GSC 标签生成 | 处理前路径 + 处理后结果 | 不允许因结果重选 donor |
+| 匹配标签生成 | 冻结的控制身份 + 处理前基期 + 处理后结果 | 控制身份保持冻结 |
+| GSC donor 纳入 | 处理前完整路径 | 处理后结果、处理后缺失 |
+| GSC 标签生成 | 处理前路径 + 处理后结果 | donor 保持冻结 |
 | 跨城标准化参数 | donor 的处理前值 | 处理单元的处理前值（不参与标准化参数计算） |
 
 ---
 
-## 7. Matrix Completion 回退
+## 8. Matrix Completion 回退
 
-### 7.1 进入条件
+### 8.1 进入条件
 
 匹配和 GSC 均失败后自动触发。
 
-### 7.2 文献出处
+### 8.2 文献出处
 
 | 项目 | 内容 |
 |------|------|
 | 论文 | Athey, Bayati, Doudchenko, Imbens & Khosravi (2021). *Matrix Completion Methods for Causal Panel Data Models.* JASA 116:1716-1730 |
-| 应用验证 | Ratledge et al. (2022), Nature — 在乌格兰电力接入评估中验证 MC 在数据稀疏环境下的因果推断可靠性 |
+| 应用验证 | Ratledge et al. (2022), Nature，在乌格兰电力接入评估中验证 MC 在数据稀疏环境下的因果推断可靠性 |
 | R 包 | `gsynth` 1.4.0, estimator=`"mc"` |
 | 代码位置 | `scripts/causal_r/run_complete_mc.R` |
 
-### 7.3 算法原理
+### 8.3 算法原理
 
 矩阵补全将面板 N×T 处理为矩阵，处理单元的处理后值视为缺失。通过核范数
 （nuclear norm）正则化，用剩余单元的观测值补全缺失的反事实路径：
@@ -381,7 +382,7 @@ minimize ||Y_obs - L||_F^2 + λ||L||_*
 其中 `||L||_*` 为矩阵的核范数（奇异值之和），等价于假设矩阵低秩（少数因子
 驱动大部分变异）。lambda 通过交叉验证选择。
 
-### 7.4 与 GSC 的关键区别
+### 8.4 与 GSC 的关键区别
 
 | 特性 | GSC | MC |
 |------|-----|----|
@@ -394,7 +395,7 @@ minimize ||Y_obs - L||_F^2 + λ||L||_*
 | donor 数量 | 无上限（项目实践不加 cap） | 有 soft cap（受内存限制，项目按预处理完整度选 top 2000） |
 | inference | 参数 bootstrap 200 次 | 固定 lambda 后 jackknife；`nboots=200` 仅保留为兼容性元数据 |
 
-### 7.5 项目设计与原文的关系
+### 8.5 项目设计与原文的关系
 
 MC 方法来自 Athey et al. (2021)，项目不做算法修改。`min.T0=1` 和
 `max_donors=2000` 是项目层面的应用参数，不属于论文算法内部步骤。Ratledge
@@ -403,7 +404,7 @@ et al. (2022) 验证了 MC 在数据稀疏环境下的可靠性。他们面对�
 有观测但不够 GSC 的 min.T0=5），因此不需要 CNN 预测步骤，直接使用 MC
 补全反事实路径。
 
-### 7.6 标签生成
+### 8.6 标签生成
 
 ```text
 L[i,k,h] = Y_observed[i,k,h] - Y_counterfactual[i,k,h]
@@ -413,32 +414,35 @@ L[i,k,h] = Y_observed[i,k,h] - Y_counterfactual[i,k,h]
 来自固定 lambda 后的 jackknife。MC 必须以 `CV=TRUE` 对 20 个候选正则化强度进行
 MSPE 交叉验证；`lambda.cv`、CV MSPE、处理前观测期数和处理前 RMSPE 均写入标签与
 manifest。处理单元的处理后结果在 CV 和拟合前统一替换为仅由处理前数据计算的均值，
-避免响应泄漏。`min.T0=1` 的标签标记为
+保持响应信息隔离。`min.T0=1` 的标签标记为
 `mc_*_minimal_pre_support`，但仍保留为可用响应标签。
 
-## 8. 已知局限
+## 9. 已知局限
 
-### 8.1 SUTVA 假设
+### 9.1 SUTVA 假设
 
 PanelMatch、Abadie-Imbens 和 Xu GSC 均假设 SUTVA（稳定单元处理值假设）。跨城 donor 所在城市可能已有地铁开通，1km 空间排除确保 donor 网格附近无站点，但 2km 外的网络溢出无法完全消除。DDR-001 预留了 1.5km/2km 敏感性阈值。
 
-### 8.2 年度 anticipation 近似
+### 9.2 年度 anticipation 近似
 
 月度路径的 6 个月 anticipation 无法在年粒度面板中精确表达。`annual_anticipation_years = 0`（默认）不排除开通前一年，对应月度 0 个月敏感性规格；`= 1` 排除开通前一年，对应 12 个月敏感性。Xu (2017) 不讨论 anticipation。
 
-### 8.3 GSC donor 数量
+### 9.3 GSC donor 数量
 
-Xu (2017) 和 `gsynth` 包均不约束 donor 数量下限。项目在跨城 placebo 路径需要至少 20 个 donor（抽样需求），同城路径无额外下限。`min.T0 = 5` 已间接保证最低数据质量。
+Xu (2017) 和 `gsynth` 包均不约束 donor 数量下限。项目在跨城 placebo 路径需要至少 20
+个 donor（抽样需求），同城路径无额外下限。Python/GPU 跨城 GSC 默认在读取结果前按固定
+seed 做稳定哈希抽样，最多保留 50,000 个 donor；该上限和 seed 写入 specification
+fingerprint。`min.T0 = 5` 已间接保证最低数据质量。
 
-### 8.4 MC 内存限制
+### 9.4 MC 内存限制
 
-Athey et al. (2021) 不设 donor 数量上限。项目实践中，`gsynth` 的 MC 模式在
-大 donor pool（>~5000）下会触发内存溢出。当前按预处理期完整度降序选取前
-2,000 个 donor。论文中应明确记录此限制及其对估计结果的潜在影响。
+Athey et al. (2021) 不设 donor 数量上限。项目实践中，Python/GPU 和 R 参考 MC 都按
+预处理期完整度降序最多保留 2,000 个 donor，以控制核范数补全的内存；该限制及其对估计
+结果的影响必须在正式报告中明确记录。
 
 ---
 
-## 9. 代码文件索引
+## 10. 代码文件索引
 
 | 文件 | 职责 |
 |------|------|
@@ -457,48 +461,6 @@ Athey et al. (2021) 不设 donor 数量上限。项目实践中，`gsynth` 的 M
 | `src/urban_intervention/causal/pretraining_dataset.py` | 训练前数据集发布器 |
 
 
-## 6. 事件研究（平行趋势验证）
-
-三路径采用不同但互补的事件研究设计，统一输出到
-\outputs/event_study/\。
-
-### 6.1 匹配路径（TWFE 回归，新增）
-
-对 matched pairs（处理网格 + 冻结控制网格）估计标准双向固定效应
-事件研究回归（fixest）：
-
-    Y_it = sum_k beta_k * D_it^k + alpha_i + gamma_t + eps_it
-
-- Y_it：结果水平值（房价 log price / VIIRS asinh 辐亮度）
-- D_it^k：事件时间虚拟变量，基期为最后一个清洁处理前时期；月度主规格为 k = -7
-- alpha_i：网格固定效应；gamma_t：日历月固定效应
-- 标准误按网格聚类
-- 平行趋势检验：H0: beta_k = 0 for all k < 0 的联合 Wald 检验
-
-脚本：un_event_study_matching.R\。
-
-### 6.2 GSC / MC 路径（counterfactual gap 聚合）
-
-GSC（gsynth）与 MC（fect）估计器本身输出每期的处理效应序列
-（est.att），pre-period 的 observed - counterfactual gap 即平行趋势
-证据。聚合方式（\event_study_lib.R\ 的
-\ggregate_event_study_series\）：
-
-- 每 event_time 的均值 = 跨网格 ATT 均值
-- 聚合标准误 = sqrt(within_var + between_var / n)
-  - within_var = mean(SE_i^2) / n（bootstrap SE 聚合）
-  - between_var = var(grid_mean)（网格间方差）
-- 联合零 pre-trend 检验：网格级均值 one-sample t 检验
-
-### 6.3 与文献的一致性
-
-- Roth (2022) 警示：pre-trend 检验不能证明平行趋势，只作支持证据
-- Sun & Abraham (2021)：匹配路径的 TWFE 作为基准，异质性稳健版本
-  作为敏感性（待实现）
-- 匹配路径的选择阶段 holdout/placebo q95 门禁独立于事件研究，
-  两者互为补充
-
-## 7. 公式汇总
-
-全部计量公式（响应标签 / 匹配 / GSC / MC / 事件研究 / Sun-Abraham / SMD）
-集中见 [estimator_formulas.md](estimator_formulas.md)，作为论文 Methods 底稿。
+事件研究和 DID 平行趋势的实现与解释已集中到
+[`identification_and_diagnostics.md`](identification_and_diagnostics.md)。公式附录见
+[`estimator_formulas.md`](estimator_formulas.md)。

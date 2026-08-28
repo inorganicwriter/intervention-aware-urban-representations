@@ -2,6 +2,7 @@
 
 本目录只保存当前仍有效的操作说明：
 
+- [`../PROJECT_GUIDE.md`](../PROJECT_GUIDE.md)：项目总览、文档权威层级和冻结输入边界。
 - [`server_deployment.md`](server_deployment.md)：服务器部署、上传清单、生产运行序列与监控。
 - [`current_project_status.md`](current_project_status.md)：固定研究资产、生产入口、队列状态和待执行任务。
 - [`station_data.md`](station_data.md)：站点人工决议及三个可追溯产品。

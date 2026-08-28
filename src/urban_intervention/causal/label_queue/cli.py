@@ -19,11 +19,13 @@ import pyarrow.parquet as pq
 from urban_intervention.causal.gpu.qualification import (
     validate_formal_qualification_receipt,
 )
+from urban_intervention.causal.setup_inputs import validate_frozen_formal_matching_spec
 from urban_intervention.utils import atomic_write_json
 
 from .orchestrator import process_one
 from .runtime import (
     CONTROL_QUEUE,
+    DEFAULT_ESTIMATOR_BACKEND,
     OUTCOMES,
     ROOT,
     SUPPORT,
@@ -160,7 +162,7 @@ def main() -> int:
     parser.add_argument(
         "--estimator-backend",
         choices=("python_gpu", "r_reference"),
-        default="python_gpu",
+        default=DEFAULT_ESTIMATOR_BACKEND,
         help="Run formal GSC/MC with Python/PyTorch (default) or the audited R reference.",
     )
     parser.add_argument(
@@ -212,10 +214,19 @@ def main() -> int:
     settings.price_measure = args.price_measure
     settings.label_window = args.window
     settings.transaction_count_threshold = args.transaction_count_threshold
+    print(
+        f"Configured causal-label backend={settings.estimator_backend}, "
+        f"run_mode={settings.run_mode}, gpu_ids={os.environ.get('MIT_CAUSAL_GPU_IDS', 'auto')}"
+    )
     if settings.max_gsc_cross_city_donors < 20:
         parser.error("--max-gsc-cross-city-donors must be at least 20")
     if settings.transaction_count_threshold < 1:
         parser.error("--transaction-count-threshold must be positive")
+    if settings.run_mode == "production" and not args.dry_run:
+        try:
+            validate_frozen_formal_matching_spec(ROOT)
+        except ValueError as exc:
+            parser.error(str(exc))
 
     has_shard = args.shard_id is not None and args.shard_count is not None
     if bool(args.shard_id is not None) != bool(args.shard_count is not None):

@@ -5,7 +5,7 @@ Updated: 2026-07-22
 ## Objective
 
 Collect every housing observation that is legally and technically available
-without pre-filtering cities, years, station cohorts, or observed prices. Data
+across cities, years, station cohorts, and observed price stages. Data
 quality and causal support are evaluated only after immutable raw acquisition.
 
 ## Source layers
@@ -17,16 +17,15 @@ quality and causal support are evaluated only after immutable raw acquisition.
 | Platform estimate | community reference price | modeled/current valuation | cross-sectional auxiliary signal |
 | Index | NBS HPI | city-market change | city-month contextual control |
 
-No layer may silently overwrite or fill another layer.
+Each layer is stored independently. A layer never overwrites or fills another layer.
 
 ## Access modes
 
 Allowed acquisition modes are licensed export, platform export, Wayback
 archive, official open data, and web collection explicitly permitted by the
-platform. Collection must stop when access controls, robots rules, or the
-authorization scope prohibit automation. Captcha solving, browser-fingerprint
-masking, proxy rotation, or similar access-control circumvention is not part of
-the research pipeline.
+platform. The authorization scope determines whether automation is available.
+Captcha solving, browser-fingerprint masking, proxy rotation, and similar
+access-control circumvention stay outside the research pipeline.
 
 ## Storage
 
@@ -44,14 +43,13 @@ data/archive/staging/housing/
   standardized/{batch_id}/                   canonical observations + manifest
 ```
 
-Every new batch has a unique identifier. Existing batches are never silently
-overwritten. Corrections use a new batch identifier and record the superseded
-batch in research documentation.
+Every new batch has a unique identifier. Corrections use a new batch identifier,
+retain the earlier batch, and record the replacement in research documentation.
 
 The complete naming policy is defined in
 [`housing_raw_naming.md`](housing_raw_naming.md).
 
-## Required provenance
+## Required source records
 
 - source platform and acquisition method;
 - immutable input-file SHA-256;

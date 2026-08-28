@@ -39,6 +39,9 @@ from urban_intervention.causal.gpu.fixed_control import fixed_control_labels  # 
 from urban_intervention.causal.gpu.qualification import (  # noqa: E402
     validate_formal_qualification_receipt,
 )
+from urban_intervention.causal.setup_inputs import (  # noqa: E402
+    validate_frozen_formal_matching_spec,
+)
 from urban_intervention.data.paths import (  # noqa: E402
     CONTROL_DESIGN_QUEUE as CONTROL_QUEUE,
 )
@@ -99,7 +102,8 @@ _PRICE_MEASURE = "median"
 _LABEL_WINDOW = 1
 _TRANSACTION_COUNT_THRESHOLD = 1
 _RUN_MODE = "production"
-_ESTIMATOR_BACKEND = "r_reference"
+DEFAULT_ESTIMATOR_BACKEND = "python_gpu"
+_ESTIMATOR_BACKEND = DEFAULT_ESTIMATOR_BACKEND
 _MAX_GSC_CROSS_CITY_DONORS = 50_000
 _GSC_DONOR_SAMPLING_SEED = 20260823
 _QUALIFICATION_RECEIPT: Path | None = None
@@ -2379,7 +2383,7 @@ def main() -> int:
     parser.add_argument(
         "--estimator-backend",
         choices=("python_gpu", "r_reference"),
-        default="python_gpu",
+        default=DEFAULT_ESTIMATOR_BACKEND,
         help="Run formal GSC/MC with Python/PyTorch (default) or the audited R reference.",
     )
     parser.add_argument(
@@ -2432,10 +2436,19 @@ def main() -> int:
     _PRICE_MEASURE = args.price_measure
     _LABEL_WINDOW = args.window
     _TRANSACTION_COUNT_THRESHOLD = args.transaction_count_threshold
+    print(
+        f"Configured causal-label backend={_ESTIMATOR_BACKEND}, "
+        f"run_mode={_RUN_MODE}, gpu_ids={os.environ.get('MIT_CAUSAL_GPU_IDS', 'auto')}"
+    )
     if _MAX_GSC_CROSS_CITY_DONORS < 20:
         parser.error("--max-gsc-cross-city-donors must be at least 20")
     if _TRANSACTION_COUNT_THRESHOLD < 1:
         parser.error("--transaction-count-threshold must be positive")
+    if _RUN_MODE == "production" and not args.dry_run:
+        try:
+            validate_frozen_formal_matching_spec(ROOT)
+        except ValueError as exc:
+            parser.error(str(exc))
 
     has_shard = args.shard_id is not None and args.shard_count is not None
     if bool(args.shard_id is not None) != bool(args.shard_count is not None):

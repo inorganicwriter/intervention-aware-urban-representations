@@ -11,6 +11,7 @@ CODE_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(CODE_ROOT / "src"))
 
 from urban_intervention.causal.setup_inputs import (  # noqa: E402
+    MINIMUM_COMPLETE_FAMILIES,
     audit_formal_target_support,
     rebuild_formal_inputs,
     reset_queues,
@@ -38,7 +39,8 @@ def main() -> int:
         print(
             "Audited formal support: "
             f"{len(audit)} treatments; "
-            f"{int(audit['complete_families'].ge(1).sum())} with matching support"
+            f"{int(audit['complete_families'].ge(MINIMUM_COMPLETE_FAMILIES).sum())} "
+            "with matching support"
         )
     return 0
 

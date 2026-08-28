@@ -12,9 +12,10 @@ Updated: 2026-07-22
 - Manifest status: complete; no duplicate city-month names, zero-byte files,
   or header variants
 
-The external directory is immutable input and is not copied into the project.
+The external directory is immutable input. The project records its path and reads
+the partitions through the cache contract.
 
-## Why nearest-grid matching is prohibited
+## Why the exact grid assignment is used
 
 The GEE exporter uses `image.sample(scale=500, projection="EPSG:4326")`.
 Those source centers do not share the projected UTM lattice used by the
@@ -22,10 +23,10 @@ project's 500 m grids. In Beijing, the observed source-center spacing is about
 382 m east-west and 499 m north-south. Multiple distinct VIIRS centers can
 therefore fall inside one project grid.
 
-Assigning every source center to the nearest target centroid within 500 m is
-not containment. On Beijing 2012-01 it admitted 854 centers from cells that had
-been clipped out of the reference grid and assigned one additional center to a
-different neighboring grid.
+Assigning every source center to the nearest target centroid within 500 m
+represents distance rather than cell containment. On Beijing 2012-01 it admitted
+854 centers from cells that had been clipped out of the reference grid and
+assigned one additional center to a different neighboring grid.
 
 ## Canonical matching and aggregation
 
@@ -40,20 +41,20 @@ different neighboring grid.
    the maximum observed origin residual is below 0.006 m.
 4. Transform the source center to the city UTM CRS and assign it to the exact
    half-open target cell `[x0,x1) × [y0,y1)`. Centers in clipped-out cells are
-   reported as outside the reference grid. There is no nearest-neighbor
-   fallback.
-5. Multiple *distinct* source centers inside one target grid are spatial
-   support, not duplicate rows. The primary target-grid estimand is their
+   reported as outside the reference grid. Grid assignment uses the exact cell
+   rule throughout.
+5. Multiple *distinct* source centers inside one target grid form spatial
+   support. The primary target-grid estimand is their
    unweighted mean radiance. Equal weighting is appropriate because centers
    come from one fixed-scale source lattice within a city. `valid_days` is a
-   quality measure and does not change the radiance estimand.
+   quality measure and leaves the radiance estimand unchanged.
 6. Preserve `source_point_count`. Time-varying drops in this count are audited
    after processing because they can indicate changing within-grid support.
 
 The center-in-cell mean is a zonal-mean approximation rather than an exact
 source-pixel/target-polygon overlap calculation. A nearest-source-to-target-
-centroid outcome may be produced later as a sensitivity analysis, but it is
-not the primary grid-average outcome.
+centroid outcome may be produced later as a sensitivity analysis. The primary
+grid-average outcome uses the center-in-cell mean.
 
 ## Compact publication
 
@@ -72,9 +73,9 @@ file stores only:
 
 Coordinates, product strings, filenames, matching diagnostics, and aggregation
 descriptions are stored once per partition in
-`outputs/viirs_monthly/partition_audits/`, not repeated in every grid row.
+`outputs/viirs_monthly/partition_audits/` and referenced by every grid row.
 
-## Admission gates
+## Publication checks
 
 - unique `(city_key, grid_id, year, month)` after reading Hive partitions;
 - no same-coordinate conflicts;

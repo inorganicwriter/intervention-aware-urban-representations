@@ -14,6 +14,7 @@ from urban_intervention.causal.response_artifact import (
     publish_response_artifact,
     require_reproducible_code_state,
     sha256_file,
+    validate_control_design_provenance,
 )
 
 
@@ -268,6 +269,55 @@ def test_production_release_refuses_small_or_unfinished_queue(tmp_path: Path) ->
     inputs = _fixture(tmp_path)
     with pytest.raises(ValueError, match="5,048"):
         build_response_frame(inputs, "main_a6_r1km", strict_production=True)
+
+
+def test_control_provenance_rejects_legacy_record(tmp_path: Path) -> None:
+    control_root = tmp_path / "control_tasks" / "00001"
+    control_root.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "treatment_order": 1,
+                "status": "matched",
+                "schema": "grid_control_design_v1",
+                "implementation_version": "r-reference-grid-v1",
+                "backend": "r_matching",
+                "viirs_cache_contract": "complete_44_city_2012_2024_monthly_v1",
+                "selected_method": "Matching::Match_M1",
+                "control_selection_uses_post_outcome": False,
+            }
+        ]
+    ).to_csv(control_root / "control_record.csv", index=False)
+    queue = pd.DataFrame({"treatment_order": [1], "status": ["matched"]})
+
+    with pytest.raises(ValueError, match="stale control-design schema"):
+        validate_control_design_provenance(queue, control_task_root=tmp_path / "control_tasks")
+
+
+def test_control_provenance_accepts_current_gpu_record(tmp_path: Path) -> None:
+    control_root = tmp_path / "control_tasks" / "00001"
+    control_root.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "treatment_order": 1,
+                "status": "matched",
+                "schema": "grid_control_design_v3_exact_stable_ties",
+                "implementation_version": "python-causal-v3",
+                "backend": "python_pytorch",
+                "viirs_cache_contract": "complete_44_city_2012_2024_monthly_v1",
+                "selected_method": "python_gpu_M5_static_refine",
+                "control_selection_uses_post_outcome": False,
+            }
+        ]
+    ).to_csv(control_root / "control_record.csv", index=False)
+    queue = pd.DataFrame({"treatment_order": [1], "status": ["matched"]})
+
+    validate_control_design_provenance(
+        queue,
+        control_task_root=tmp_path / "control_tasks",
+        expected_backend="python_gpu",
+    )
 
 
 def test_strict_task_collection_rejects_unqualified_python_manifest(

@@ -40,6 +40,9 @@ sys.path.insert(0, str(CODE_ROOT / "src"))
 from urban_intervention.causal.gpu.qualification import (  # noqa: E402
     validate_formal_qualification_receipt,
 )
+from urban_intervention.causal.setup_inputs import (  # noqa: E402
+    validate_frozen_formal_matching_spec,
+)
 from urban_intervention.data.paths import (  # noqa: E402
     CONTROL_DESIGN_QUEUE,
     COUNTERFACTUAL_QUEUE,
@@ -137,6 +140,7 @@ def phase1_control_design(
     gpu_ids: list[str] | None = None,
     env: dict[str, str] | None = None,
     force_recompute: bool = False,
+    repair_stale_controls: bool = False,
 ) -> None:
     """Run control design for the selected treatment orders."""
     print("=" * 60)
@@ -161,6 +165,8 @@ def phase1_control_design(
         cmd.append("--dry-run")
     if force_recompute:
         cmd.append("--retry")
+    elif repair_stale_controls:
+        cmd.append("--repair-stale")
 
     env = env or os.environ.copy()
     env["R_LIBS_USER"] = str(R_LIB)
@@ -673,6 +679,11 @@ def main() -> int:
         help="Re-run matching for tasks currently marked gsc_pending",
     )
     parser.add_argument(
+        "--repair-stale-controls",
+        action="store_true",
+        help="Recompute only control records rejected by current schema/backend provenance checks.",
+    )
+    parser.add_argument(
         "--gsc-cv-cores",
         type=int,
         default=1,
@@ -731,6 +742,11 @@ def main() -> int:
         if qualification_receipt is None:
             parser.error("production Python labels require --qualification-receipt")
         validate_formal_qualification_receipt(qualification_receipt)
+    if args.run_mode == "production" and not args.dry_run:
+        try:
+            validate_frozen_formal_matching_spec(ROOT)
+        except ValueError as exc:
+            parser.error(str(exc))
 
     if args.orders_file is not None and args.tasks_file is not None:
         parser.error("--orders-file and --tasks-file are mutually exclusive")
@@ -803,6 +819,7 @@ def main() -> int:
                 gpu_ids=gpu_ids,
                 env=estimator_env,
                 force_recompute=args.reset_queues,
+                repair_stale_controls=args.repair_stale_controls,
             )
         elif phase == 2:
             phase2_causal_labels(

@@ -57,7 +57,7 @@
 | `probe` | 训练池拟合的线性探针 → 目标池 RMSE（嵌入 vs 原始特征） | 迁移能力 |
 | `baselines`（test 池） | 随机投影 / PCA（无监督）/ 冻结 DINOv2 / **外观自编码器**（与主模型同结构、无响应监督训练） | 模型是否胜过机会水平与外观-only 基线 |
 | `transfer.per_city` | 每个未见城市的 `nn_corr@k` | 迁移是否在各城市一致 |
-| `transfer.few_shot_probe` | **逐目标城市**抽取 4/8/16/32 个网格的探针 RMSE 曲线（多 seed 均值 ± std） | 少量标签下的城内适应速度，避免目标城市混合 |
+| `transfer.few_shot_probe` | **逐目标城市**抽取 4/8/16/32 个网格的探针 RMSE 曲线（多 seed 均值 ± std） | 少量标签下的城内适应速度，各目标城市分别计算 |
 | `transfer.cross_validated_probe` | 目标池 disjoint-fold 交叉验证探针 RMSE | 有监督适配上限；不在拟合样本上回报 RMSE |
 | `predictive_transfer` | 逐 cell 响应方向（正/负）ridge 分类的 rank-AUC（嵌入 vs 原始特征） | 表示能否预测新城市响应的方向 |
 

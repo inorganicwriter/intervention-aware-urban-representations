@@ -33,19 +33,19 @@ their extracted contents stay together under one dataset identifier.
    `{city_key}__{source}__{unit}__{period}.{ext}` when all fields are known.
 5. External dataset directories use their stable provider identifier and
    published release, for example `mendeley_pj2zff4p9m_v4`. Provider release
-   labels are provenance, not project panel versions.
-6. Source-owned basenames and archive-internal paths are never renamed. This
+   labels identify the external source release; project panel versions are recorded separately.
+6. Source-owned basenames and archive-internal paths retain their original names. This
    includes purchased Chinese filenames, repository attachments, shapefile
    component names, and extracted software packages.
 7. Derived, parsed, standardized, and quarantined artifacts belong in
-   `data/archive/staging/housing/`, not beside immutable downloads.
+   `data/archive/staging/housing/`, separate from immutable downloads.
 8. Every raw file is recorded with relative path, byte size, classification,
    filename policy, and SHA-256 in
    `outputs/housing_acquisition/housing_raw_inventory.csv`.
 
 ## Change control
 
-New raw batches are additive. Corrections receive a new stable batch identifier;
-they do not overwrite an earlier download. A path migration must be recorded in
+New raw batches are additive. Corrections receive a new stable batch identifier
+and preserve the earlier download. A path migration must be recorded in
 `housing_raw_path_migration.csv`, while content changes require a new checksum
 and an explicit supersession record.

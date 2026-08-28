@@ -1,187 +1,91 @@
-# 计量模型公式（Estimator Formulas）
+# 计量公式索引
 
-本文档集中项目全部计量模型的公式与文献依据，作为论文 Methods 的底稿。
-每节给出公式、参数定义、实现位置。三路径（匹配 / GSC / MC）的估计量独立，
-互不混合（DDR-003/004）。
+更新：2026-08-28
+状态：公式导航页
 
----
+完整的估计对象、识别假设、参数含义、推断规则和结果解释见
+[`econometric_methods.md`](econometric_methods.md)。本页只列出项目使用的核心公式和代码入口，便于从公式定位到方法章节。
 
-## 1. 核心定义：响应标签
+## 1. 因果对象和响应标签
 
-每个处理网格 i 在结果族 f、事件时间 h 的因果响应标签：
+| 对象 | 公式 | 详细章节 |
+|---|---|---|
+| 潜在结果 | \(Y_{ikt}=D_{it}Y_{ikt}(1)+(1-D_{it})Y_{ikt}(0)\) | [1.2](econometric_methods.md#12-潜在结果) |
+| 动态效应 | \(τ_{ikh}=Y_{ik,G_i+h}(1)-Y_{ik,G_i+h}(0)\) | [1.3](econometric_methods.md#13-动态处理效应) |
+| 响应标签 | \(L_{ikh}=Y_{ik,G_i+h}-\widehat Y_{ik,G_i+h}(0)\) | [1.3](econometric_methods.md#13-动态处理效应) |
+| 队列均值 | \(μ_{kh}=N_{kh}^{-1}\sum_i L_{ikh}\) | [1.4](econometric_methods.md#14-标签和-att-的区别) |
 
-```
-causal_response_label(i, f, h) = observed(i, f, h) − counterfactual(i, f, h)
-```
+代码入口：[`src/urban_intervention/causal/response_artifact.py`](../../src/urban_intervention/causal/response_artifact.py)。
 
-- observed：处理网格实际观测值（水平或差分，见下）
-- counterfactual：由三路径之一构造的反事实
+## 2. Matching
 
-实现：`scripts/causal_r/complete_estimators_lib.R`（pair_change_labels /
-normalize_gsc_labels）、`run_complete_mc.R`。
+| 对象 | 公式 | 详细章节 |
+|---|---|---|
+| Mahalanobis 距离 | \(d_{ij}=\sqrt{(X_i-X_j)'\widehat\Sigma^{-1}(X_i-X_j)}\) | [4.3](econometric_methods.md#43-mahalanobis-距离) |
+| 条件支持 | \(\min_jX_{jm}\le X_{im}\le\max_jX_{jm}\) | [3.5](econometric_methods.md#35-共同支持和正值概率) |
+| 匹配标签 | \(L_{ikh}=(Y_{i,h}-B_i)-(Y_{j(i),h}-B_{j(i)})\) | [4.6](econometric_methods.md#46-匹配标签) |
+| ATT | \(ATT=N_T^{-1}\sum_i[\Delta Y_i-\sum_jw_{ij}\Delta Y_j]\) | [4.7](econometric_methods.md#47-完整-abadie-and-imbens-att) |
+| 偏差修正 ATT | \(ATT_{adj}=N_T^{-1}\sum_i[\Delta Y_i-\Delta Y_{j(i)}+(X_i-X_{j(i)})'\widehat\beta]\) | [4.7](econometric_methods.md#47-完整-abadie-and-imbens-att) |
 
----
+代码入口：[`src/urban_intervention/causal/gpu/matching.py`](../../src/urban_intervention/causal/gpu/matching.py)、[`src/urban_intervention/causal/gpu/abadie_imbens.py`](../../src/urban_intervention/causal/gpu/abadie_imbens.py)。
 
-## 2. 匹配路径（Abadie–Imbens 最近邻 + DiD 差分）
+## 3. GSC
 
-### 2.1 匹配距离（Mahalanobis）
+| 对象 | 公式 | 详细章节 |
+|---|---|---|
+| 未处理因子结构 | \(Y_{it}(0)=\alpha_i+\delta_t+\lambda_i'F_t+\epsilon_{it}\) | [3.6](econometric_methods.md#36-gsc-的交互固定效应结构) |
+| 目标拟合 | \(Y_{i,t}=a_i+F_t'b_i+\epsilon_{i,t}\) | [5.2](econometric_methods.md#52-交互固定效应模型) |
+| GSC 标签 | \(L_{i,t}=Y_{i,t}-\widehat Y_{i,t}(0)\) | [5.2](econometric_methods.md#52-交互固定效应模型) |
+| CV 误差 | \(MSPE(r)=|S|^{-1}\sum_{(i,t)\in S}[Y_{it}-\widehat Y_{it}(r)]^2\) | [5.3](econometric_methods.md#53-因子数交叉验证) |
+| 处理前 RMSPE | \(RMSPE_i=\sqrt{mean[(Y_{i,t}-\widehat Y_{i,t}(0))^2]}\) | [5.5](econometric_methods.md#55-gsc-诊断) |
+| bootstrap 标准误 | \(SE_t=sd(\{\widehat τ_t^{(b)}\})\) | [5.4](econometric_methods.md#54-gsc-不确定性) |
 
-对处理前协变量向量 X（匹配特征，见 DDR-004）：
+代码入口：[`src/urban_intervention/causal/gpu/gsc.py`](../../src/urban_intervention/causal/gpu/gsc.py)。
 
-```
-d_M(x_t, x_c) = (x_t − x_c)' Σ⁻¹ (x_t − x_c)
-```
+## 4. MC
 
-- Σ：donor 协变量协方差矩阵（`active_matching_matrix` 稳定化逆）
-- M = 1 最近邻，replace = TRUE，ties = FALSE
+| 对象 | 公式 | 详细章节 |
+|---|---|---|
+| 低秩分解 | \(Y(0)=L+E\) | [3.7](econometric_methods.md#37-mc-的低秩结构) |
+| 核范数目标 | \(\min_L |\Omega|^{-1}\sum_{(i,t)\in\Omega}(Y_{it}-L_{it})^2+\lambda\|L\|_*\) | [3.7](econometric_methods.md#37-mc-的低秩结构) |
+| MC 标签 | \(L_{i,t}=Y_{i,t}-\widehat L_{i,t}\) | [6.1](econometric_methods.md#61-矩阵结构) |
+| CV 误差 | \(MSPE(\lambda)=|S|^{-1}\sum_{(i,t)\in S}[Y_{it}-\widehat Y_{it}(\lambda)]^2\) | [6.2](econometric_methods.md#62-lambda-交叉验证) |
+| Jackknife 伪值 | \(p_t^{(-j)}=N\widehat τ_t-(N-1)\widehat τ_t^{(-j)}\) | [6.3](econometric_methods.md#63-mc-标签和-jackknife) |
+| Jackknife 标准误 | \(SE_t^{JK}=\sqrt{var(p_t^{(-j)})/n_{valid,t}}\) | [6.3](econometric_methods.md#63-mc-标签和-jackknife) |
 
-### 2.2 共同支持
+代码入口：[`src/urban_intervention/causal/gpu/matrix_completion.py`](../../src/urban_intervention/causal/gpu/matrix_completion.py)。
 
-处理网格必须落在 donor 特征凸包内（逐协变量 min/max 检查）：
-```
-x_t ∈ [min_donor(X_j), max_donor(X_j)]  ∀ j
-```
+## 5. DID 和事件研究
 
-### 2.3 响应标签（配对差分）
+| 对象 | 公式 | 详细章节 |
+|---|---|---|
+| TWFE 事件研究 | \(Y_{it}=\alpha_i+\gamma_t+\sum_{h\ne h_0}\beta_h[Treated_i\times1(event\_time=h)]+\epsilon_{it}\) | [7.1](econometric_methods.md#71-匹配样本上的-twfe) |
+| 清洁 pre 原假设 | \(H_0:\beta_h=0\) for every clean \(h<0,h\ne h_0\) | [7.3](econometric_methods.md#73-平行趋势联合-wald-检验) |
+| Wald/F 统计量 | \(F=q^{-1}\widehat\beta_{pre}'\widehat V_{pre}^{-1}\widehat\beta_{pre}\) | [7.3](econometric_methods.md#73-平行趋势联合-wald-检验) |
+| 聚类协方差 | \(\widehat V=correction(X'X)^{-1}[\sum_gX_g'e_ge_g'X_g](X'X)^{-1}\) | [7.4](econometric_methods.md#74-聚类协方差) |
+| GSC/MC pooled gap | \(\widehat μ_h=N_h^{-1}\sum_i gap_{i,h}\) | [7.6](econometric_methods.md#76-gsc-和-mc-的事件路径诊断) |
+| pooled 标准误 | \(SE_h=\sqrt{mean(SE_{i,h}^2)/N_h+var(gap_{i,h})/N_h}\) | [7.6](econometric_methods.md#76-gsc-和-mc-的事件路径诊断) |
 
-```
-ΔY_it = Y_i(post_time) − Y_i(baseline_time)      # attach_prepost_outcome
-label_i = ΔY_treated − ΔY_control                # pair_change_labels
-```
+代码入口：[`src/urban_intervention/causal/event_study.py`](../../src/urban_intervention/causal/event_study.py)、[`src/urban_intervention/causal/pooled_event_study.py`](../../src/urban_intervention/causal/pooled_event_study.py)。
 
-### 2.4 聚合 ATT（Abadie–Imbens 偏差校正）
+## 6. 统计推断
 
-```
-ATT = (1/N_t) Σ_i [ ΔY_treated,i − ΔY_control,i ]
-```
-偏差校正项（BiasAdjust）：
-```
-ATT_adj = ATT + (1/N_t) Σ_i (X_t,i − X_c,i)' β̂
-```
-其中 β̂ 为控制组 ΔY 对 X 的 OLS 系数。
+| 推断类型 | 标准误来源 | 区间和 p 值 |
+|---|---|---|
+| TWFE grid/city cluster | CRV1，聚类数减 1 的 t 分布 | 系数 ± t 临界值 × SE |
+| GSC | 200 次参数 bootstrap 的有效路径 | 正态近似 |
+| MC | donor 单位 jackknife 伪值 | 正态近似 |
+| pooled GSC/MC | 任务层 within 方差和网格间 between 方差 | 95% 正态区间 |
 
-实现：`run_complete_abadie_imbens.R`（`Matching::Match`）。
+完整的有效重复次数、聚类层级和多重检验要求见
+[`econometric_methods.md`](econometric_methods.md#9-统计推断和多重检验)。
 
----
+## 7. 实现索引
 
-## 3. Xu (2017) 广义合成控制（GSC）
-
-交互固定效应模型：
-
-```
-Y_it = D_it τ + X_it' β + λ_i' F_t + ε_it
-```
-
-- λ_i：单位因子载荷；F_t：公共因子（r 维，CV 选择 r ∈ 0..5）
-- 反事实：处理单元 i 在 t > T0 的 Ŷ_ct = X_it' β̂ + λ̂_i' F̂_t
-- 响应标签：label_it = Y_it − Ŷ_ct
-- 推断：200 次参数 bootstrap（单位重抽样），得到每期 SE/CI
-
-实现：`run_complete_xu_gsc.R`（`gsynth`）、`normalize_gsc_labels`。
-
----
-
-## 4. Athey et al. (2021) 矩阵补全（MC）
-
-潜在因子面板（矩阵补全）模型：
-
-```
-Y_it = L_it + ε_it,   L_it 低秩
-```
-用 `fect(method="mc")` 估计，λ 由 MSPE 交叉验证选择；反事实为
-补全矩阵在 (i, t > T0) 的元素；固定 λ 后使用 jackknife 推断。
-
-实现：`run_complete_mc.R`。
-
----
-
-## 5. 事件研究（平行趋势验证）
-
-### 5.1 匹配路径：TWFE 回归
-
-```
-Y_it = Σ_{k∈K} β_k · D_it^k + α_i + γ_t + ε_it
-```
-- D_it^k：事件时间 k 的虚拟变量（k = 事件月 − 开通月），基期为最后一个清洁处理前时期；月度主规格为 k = −7
-- α_i：网格固定效应；γ_t：日历月固定效应
-- 标准误按网格聚类
-- 平行趋势：H₀: β_k = 0 ∀ k < 0（联合 Wald 检验）
-
-### 5.2 匹配路径：Sun–Abraham (2021) 异质性稳健
-
-```
-Y_it = Σ_k β_k^IW · 1(k, cohort) 加权交互估计（fixest::sunab）
-```
-对交错处理下的异质性偏误稳健（Goodman-Bacon 2021）。
-
-实现：`run_event_study_matching.R`。
-
-### 5.3 GSC/MC 路径：counterfactual gap 聚合
-
-对 GSC/MC 的 est.att 序列（模型自身的事件研究系数）聚合：
-```
-mean_k = (1/N) Σ_i label_i,k
-SE_k = √( within_var_k + between_var_k / N )
-within_var_k  = mean(SE_i,k²)/N   （按估计器提供的 SE 聚合）
-between_var_k = var(grid_mean_k)   （网格间方差）
-```
-联合零 pre-trend：网格级均值 one-sample t 检验。
-
-实现：`event_study_lib.R`。
-
----
-
-## 6. 匹配质量诊断：SMD
-
-标准化均值差（协变量 j）：
-
-```
-SMD_j = (x̄_treated,j − x̄_control,j) / SD_donor,j
-```
-实现：`pair_preonly_diagnostics`、`build_balance_loveplot.py`。
-
----
-
-## 7. 六轮路由
-
-```
-同城匹配 → 同城 GSC → 同城 MC → 跨城匹配 → 跨城 GSC → 跨城 MC → skip
-```
-实现：R 参考设计 `grid_control_design_lib.R`、Python/GPU 正式入口
-`scripts/causal_python/run_causal_label_queue.py`。
-
----
-
-## 8. 聚类与推断有效性
-
-地铁开通是城市级政策，同一城市网格共享城市冲击。事件研究同时报告：
-
-- 网格聚类（主）：SE 按 grid_id 聚类
-- 城市聚类（稳健）：SE 按 city_key 聚类（Abadie et al. 2023）
-
-GSC/MC 聚合的联合 pre-trend 检验提供网格级与城市级两个版本。
-
-## 9. Spillover 异质性
-
-按同期开通站数（`stations_opened_same_month`）中位数分两层
-（small / large），分别估计 Sun-Abraham 事件研究：
-
-```
-Y_it = Σ_k β_k^IW(stratum) · 1(event_time=k) + α_i + γ_t + ε_it
-```
-两层的 β_k 差异提示网络效应/空间溢出（Yu et al. 2013）。
-
----
-
-## 文献
-
-1. Abadie, A. & Imbens, G.W. (2006). Large sample properties of matching estimators. *Econometrica* 74(1):235-267.
-2. Abadie, A. & Imbens, G.W. (2011). Bias-corrected matching estimators. *Journal of Business & Economic Statistics* 29(1):1-11.
-3. Xu, Y. (2017). Generalized synthetic control method. *Political Analysis* 25(1):57-76.
-4. Athey, S., Bayati, M., Doudchenko, N., Imbens, G. & Khosravi, K. (2021). Matrix completion methods for causal panel data models. *JASA* 116(536):1716-1730.
-5. Sun, L. & Abraham, S. (2021). Estimating dynamic treatment effects in event studies with heterogeneous treatment effects. *Journal of Econometrics* 225(2):175-199.
-6. Goodman-Bacon, A. (2021). Difference-in-differences with variation in treatment timing. *Econometrica* 89(5):2387-2421.
-7. Roth, J. (2022). Pretest with caution: Event-study estimates after testing for parallel trends. *AER: Insights* 4(3):305-322.
-8. Abadie, A., Athey, S., Imbens, G.W. & Wooldridge, J.M. (2023). When should you adjust standard errors for clustering? *QJE* 138(1):1-35.
-9. de Chaisemartin, C. & D'Haultfœuille, X. (2020). Two-way fixed effects estimators with heterogeneous treatment effects. *AER* 110(9):2964-2996.
-10. Yu, N., de Jong, M., Storm, S. & Mi, J. (2013). Spatial spillover effects of transport infrastructure: evidence from Chinese regions. *Journal of Transport Geography* 29:56-66.
+| 内容 | 文件 |
+|---|---|
+| 事件研究窗口和参考期 | [`src/urban_intervention/causal/event_study.py`](../../src/urban_intervention/causal/event_study.py) |
+| pooled pretrend t 检验 | [`src/urban_intervention/causal/pooled_event_study.py`](../../src/urban_intervention/causal/pooled_event_study.py) |
+| R Sun-Abraham 参考 | [`scripts/causal_r/run_event_study_matching.R`](../../scripts/causal_r/run_event_study_matching.R) |
+| Matching 设计门禁 | [`src/urban_intervention/causal/gpu/control_design.py`](../../src/urban_intervention/causal/gpu/control_design.py) |
+| 推断对象封装 | [`src/urban_intervention/causal/gpu/inference.py`](../../src/urban_intervention/causal/gpu/inference.py) |

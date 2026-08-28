@@ -4,7 +4,7 @@ Given a release directory from ``build_response_artifact.py`` (with
 ``--allow-partial`` for samples), this writes:
 
 - success/failure breakdown per outcome family (quality grades, failure
-  reasons grouped into research / data-truncation / code classes);
+  reasons grouped into research / data-truncation / execution-state / code classes);
 - distribution statistics of ``causal_response_label`` per family (count,
   mean, median, quartiles, Tukey-outlier count, share of zeros/NA);
 - three scope views of the label availability: same-city main table,
@@ -55,6 +55,7 @@ FAILURE_CLASSES: dict[str, str] = {
     "monthly_viirs_cache_unavailable": "data_truncation",
     "target_period_outcome_or_counterfactual_missing": "data_truncation",
     "task_skipped": "research",
+    "task_not_terminal": "execution_state",
 }
 
 

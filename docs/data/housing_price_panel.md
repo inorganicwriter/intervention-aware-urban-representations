@@ -5,13 +5,13 @@ Updated: 2026-07-22
 ## Outcome contract
 
 The housing panel treats every located, dated price as an observation of the
-local housing market.  Listings are initial price observations and completed
-transactions are final price observations.  Dwelling characteristics are not
-used for hedonic or composition adjustment.
+local housing market. Listings are initial price observations and completed
+transactions are final price observations. Dwelling characteristics remain
+source fields and stay outside hedonic or composition adjustment.
 
-Source and price-stage labels remain in the observation layer solely for
-provenance, lifecycle de-duplication, source balancing, and sensitivity
-analysis.  They are not admission barriers.
+Source and price-stage labels remain in the observation layer for source
+records, lifecycle de-duplication, source balancing, and sensitivity analysis.
+Panel inclusion follows the separate causal support checks.
 
 ## Published products
 
@@ -29,10 +29,10 @@ the exponentiated median of source-specific log-price medians within each
 city-grid-month.  `price_raw_median_cny_m2` pools every canonical observation
 and is retained as a sensitivity outcome.
 
-Annual observations never receive an invented month.  Quarterly observations
-enter the quarterly and annual panels but never the monthly panel.  The
-Chengdu open-research transactions remain in the observation layer but are not
-grid-eligible until their coordinate CRS is resolved.
+Annual observations retain their annual period. Quarterly observations enter
+the quarterly and annual panels, while monthly panels use monthly observations.
+The Chengdu open-research transactions remain in the observation layer until
+their coordinate CRS is resolved, after which the grid panel can use them.
 
 ## Current closure
 

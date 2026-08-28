@@ -1,6 +1,8 @@
 # 服务器部署与生产运行
 
-本文件说明如何把仓库完整部署到 Linux 服务器，运行 5,048 网格全量因果标签管线与后续表示学习训练。
+本文件说明如何把仓库部署到 Linux 服务器，运行 5,048 网格全量因果标签管线与后续表示学习训练。
+本地工作区的 `data/active/` 和已有 VIIRS 缓存是冻结资产。服务器运行使用独立工作副本，
+本地冻结目录保持只读。
 
 ## 1. 服务器建议规格
 
@@ -19,7 +21,7 @@
 可重建的中间/原始物（WorldPop tif、GEE 导出、VIIRS 月度缓存）。精确分层：
 
 ```text
-必须传输（约 11 GB；= data/active 全部 − feature_store）：
+必须传输（约 11 GB，包含 data/active 的正式输入，不含 feature_store）：
   src/  scripts/  tests/  docs/
   pyproject.toml  requirements.txt  environment.yml
   README.md  config.yaml  config.yaml.template  Dockerfile.R
@@ -36,7 +38,7 @@
                                   #   transit_snapshots（482 快照）
   data/active/catalog/               # 3 MB   datasets.yaml 注册表与决议
 
-可不传：
+可选传输：
   data/active/causal/feature_store/   # 3.0 GB  无消费者：R 匹配直接读原始分区
                                   #         （panels + viirs monthly），该目录
                                   #         仅为孤立预计算脚本输出，跳过
@@ -47,14 +49,14 @@
   data/active/model_inputs/          # demo 数据；生产 release 由
                                   #          build_pretraining_dataset.py 生成
 
-可重建，无需传输（本地自行保留）：
-  outputs/                      # 审计与队列产物
+可重建内容无需传输。已有 VIIRS 缓存按保留资产处理：
+  outputs/                      # 审计与队列产物（不要清理 outputs/viirs* 缓存）
   .r-lib/                       # 服务器重建 R 包库
   .runtime/  .pytest_cache/  __pycache__/
 ```
 
-无 `.git` 时，严格发布会用源码树的 `tree-sha256` 作为代码版本（不会接受 `unknown`），
-无需初始化 git。
+无 `.git` 时，发布校验使用源码树的 `tree-sha256` 作为代码版本，`unknown` 版本无法通过校验。
+服务器无需初始化 git。
 
 ## 3. Python 环境（mit）
 
@@ -67,8 +69,8 @@ python -c "import sys; assert sys.version_info[:2] == (3, 11)"
 
 ### 重要：torch 必须安装 CUDA 版本
 
-`environment.yml` / `pyproject.toml` 的 `torch>=2.0` 可能解析为 CPU wheel。
-服务器必须按 PyTorch 官方安装选择器安装与驱动兼容的 CUDA wheel，再做硬门禁：
+`environment.yml` / `pyproject.toml` 的 `torch>=2.0` 需要结合服务器驱动安装 CUDA wheel。
+安装后执行以下检查：
 
 ```bash
 python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.device_count()); assert torch.cuda.is_available(); assert torch.cuda.device_count() == 4"
@@ -97,7 +99,7 @@ Rscript -e 'options(repos=c(CRAN="https://mirrors.pku.edu.cn/CRAN/")); install.p
 Rscript -e 'options(repos=c(PPM="https://packagemanager.posit.co/cran/latest/bin/linux/noble-x86_64/4.6")); install.packages("arrow", lib=Sys.getenv("R_LIBS_USER"), Ncpus=1)'
 ```
 
-当前服务器为 Ubuntu 24.04 x86_64。Arrow 使用 Posit Package Manager 的 R 4.6 Linux 二进制包；安装日志必须显示 `* installing *binary* package 'arrow'`。如果回退为 `* installing *source* package 'arrow'`，应停止安装并检查二进制仓库地址，避免再次触发本地 C++ 编译。
+当前服务器为 Ubuntu 24.04 x86_64。Arrow 使用 Posit Package Manager 的 R 4.6 Linux 二进制包。安装日志应显示 `* installing *binary* package 'arrow'`。出现 `* installing *source* package 'arrow'` 时，检查二进制仓库地址后再继续。
 
 验证（门禁测试）：
 
@@ -106,7 +108,7 @@ export R_LIBS_USER="$(pwd)/.r-lib"
 Rscript tests/causal_r/test_complete_estimators.R
 ```
 
-`scripts/causal_r/RUNTIME_LOCK.csv` 记录当前规范环境的 R 包版本；其中路径字段是机器本地路径，不能直接复制到服务器。当前规范版本以服务器为准，R 4.6.1 使用 `arrow 25.0.0`；本地 Windows 环境已同步到同一 Arrow 版本。服务器实际路径仍通过下面第 5 节环境变量覆盖，无需修改代码中的数据路径。
+`scripts/causal_r/RUNTIME_LOCK.csv` 记录当前规范环境的 R 包版本，其中路径字段属于各自机器。服务器以自身环境为准，R 4.6.1 使用 `arrow 25.0.0`。服务器实际路径通过第 5 节环境变量设置，代码中的数据路径保持不变。
 
 ## 5. 环境变量与配置
 
@@ -115,7 +117,7 @@ export MIT_PROJECT_ROOT="$(pwd)"            # R 侧路径基准（paths.R）
 export MIT_RSCRIPT="$(command -v Rscript)"
 export MIT_R_LIB="$(pwd)/.r-lib"
 export MIT_VIIRS_RAW="/data/VIIRS/monthly"  # 原始月度 VIIRS 根目录（44 城 2012-01~2024-12）
-export MIT_CAUSAL_RUN_ID="$(date +%Y%m%d%H%M%S)"   # 可选：任务级 run-id 溯源
+export MIT_CAUSAL_RUN_ID="$(date +%Y%m%d%H%M%S)"   # 可选：任务级运行编号
 export MIT_CAUSAL_GPU_IDS="0,1,2,3"                 # Phase 1 worker 分卡
 ```
 
@@ -138,7 +140,7 @@ conda run -n mit python -m pytest -q
 
 ## 7. 生产运行序列
 
-完全不调用 R 的输入重建入口如下；并行器的 `--reset-queues` 会自动执行同一流程：
+输入重建入口如下，会改写 causal queue/input 文件。执行位置限定为独立服务器工作副本：
 
 ```bash
 conda run -n mit python scripts/causal_python/prepare_causal_inputs.py --all
@@ -147,13 +149,13 @@ conda run -n mit python scripts/causal_python/prepare_causal_inputs.py --all
 ### 7.1 VIIRS 月度缓存（控制设计前置，先于一切）
 
 控制设计需要完整 44 城 2012-01 至 2024-12 月度 VIIRS 缓存（6,864 个 Parquet+audit 对）。
-缺失文件**不得**被当作 VIIRS 不可用而静默丢城：
+缺失文件会触发检查错误并停止当前运行：
 
 ```bash
 conda run -n mit python scripts/causal_r/run_grid_control_design_queue.py --prepare-viirs-cache-only
 ```
 
-### 7.2 队列 dry-run 与 canary
+### 7.2 队列 dry-run 与有界测试
 
 ```bash
 # 控制设计（每格一行，5,048 行）
@@ -163,23 +165,25 @@ conda run -n mit python scripts/causal_r/run_grid_control_design_queue.py --star
 conda run -n mit python scripts/causal_python/run_causal_label_queue.py --start-order 1 --max-tasks 4 --dry-run
 ```
 
-canary 审核通过前不要启动全量。服务器执行从下述 dry-run 开始，并检查路由、
+先完成有界测试并审核结果，再启动全量。服务器执行从下述 dry-run 开始，并检查路由、
 manifest、GPU 使用、峰值显存和任务耗时。
 
 ### 7.3 全量并行生产
 
-队列 CSV 是单写入者：**同一队列禁止并行启动多个进程**。使用官方并行编排器：
+队列 CSV 由单个写入进程负责。并行运行时使用官方并行编排器：
 
 ```bash
 conda run -n mit python scripts/causal_r/run_parallel_production.py \
-  --run-all --reset-queues --estimator-backend python_gpu \
+  --run-all --estimator-backend python_gpu \
+  --qualification-receipt outputs/causal_gpu/formal_qualification.json \
   --gpu-ids 0,1,2,3 --shard-count 4 --workers 4
 ```
 
 - `4` 是四卡服务器的安全默认并行度：一张卡对应一个控制设计 worker 或标签分片。
-- 启动器会拒绝 `shard-count > GPU 数量`，避免正式 bootstrap/jackknife 在同一卡争抢显存。
+- 启动器要求 `shard-count <= GPU 数量`，让正式 bootstrap/jackknife 分配到独立显卡。
 - Phase 1 控制设计 → Phase 2 因果标签（分片并行，可断点续跑）→ Phase 3 合并回 master 队列。
-- 中途中断后重跑同命令（不带 `--reset-queues` 保留进度）即可续跑。
+- 若副本中已有旧控制记录，先用 `--phase 1 --repair-stale-controls --estimator-backend python_gpu`；它只重算来源检查未通过的持久记录，已通过检查的 5,048 行继续复用。
+- 中途中断后重跑同命令（不带 `--reset-queues`）即可续跑；续跑沿用现有冻结队列。
 - GSC 控制面板秩选择和完全相同 MC 面板的 lambda 选择使用内容寻址缓存；配置、实现版本或决定调参的单元格变化会自动失效。
 
 ### 7.4 发布标签与训练前数据（全部任务终态后）
@@ -190,7 +194,7 @@ conda run -n mit python scripts/causal_r/build_pretraining_dataset.py \
   --response-release data/active/causal/releases/production_$(date +%Y%m%d) --dataset-id production_$(date +%Y%m%d)
 ```
 
-`--allow-partial` 仅限 canary/测试，产物带非生产标记，不能进入正式训练。
+`--allow-partial` 仅限有界测试和单元测试，产物带非生产标记，进入正式训练前会被排除。
 
 ### 7.5 表示学习训练
 
@@ -218,7 +222,7 @@ conda run -n mit urban-train-representation \
 | 现象 | 处理 |
 |---|---|
 | `ModuleNotFoundError: urban_intervention` | 未 `pip install -e .`，或 PYTHONPATH 未含 `src/` |
-| R 参考门禁失败（gsynth/fect 版本） | 仅影响 `r_reference` 审计；用 Dockerfile.R 重建并核对 RUNTIME_LOCK.csv |
+| R 参考检查失败（gsynth/fect 版本） | 仅影响 `r_reference` 审计；用 Dockerfile.R 重建并核对 RUNTIME_LOCK.csv |
 | VIIRS 缓存缺失对 | 先跑 `--prepare-viirs-cache-only`；严禁静默跳过 |
 | torch.cuda.is_available() = False | 用 `--index-url` 重装 CUDA wheel |
 | 所有任务只占用 GPU 0 | 使用并行启动器并传 `--gpu-ids 0,1,2,3 --shard-count 4` |

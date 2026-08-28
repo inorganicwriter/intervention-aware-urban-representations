@@ -1,4 +1,4 @@
-# 轨道网络可达性：方法-文献对照
+# 轨道网络可达性：方法与文献对照
 
 本文档定义开通前轨道网络可达性、站点属性和线路属性协变量，并列出变量定义、
 时间边界、计算步骤与文献依据。
@@ -14,7 +14,7 @@
 ### 快照结构（方案 A）
 
 对每城每个去重后的处理开通月 t：
-- 快照 = opening_date <= (t − 12 个月) 的已开通站点
+- 快照 = opening_date <= (t - 12 个月) 的已开通站点
 - 对**该城全部网格**（含 donor）计算：最近站距离、500/800/1500m 站数、1500m 线路数、最近站 closeness
 - closeness 在每城当前 P197 拓扑上计算一次（研究窗口 2010-2025 内拓扑与当年一致），快照只取已开通站的值
 - 匹配时（R 侧 round 1/4）按 target 的处理前时点读取对应快照文件，donor 与 target 使用同一时点
@@ -25,7 +25,7 @@
 
 | # | 变量 | 定义 | 文献依据 | 实施细节 |
 |---|------|------|----------|----------|
-| 1 | `dist_nearest_station_m` | 网格质心到最近已开通站的直线距离 | Smersh & Smith (2000, JHE)；Yang et al. (2021, Springer) | 处理前快照：只考虑 opening_date <= 处理前时点（开通月 − 12 个月）的站 |
+| 1 | `dist_nearest_station_m` | 网格质心到最近已开通站的直线距离 | Smersh & Smith (2000, JHE)；Yang et al. (2021, Springer) | 处理前快照：只考虑 opening_date <= 处理前时点（开通月 - 12 个月）的站 |
 | 2 | `stations_500m` / `stations_800m` / `stations_1500m` | 处理前各半径内已开通站点数 | Debrezion et al. (2007, JRERF 元分析) | 与既有 treatment 文件一致的三档半径 |
 | 3 | `lines_in_1500m` | 处理前 1.5km 缓冲区内经过的线路条数 | Debrezion et al. (2007)：线路密度维度 | 缓冲区内站点归属线路的并集数 |
 | 4 | `network_closeness` | 处理前网络快照的站点 closeness centrality | To (2015, Urban Rail Transit)；Gao & Wang (2026, CBM 动态快照)；Wu et al. (2022, ICRT) | 站点节点 + **Wikidata P197 真实相邻边**，closeness=1/Σ最短路径距离（Dijkstra）；网格取最近站值 |
@@ -39,7 +39,7 @@
 ### 步骤 1：处理前网络快照（Gao & Wang 2026 动态网络）
 
 对每个处理网格 i（开通于月 t_i）：
-- 从 `canonical_station_events_resolved` 取 opening_date <= (t_i − 12 个月) 的站点
+- 从 `canonical_station_events_resolved` 取 opening_date <= (t_i - 12 个月) 的站点
 - 这些站点构成"处理前网络"（只含处理前信息，DDR-004 约束）
 
 ### 步骤 2：网络构建（To 2015，真实拓扑版）

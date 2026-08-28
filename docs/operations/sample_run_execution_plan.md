@@ -4,15 +4,15 @@ Date: 2026-08-19
 
 Execution state: deferred
 
-This document defines a 400-grid production-like run for estimating runtime,
-method routing and data support before the 5,048-grid run. It does not alter the
-formal treatment list or produce production-eligible labels.
+This document defines a 400-grid production-like run for estimating execution
+time, method routing and data support before the 5,048-grid run. It uses a
+separate sample and produces non-production labels.
 
 ## Sample definition
 
 `scripts/analysis/select_representative_sample.py` selects 400 grids using
 fixed-seed city × opening-year Hamilton quotas with a per-stratum floor. The
-sample is restricted to opening months from `2017-07` through `2022-12`, which
+sample selects opening months from `2017-07` through `2022-12`, which
 fits the processed VIIRS cache and the required 42-month pre-treatment plus
 24-month post-treatment window.
 
@@ -57,7 +57,7 @@ sample counts.
 ## Execution
 
 1. Generate the sample list.
-2. Run a 10-grid dry-run and canary to measure task cost and memory.
+2. Run a 10-grid dry-run and bounded test to measure task cost and memory.
 3. Run the control-design queue for the selected orders.
 4. Run the family-level label queue for the same orders.
 5. Build a partial Response Artifact with `--allow-partial`.
@@ -71,7 +71,7 @@ python scripts/causal_r/run_grid_control_design_queue.py --orders <orders> --dry
 python scripts/causal_python/run_causal_label_queue.py --orders <orders> --dry-run
 ```
 
-Remove `--dry-run` only after inspecting the canary manifests and resource use.
+Remove `--dry-run` after inspecting the bounded-test manifests and resource use.
 
 ## Outputs
 

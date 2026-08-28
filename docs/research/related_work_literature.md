@@ -21,7 +21,7 @@
 
 | 文献 | 核心贡献 | 关联 |
 |------|----------|------|
-| **Naik, N. et al. (2017).** *Computer vision uncovers predictors of physical urban change.* PNAS. | 使用街景时序数据预测城市物理变化 | **最相关** — street view time series + urban change |
+| **Naik, N. et al. (2017).** *Computer vision uncovers predictors of physical urban change.* PNAS. | 使用街景时序数据预测城市物理变化 | **最相关**：street view time series + urban change |
 | **Gebru, T. et al. (2017).** *Using deep learning and Google Street View to estimate the demographic makeup of neighborhoods.* PNAS. | 街景→人口统计推断 | 街景编码器选型依据 |
 | **Jean, N. et al. (2016).** *Combining satellite imagery and machine learning to predict poverty.* Science. | 卫星影像+CNN预测贫困 | 遥感经济推断范式 |
 | **Dubey, A. et al. (2016).** *Measuring human-perceived similarity in cities using street view images.* | 城市视觉相似度度量 | Embedding空间距离度量 |
@@ -34,7 +34,7 @@
 |------|----------|------|
 | **Radford, A. et al. (2021).** *Learning transferable visual models from natural language supervision.* ICML (CLIP). | CLIP模型 | VLM backbone选型 |
 | **Oquab, M. et al. (2023).** *DINOv2: Learning robust visual features without supervision.* | 自监督视觉特征学习 | 卫星/街景encoder |
-| **Mai, G. et al. (2024).** *CSP: Self-supervised contrastive spatial pre-training for geospatial-visual representations.* | 地理空间对比学习预训练 | **高度相关** — geospatial contrastive learning |
+| **Mai, G. et al. (2024).** *CSP: Self-supervised contrastive spatial pre-training for geospatial-visual representations.* | 地理空间对比学习预训练 | **高度相关**：geospatial contrastive learning |
 | **Zhou, Y. et al. (2024).** *GeoGPT: Understanding and reasoning with geospatial large models.* | 地理空间大语言模型 | Foundation model for geo |
 | **Cong, Y. et al. (2023).** *SatCLIP: Global, general-purpose location embeddings with satellite imagery.* | 卫星影像的全球位置嵌入 | 卫星影像→embedding范式 |
 | **Buyukdemircioglu, M. et al. (2024).** *RemoteCLIP: A vision language foundation model for remote sensing.* | 遥感视觉语言基础模型 | Remote sensing VLM |
@@ -95,7 +95,7 @@
 | **Chapple, K. et al. (2017).** *Developing a new methodology for analyzing potential displacement.* | 潜在displacement的分析方法 | displacement测量 |
 | **Gupta, A. et al. (2022).** *The anatomy of gentrification-induced displacement.* | 绅士化引发displacement的解剖 | **高度相关** |
 | **Glaeser, E. et al. (2018).** *Urban gentrification and the spatial structure of cities.* | 绅士化与城市空间结构 | 空间异质性 |
-| **Delmelle, E. (2021).** *Transit-induced gentrification and displacement: The state of the practice.* | 交通引发的绅士化综述 | **核心文献** — TOD gentrification |
+| **Delmelle, E. (2021).** *Transit-induced gentrification and displacement: The state of the practice.* | 交通引发的绅士化综述 | **核心文献**：TOD gentrification |
 
 ---
 
@@ -109,7 +109,7 @@
 | **Chen, X. & Nordhaus, W. (2011).** *Using luminosity data as a proxy for economic statistics.* PNAS. | 光度作为经济统计代理变量 | VIIRS经济学基础 |
 | **Elvidge, C. et al. (2017).** *VIIRS night-time lights.* International Journal of Remote Sensing. | VIIRS夜间灯光技术综述 | 数据技术细节 |
 | **Zhao, M. et al. (2023).** *A global dataset of annual urban extents (1992-2020) from harmonized nighttime lights.* | 全球城市范围数据集 | 城市边界识别 |
-| **Zhang, F. et al. (2024).** *Fragile booms in cities.* (your MACRO paper) | 夜间灯光+多模态的城市脆弱性 | **自有工作** — VIIRS作为fast signal |
+| **Zhang, F. et al. (2024).** *Fragile booms in cities.* (your MACRO paper) | 夜间灯光+多模态的城市脆弱性 | **自有工作**：VIIRS作为 fast signal |
 
 ### 3.2 卫星影像城市变化检测
 
@@ -208,7 +208,7 @@
 你的核心创新：**学到的是"空间对policy如何响应"**，即embedding空间的相似度 = 干预响应路径的相似度。这实质上是将 contrastive learning 的相似度定义从视觉/语义相似重构为**因果响应相似**。
 
 最需要密切关注的竞品工作：
-- Mai et al. (2024) CSP — geospatial contrastive pre-training (对比目标不同)
-- Naik et al. (2017) — street view time series for physical change (无causal embedding)
-- Zhang et al. (2022) — spatio-temporal contrastive learning (需区分因果响应 vs 时序预测)
-- Cong et al. (2023) SatCLIP — location embeddings from satellite (无policy conditioning)
+- Mai et al. (2024) CSP：geospatial contrastive pre-training（对比目标不同）
+- Naik et al. (2017)：street view time series for physical change（无 causal embedding）
+- Zhang et al. (2022)：spatio-temporal contrastive learning（需区分因果响应与时序预测）
+- Cong et al. (2023) SatCLIP：location embeddings from satellite（无 policy conditioning）

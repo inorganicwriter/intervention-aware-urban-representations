@@ -21,17 +21,18 @@ The production system includes:
 - a fixed 44-city, 5,048-grid treatment design and 1km donor exclusion;
 - pre-treatment-only six-round routing through same-city and cross-city
   Matching, GSC and MC;
-- resumable queues with atomic updates, task provenance and structured failure
+- resumable queues with atomic updates, task source records and structured failure
   reasons;
-- strict Response Artifact and pretraining-dataset publishers;
+- validated Response Artifact and pretraining-dataset publishers;
 - all-method event-study aggregation with pre-trend metadata;
 - intervention-conditioned representation training, evaluation, baselines,
   transfer analysis and model-card generation.
 
-Formal production remains contingent on three GSC and three MC parity tasks on
-the RTX 4090 environment, issuance of the qualification receipt, execution of
-the 5,048-grid queues, and publication of the strict response release. Current
-queue counts and remaining work are maintained in
+Formal production requires three Matching, three GSC and three MC parity tasks on
+the four-card RTX 4090 environment, a qualification receipt, frozen-input source
+records, completion of the 5,048-grid queues, and publication of a validated
+response release. Current queue counts and
+remaining work are maintained in
 [`docs/operations/current_project_status.md`](docs/operations/current_project_status.md).
 
 ## Frozen research scope
@@ -42,11 +43,11 @@ queue counts and remaining work are maintained in
 - Donors: start from all non-treated grids; the main specification excludes units within 1km of the treated station's grid polygon.
 - Timing: station dates are kept to the day; monthly estimation defines the first complete natural month after opening as event period 1.
 - Outcome families: housing prices, VIIRS, POI, population. Different counterfactuals or missing masks per family are allowed depending on data support.
-- Control selection: only pre-treatment housing, VIIRS, POI, population and their availability may be used; post-treatment outcomes or post-treatment missingness must not be read.
+- Control selection uses pre-treatment housing, VIIRS, POI, population and their availability; post-treatment outcomes and missingness stay outside this stage.
 - Coverage-priority boundary: at least one complete variable family is sufficient to enter physical matching; MC after GSC failure allows `min.T0=1` and retains the actual number of pre-treatment support periods in the artifact.
-- Routing: when a single physical control fails the common-support, holdout or placebo gates, fall back to Xu GSC; run MC after GSC failure; skip explicitly only when all three paths fail.
+- Routing: a physical control that fails the common-support, holdout or placebo gates enters Xu GSC; MC follows a GSC failure; the queue records `skipped` after all three paths fail.
 
-Precise definitions are governed by the [causal response label design](docs/research/counterfactual_response_label_design.md) and the [frozen decisions](docs/research/decisions/README.md).
+Precise econometric definitions are governed by the [econometric methods manual](docs/research/econometric_methods.md), the [causal response label design](docs/research/counterfactual_response_label_design.md), and the [frozen decisions](docs/research/decisions/README.md). Executable diagnostic outputs are documented in the [DID parallel-trend guide](docs/research/identification_and_diagnostics.md).
 
 ## Repository architecture
 
@@ -81,7 +82,7 @@ data/
   panels/                 analysis-ready canonical panels
   causal/                 fixed treatment list, donor universe, inputs and production queues
 
-outputs/                  audits, estimator objects and staging results (rebuildable, not versioned)
+outputs/                  audits, estimator objects and staging results (rebuildable and unversioned)
 tests/                    Python contract tests and R estimator gates
 docs/                     research design, data contracts and operations
 ```
@@ -115,65 +116,34 @@ the installed torch build (see the comments in `requirements.txt`).
 
 All formal tasks use the Python 3.11 `mit` environment. Before running,
 execute `conda env update -n mit -f environment.yml --prune` to ensure
-runtime and test dependencies, including `openpyxl`, are installed; the
+execution and test dependencies, including `openpyxl`, are installed; the
 repository requires Python 3.11 or newer.
 
-## Standard workflow
+## Workflow
 
-### 1. Basic validation
+1. Validate the registry and run the Python test suite in the local `mit` environment.
+2. Rebuild inputs, run qualification, and execute the control and label queues in an isolated server working copy.
+3. Publish the Response Artifact and pretraining dataset after every outcome-family task reaches a terminal state.
+4. Train the representation model from the published pretraining dataset.
 
-```powershell
-conda run -n mit python scripts/data_management/validate_registry.py
-conda run -n mit python -m pytest -q
-& $env:MIT_RSCRIPT tests/causal_r/test_complete_estimators.R
-```
+The complete server command sequence is in
+[`docs/operations/server_deployment.md`](docs/operations/server_deployment.md).
+GPU qualification and estimator contracts are in
+[`src/urban_intervention/causal/gpu/README.md`](src/urban_intervention/causal/gpu/README.md).
+R reference commands are in
+[`scripts/causal_r/README.md`](scripts/causal_r/README.md).
 
-`tests/causal_r/verify_complete_implementation.R` depends on formal estimator artifacts and should be run after the control-design and label queues; it is outside the basic validation scope.
-
-### 2. Rebuild formal causal inputs
-
-These commands reset the production queues. Run them only after confirming the input snapshots and hashes:
-
-```powershell
-& $env:MIT_RSCRIPT scripts/causal_r/reset_counterfactual_queues.R
-& $env:MIT_RSCRIPT scripts/causal_r/build_formal_matching_inputs.R
-& $env:MIT_RSCRIPT scripts/causal_r/audit_formal_target_support.R
-```
-
-### 3. Run the control-design and label queues
-
-Dry-run first, then run a limited canary; do not start the full 5,048-grid run before the canary is reviewed.
-
-```powershell
-conda run -n mit python scripts/causal_r/run_grid_control_design_queue.py --start-order 1 --max-units 10 --dry-run
-conda run -n mit python scripts/causal_python/run_causal_label_queue.py --start-order 1 --max-tasks 4 --dry-run
-```
-
-Python/GPU qualification is described in
-[the causal GPU guide](src/urban_intervention/causal/gpu/README.md); R reference
-semantics and server-side execution remain documented in
-[scripts/causal_r/README.md](scripts/causal_r/README.md).
-
-### 4. Release labels and pre-training data
-
-Formal releases can only be created after all outcome-family tasks reach their terminal state:
-
-```powershell
-conda run -n mit python scripts/causal_r/build_response_artifact.py --release-id production_YYYYMMDD
-conda run -n mit python scripts/causal_r/build_pretraining_dataset.py --response-release data/active/causal/releases/production_YYYYMMDD --dataset-id production_YYYYMMDD
-```
-
-`--allow-partial` is only permitted for canaries and tests; its artifacts carry a non-production marker and cannot enter formal training.
-Strict releases verify the treatment-file hash, per-treated-unit identity,
-task-directory/manifest/label consistency and the code version. In source
-bundles without `.git`, the code version uses a `tree-sha256` of the
-executable source tree; `unknown` is never accepted.
+Release validation checks the treatment-file hash, per-treated-unit identity,
+task-directory/manifest/label consistency and code version. Bounded test
+artifacts carry a non-production marker.
 
 ## Documentation
 
+- [Project guide and document authority](docs/PROJECT_GUIDE.md)
 - [Server deployment and production runs](docs/operations/server_deployment.md)
-- [Complete project and production pipeline](docs/research/complete_project_pipeline.md)
 - [Causal response label design](docs/research/counterfactual_response_label_design.md)
+- [Econometric methods and identification](docs/research/econometric_methods.md)
+- [DID parallel trends and executable diagnostics](docs/research/identification_and_diagnostics.md)
 - [Intervention-conditioned representation learning](docs/research/representation_learning.md)
 - [Sample-run execution plan](docs/operations/sample_run_execution_plan.md)
 - [Core research architecture](docs/architecture/research_architecture.md)
@@ -183,4 +153,4 @@ executable source tree; `unknown` is never accepted.
 - [Related-work literature](docs/research/related_work_literature.md)
 - [Estimator formulas](docs/research/estimator_formulas.md)
 
-Use the frozen DDRs and current production code as the authority. Historical pooled DID, annual panels, prototype estimators, smoke runs and partial releases remain archival diagnostics, not formal response labels.
+Use the frozen DDRs and current production code as the authority. Historical pooled DID, annual panels, prototype estimators, smoke runs and partial releases are archived diagnostics. Formal response labels come from the current production route. The former end-to-end pipeline note is archived under `docs/archive/` after its current content was consolidated into the project guide and the causal design document.

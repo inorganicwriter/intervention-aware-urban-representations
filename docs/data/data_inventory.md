@@ -1,6 +1,6 @@
 # 数据资产总览（Data Inventory）
 
-更新：2026-08-09
+更新：2026-08-27
 
 本文档汇总当前项目的数据资产。与 `data/active/catalog/datasets.yaml` 互补：
 本文档说明"有什么、在哪、干什么用"，datasets.yaml 记录每条目的 schema/质量/状态。
@@ -9,7 +9,7 @@
 
 ```
 data/
-├── active/       使用中数据（匹配、标签、训练；上传到服务器）
+├── active/       冻结研究资产与队列基线（只读；服务器使用独立工作副本）
 │   ├── curated/  标准协变量与结果（VIIRS/S2/人口/POI/房价/路网/区位特征）
 │   ├── reference/ 冻结资产（网格/边界/站点/中心/adjacency）
 │   ├── causal/   处理清单/队列/feature_store/轨道特征/快照
@@ -21,7 +21,9 @@ data/
     └── staging/  可重建中间（GEE CSV、R2024B 聚合）
 ```
 
-上传服务器时只传 `data/active/`（archive 排除），见 `docs/operations/server_deployment.md`。
+上传服务器时传输 `data/active/` 的冻结快照（archive 排除），见
+`docs/operations/server_deployment.md`。队列运行产生的写入落在服务器独立
+working copy，本地冻结目录保持只读。
 
 ## 数据集一览（样本量 + 来源）
 
@@ -29,34 +31,34 @@ data/
 
 | 数据集 | 样本量（n × m） | 来源 | 来源网站 |
 |---|---|---|---|
-| 500m 网格 | n = 3,839,581（44 城，每城 17,289–424,995） | 项目自建（GADM 边界 + UTM 500m） | https://gadm.org |
-| 处理网格 | n = 5,048（44 城，2010–2025 开通） | 站点决议产物（wikidata/amap/osm/wikipedia） | https://www.wikidata.org |
-| eligible donor | n = 3,771,800 | 空间 donor 审计（1km 排除） | — |
+| 500m 网格 | n = 3,839,581（44 城，每城 17,289-424,995） | 项目自建（GADM 边界 + UTM 500m） | https://gadm.org |
+| 处理网格 | n = 5,048（44 城，2010-2025 开通） | 站点决议产物（wikidata/amap/osm/wikipedia） | https://www.wikidata.org |
+| eligible donor | n = 3,771,800 | 空间 donor 审计（1km 排除） | 无 |
 | 站点事件 | n = 5,615（44 城） | 四源交叉决议 | https://www.wikidata.org |
-| VIIRS 月度 | n = 3.84M × m = 156（2012-01–2024-12）→ 6,864 分区 | NASA VNP46A2（GEE） | https://developers.google.com/earth-engine/datasets/catalog/NASA_VIIRS_002_VNP46A2 |
-| VIIRS 年度 | n = 3.84M × m = 13（2012–2024） | 月度聚合（项目内） | — |
-| Sentinel-2 | n = 3.84M × m = 11（2014–2024） | Landsat 8 / Sentinel-2（GEE） | https://developers.google.com/earth-engine/datasets/catalog/COPERNICUS_S2_SR_HARMONIZED |
-| 人口 | n = 3.84M × m = 15（2010–2024） | WorldPop（GEE 2010-14 + R2024B 2015-24） | https://data.worldpop.org |
-| POI | n = 3.84M × m = 13（2012–2024） | 高德 POI 历史归档 | https://lbs.amap.com |
+| VIIRS 月度 | n = 3.84M × m = 156（2012-01 至 2024-12）→ 6,864 分区 | NASA VNP46A2（GEE） | https://developers.google.com/earth-engine/datasets/catalog/NASA_VIIRS_002_VNP46A2 |
+| VIIRS 年度 | n = 3.84M × m = 13（2012-2024） | 月度聚合（项目内） | 无 |
+| Sentinel-2 | n = 3.84M × m = 11（2014-2024） | Landsat 8 / Sentinel-2（GEE） | https://developers.google.com/earth-engine/datasets/catalog/COPERNICUS_S2_SR_HARMONIZED |
+| 人口 | n = 3.84M × m = 15（2010-2024） | WorldPop（GEE 2010-14 + R2024B 2015-24） | https://data.worldpop.org |
+| POI | n = 3.84M × m = 13（2012-2024） | 高德 POI 历史归档 | https://lbs.amap.com |
 | 房价月度 | n ≈ 3.84M × m = 156（每城 236,278 网格-月） | 链家/安居客/wayback 等 4 源 | 见 `docs/data/housing_data_catalog.md` |
 | 房价季度/年度 | 每城 99,779 / 35,843 | 同上聚合 | 同上 |
 | 路网 | n = 3,839,581（2026 截面） | OSM | https://www.openstreetmap.org |
-| 区位特征 | n = 3,839,581（静态） | 中心识别（McMillen 2001，composite） | — |
+| 区位特征 | n = 3,839,581（静态） | 中心识别（McMillen 2001，composite） | 无 |
 | 轨道可达性 | n = 5,048（处理网格） | Wikidata P197 + 站点事件 | https://www.wikidata.org |
 | 轨道快照 | 482 快照 × 3.84M 网格 | 同上（方案 A 按开通月） | 同上 |
 | Wikidata adjacency | 19,602 边（44 城） | Wikidata SPARQL（P197） | https://query.wikidata.org |
-| 中心注册表 | 392 中心（44 城 main + 348 subcenter） | McMillen (2001) LWR | — |
+| 中心注册表 | 392 中心（44 城 main + 348 subcenter） | McMillen (2001) LWR | 无 |
 
 ## 1. 核心协变量与结果数据（`data/active/curated/`）
 
 | 数据 | 路径 | 覆盖 | 用途 | 状态 |
 |---|---|---|---|---|
 | VIIRS 月度 | `curated/viirs/monthly/` | 44 城 × 156 月（6,864 分区） | 月度结果族（VNP46A2） | ✅ 0 重复 |
-| VIIRS 年度 | `curated/viirs_annual_aggregated/` | 44 城 2012–2024 | 年度特征/标签 | ✅ 0 重复 |
-| Sentinel-2 | `curated/sentinel2/` | 44 城 2014–2024 | NDVI/NDBI 特征 | ✅ 0 重复 |
-| 人口 | `curated/population/` | 44 城 2010–2024 | 结果族/协变量（GEE 2010-14 + R2024B 2015-24） | ✅ 0 重复 |
-| POI | `curated/poi/` | 44 城 2012–2024 | 结果族/协变量 | ✅ 0 重复（2018/19 量级断档已文档化） |
-| 房价观测 | `curated/housing/housing_observations/` | 44 城 | 标准化房价观测（多源，经 importer admission） | ✅ |
+| VIIRS 年度 | `curated/viirs_annual_aggregated/` | 44 城 2012-2024 | 年度特征/标签 | ✅ 0 重复 |
+| Sentinel-2 | `curated/sentinel2/` | 44 城 2014-2024 | NDVI/NDBI 特征 | ✅ 0 重复 |
+| 人口 | `curated/population/` | 44 城 2010-2024 | 结果族/协变量（GEE 2010-14 + R2024B 2015-24） | ✅ 0 重复 |
+| POI | `curated/poi/` | 44 城 2012-2024 | 结果族/协变量 | ✅ 0 重复（2018/19 量级断档已文档化） |
+| 房价观测 | `curated/housing/housing_observations/` | 44 城 | 标准化房价观测（多源，经 importer 纳入检查） | ✅ |
 | 房价面板 | `panels/housing_grid_{month,quarter,year}/` | 44 城 88×3 文件 | 房价结果族 | ✅ |
 | 路网 | `curated/road_network/` | 44 城 2026 截面 | 静态协变量（未启用） | ✅ |
 | 处理矩阵 | `curated/treatment/` | 44 城 176 文件 | 多半径站点覆盖 | ✅ |
@@ -84,7 +86,7 @@ data/
 | donor universe | `causal/grid_universe/` | 377 万 donor |
 | eligible donors | `causal/formal_matching_inputs/` | 3,771,800 候选 + housing_annual 输入 |
 | feature_store | `causal/feature_store/` | 88 文件；**无消费者**（R 匹配直接读 panels/VIIRS 分区），仅历史预计算输出，可跳过 |
-| 队列 | `causal/*_queue.csv` | 控制、结果族和反事实队列；实时状态见运行状态文档 |
+| 队列基线 | `causal/*_queue.csv` | 控制、结果族和反事实队列；本地快照只读，服务器运行副本的实时状态见运行状态文档 |
 
 ## 3a. 房价标签（`data/active/labels/housing/`）
 
@@ -120,7 +122,7 @@ migrations/（2）、snapshots/（11，布局迁移前快照）。
 |---|---|
 | `figures/centers/` | 44 城中心识别审计图 |
 | `figures/balance_loveplot.*` | 匹配 SMD 诊断 |
-| `viirs_monthly/` | 6,864 月度分区审计 |
+| `viirs_monthly/` | 6,864 月度分区审计/缓存（保留，不参与本次清理） |
 | `data_quality/`、`gee_quality/` | 审计报告 |
 
 ## 6. 数据流（当前）

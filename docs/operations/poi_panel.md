@@ -4,7 +4,7 @@ Grid-year POI panels for 44 metro cities, 2012-2024.
 
 ## Output
 
-Coverage: 44 cities × 13 years (2012–2024).
+Coverage: 44 cities × 13 years (2012-2024).
 
 ```text
 data/active/curated/poi/{city}_poi_grid_yearly.parquet
@@ -44,7 +44,7 @@ python scripts/collection/poi_batch_panel_builder.py --years 2023 --cache-status
 python scripts/collection/poi_batch_panel_builder.py --city all --years 2023 --batch-index 3 --refresh-cache
 ```
 
-FileGDB batch construction is fail-closed: if any selected source fails, the
+FileGDB batch construction stops when any selected source fails, and the
 year is not finalized or saved. `--refresh-cache` forces each selected cache
 slice to be rebuilt during that run.
 

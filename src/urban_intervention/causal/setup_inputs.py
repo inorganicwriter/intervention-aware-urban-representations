@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from functools import partial
@@ -39,6 +40,51 @@ REQUIRED_TREATMENT_COLUMNS = (
     "station_event_id",
     "opening_month",
 )
+FORMAL_SPEC_SCHEMA = "formal_counterfactual_design_v1"
+MINIMUM_COMPLETE_FAMILIES = 1
+FORMAL_SPEC_RELATIVE_PATH = Path(
+    "data/active/causal/formal_matching_inputs/formal_matching_spec.dput"
+)
+
+
+def validate_frozen_formal_matching_spec(
+    root: Path,
+    *,
+    expected_minimum_complete_families: int = MINIMUM_COMPLETE_FAMILIES,
+) -> dict[str, object]:
+    """Validate the read-only frozen spec before a formal production run.
+
+    The active input tree is intentionally never rewritten here. A stale dput
+    is a release blocker because it cannot prove which matching boundary was
+    used to create the control queue.
+    """
+    path = root / FORMAL_SPEC_RELATIVE_PATH
+    if not path.is_file():
+        raise ValueError(f"Frozen formal matching spec is missing: {path}")
+    text = path.read_text(encoding="utf-8-sig")
+    schema_match = re.search(r'schema\s*=\s*"([^"]+)"', text)
+    minimum_match = re.search(r"minimum_complete_families\s*=\s*(\d+)L?", text)
+    if schema_match is None or minimum_match is None:
+        raise ValueError(f"Frozen formal matching spec is not parseable: {path}")
+    schema = schema_match.group(1)
+    minimum = int(minimum_match.group(1))
+    if schema != FORMAL_SPEC_SCHEMA:
+        raise ValueError(
+            f"Frozen formal matching spec schema {schema!r} does not match "
+            f"{FORMAL_SPEC_SCHEMA!r}"
+        )
+    if minimum != expected_minimum_complete_families:
+        raise ValueError(
+            "Frozen formal matching spec is stale: "
+            f"minimum_complete_families={minimum}, expected "
+            f"{expected_minimum_complete_families}. Reconcile the spec in an "
+            "isolated server working copy before production; data/active is immutable."
+        )
+    return {
+        "path": str(path),
+        "schema": schema,
+        "minimum_complete_families": minimum,
+    }
 
 
 def _city_parquet_paths(directory: Path) -> list[Path]:
@@ -169,10 +215,10 @@ def build_housing_annual(frame: pd.DataFrame) -> pd.DataFrame:
 
 def _formal_spec() -> dict[str, Any]:
     return {
-        "schema": "formal_counterfactual_design_v1",
+        "schema": FORMAL_SPEC_SCHEMA,
         "treatment_history_lag_years": 3,
         "pre_year_lags": [1, 2, 3],
-        "minimum_complete_families": 1,
+        "minimum_complete_families": MINIMUM_COMPLETE_FAMILIES,
         "matching_with_replacement": True,
         "matches_per_treated": 1,
         "post_treatment_data_used_for_matching": False,

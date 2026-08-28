@@ -16,7 +16,8 @@ CODE_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(CODE_ROOT / "src"))
 
 from urban_intervention.causal.gpu.contracts import (  # noqa: E402
-    FORMAL_IMPLEMENTATION_VERSION,
+    CONTROL_DESIGN_PROVENANCE,
+    CONTROL_DESIGN_SCHEMA,
 )
 from urban_intervention.data.paths import (  # noqa: E402
     CONTROL_DESIGN_QUEUE as QUEUE,
@@ -46,7 +47,7 @@ ROOT = PROJECT_ROOT
 VIIRS_START = pd.Period("2012-01", freq="M")
 VIIRS_END = pd.Period("2024-12", freq="M")
 VIIRS_CACHE_CONTRACT = "complete_44_city_2012_2024_monthly_v1"
-CONTROL_DESIGN_SCHEMA = "grid_control_design_v3_exact_stable_ties"
+DEFAULT_ESTIMATOR_BACKEND = "python_gpu"
 STRING_COLUMNS = (
     "status",
     "active_families",
@@ -221,10 +222,8 @@ def validate_durable_record(
             f"Durable control record {expected_order} uses a stale matching schema; "
             f"expected {CONTROL_DESIGN_SCHEMA}"
         )
-    expected = {
-        "python_gpu": (FORMAL_IMPLEMENTATION_VERSION, "python_pytorch"),
-        "r_reference": ("r-reference-grid-v3", "r_matching"),
-    }[expected_backend]
+    provenance = CONTROL_DESIGN_PROVENANCE[expected_backend]
+    expected = (provenance["implementation_version"], provenance["backend"])
     actual = (
         str(record.get("implementation_version", "")),
         str(record.get("backend", "")),
@@ -253,7 +252,7 @@ def run_batch(
     indices: list[int],
     reuse_durable: bool = True,
     workers: int = 1,
-    backend: str = "r_reference",
+    backend: str = DEFAULT_ESTIMATOR_BACKEND,
 ) -> None:
     missing: list[int] = []
     for index in indices:
@@ -451,12 +450,17 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--retry", action="store_true")
     parser.add_argument(
+        "--repair-stale",
+        action="store_true",
+        help="Recompute only durable control records rejected by current provenance checks.",
+    )
+    parser.add_argument(
         "--workers", type=int, default=1, help="Number of parallel estimator workers (default: 1)"
     )
     parser.add_argument(
         "--estimator-backend",
         choices=("python_gpu", "r_reference"),
-        default="python_gpu",
+        default=DEFAULT_ESTIMATOR_BACKEND,
         help="Use Python/PyTorch matching (default) or the audited R reference.",
     )
     parser.add_argument(
@@ -470,6 +474,8 @@ def main() -> int:
         help="Materialize and verify the VIIRS cache, then exit without changing the queue",
     )
     args = parser.parse_args()
+    if args.retry and args.repair_stale:
+        parser.error("--retry and --repair-stale are mutually exclusive")
     if args.prepare_viirs_cache or args.prepare_viirs_cache_only:
         prepare_complete_viirs_cache()
         print("Verified complete 6,864-partition monthly VIIRS cache")
@@ -484,7 +490,7 @@ def main() -> int:
     queue = read_queue(QUEUE)
     statuses = queue["status"].astype("string")
     eligible_statuses = ["pending", "running"]
-    if args.retry:
+    if args.retry or args.repair_stale:
         eligible_statuses.extend(["matched", "gsc_pending", "not_matched", "error"])
     if args.orders is not None or args.orders_file is not None:
         if args.orders is not None and args.orders_file is not None:

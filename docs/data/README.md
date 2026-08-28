@@ -5,11 +5,11 @@ in the machine-readable registry instead of a duplicated hand-maintained invento
 
 - [`data_inventory.md`](data_inventory.md): 数据资产总览（全部数据、路径、用途、状态）。
 - [`housing_data_catalog.md`](housing_data_catalog.md): housing raw source catalog.
-- [`housing_acquisition_contract.md`](housing_acquisition_contract.md): unrestricted raw discovery, authorized access, provenance, and import contract.
+- [`housing_acquisition_contract.md`](housing_acquisition_contract.md): raw discovery, authorized access, source records and import contract.
 - [`housing_raw_naming.md`](housing_raw_naming.md): raw-source classification, directory layout, and naming rules.
 - [`housing_price_panel.md`](housing_price_panel.md): canonical housing observation and grid-panel contract.
 - [`wayback_housing_dataset.md`](wayback_housing_dataset.md): Wayback 历史快照数据集（44 城 × 5 源）。
-- [`anjuke_history_collection_plan.md`](anjuke_history_collection_plan.md): 安居客小区历史价格采集规划与代码状态（补 2012–2018 缺口）。
+- [`anjuke_history_collection_plan.md`](anjuke_history_collection_plan.md): 安居客小区历史价格采集规划与代码状态（补 2012-2018 缺口）。
 - [`../../data/active/catalog/datasets.yaml`](../../data/active/catalog/datasets.yaml): machine-readable registry.
 - AOI hierarchy and grid bridge audit: run
   [`../../scripts/labels/build_housing_aoi_bridge.py`](../../scripts/labels/build_housing_aoi_bridge.py)

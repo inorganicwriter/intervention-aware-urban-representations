@@ -61,7 +61,7 @@ def test_batch_recovery_reads_each_durable_control_record(tmp_path: Path, monkey
         stdout = "ok"
 
     monkeypatch.setattr(MODULE.subprocess, "run", lambda *args, **kwargs: Completed())
-    MODULE.run_batch(queue, [0])
+    MODULE.run_batch(queue, [0], backend="r_reference")
     restored = pd.read_csv(queue_path)
     assert restored.loc[0, "status"] == "matched"
     assert restored.loc[0, "control_grid_id"] == "g00001x00001"

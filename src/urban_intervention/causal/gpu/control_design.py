@@ -15,7 +15,13 @@ from urban_intervention.data.paths import (
     TREATMENT_UNIT_LIST,
 )
 
-from .contracts import FORMAL_IMPLEMENTATION_VERSION, MatchingInput, MatchingResult
+from .contracts import (
+    CONTROL_DESIGN_SCHEMA,
+    CONTROL_DESIGN_VIIRS_CACHE_CONTRACT,
+    FORMAL_IMPLEMENTATION_VERSION,
+    MatchingInput,
+    MatchingResult,
+)
 from .matching import MatchingConfig, fit_matching
 from .panel_builder import (
     OUTCOMES,
@@ -27,8 +33,7 @@ from .panel_builder import (
 from .runtime import RuntimeConfig, TorchRuntime
 
 Scope = Literal["same_city", "all_city_standardized"]
-CONTROL_DESIGN_SCHEMA = "grid_control_design_v3_exact_stable_ties"
-VIIRS_CACHE_CONTRACT = "complete_44_city_2012_2024_monthly_v1"
+VIIRS_CACHE_CONTRACT = CONTROL_DESIGN_VIIRS_CACHE_CONTRACT
 STATIC_FEATURES = (
     "loc_dist_main_km",
     "loc_dist_nearest_subcentre_km",

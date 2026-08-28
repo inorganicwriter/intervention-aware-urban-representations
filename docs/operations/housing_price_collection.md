@@ -5,11 +5,11 @@ Updated: 2026-07-22
 ## Current decision
 
 Acquisition discovery is unrestricted by city, year, or station cohort. Raw
-records are preserved before downstream quality and causal-admission filters.
+records are preserved before downstream quality and causal-inclusion filters.
 
 Wayback collection is complete under the exact-endpoint contract. The local
 audit reports 202/202 targets complete, 4,253/4,253 captures with terminal
-outcomes, 35,014 parsed rows, and zero rows without exact-capture provenance.
+outcomes, 35,014 parsed rows, and complete exact-capture source records.
 Run the audit at any time with:
 
 ```bash
@@ -44,19 +44,19 @@ python scripts/collection/import_housing_observations.py \
   --mapping /path/to/import_mapping.yaml
 ```
 
-The importer accepts CSV, Parquet, XLS, and XLSX. It does not remove any city,
-year, or invalid row. It copies the immutable source and mapping to
+The importer accepts CSV, Parquet, XLS, and XLSX. It preserves every city, year,
+and invalid row. It copies the immutable source and mapping to
 `data/archive/raw/housing/platform_exports/authorized_imports/{batch_id}/`, writes canonical observations
 to `data/archive/staging/housing/standardized/{batch_id}/`, and records hashes, row
 counts, mappings, and quality flags in `import_manifest.json`.
 
 Transaction, listing, platform-estimate, and index prices remain separate.
 Anjuke community/listing data may improve the community registry and provide a
-cross-sectional price observation, but it does not silently replace Lianjia
-transaction prices.
+cross-sectional price observation. Lianjia transaction prices remain a separate
+source layer.
 
 ## Offline parsers
 
 `housing_price_fetcher.py` and `xiaoqu_fetcher.py` retain offline HTML parsers
 for licensed page archives and regression tests. Their live network entrypoints
-fail closed and direct the operator to the authorized importer.
+stop and direct the operator to the authorized importer.

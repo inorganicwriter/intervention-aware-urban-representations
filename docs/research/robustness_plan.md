@@ -93,18 +93,18 @@ python scripts/causal_r/run_robustness_checks.py --competing-events
 outputs/event_study/matching/{family}/spillover_{stratum}_*.csv
 ```
 
-该分层用于描述网络规模异质性，不替代空间排除半径敏感性。
+该分层用于描述网络规模异质性，空间排除半径敏感性单独报告。
 
 ## 正式执行要求
 
 - 所有规格使用同一冻结处理清单和结果定义；
 - 每个规格单独保存配置、输入哈希、样本构成和方法路由；
 - Matching、GSC 和 MC 分开汇总，不合并标准误；
-- smoke 输出只验证执行合同，不进入论文估计；
+- smoke 输出用于验证执行合同，论文估计使用正式结果；
 - 正式比较在 Response Artifact 发布后运行，并报告不可用任务及原因。
 
 ## 文献
 
-1. Abadie, A., Athey, S., Imbens, G.W. & Wooldridge, J.M. (2023). When should you adjust standard errors for clustering? *Quarterly Journal of Economics* 138(1): 1–35.
-2. de Chaisemartin, C. & D'Haultfœuille, X. (2020). Two-way fixed effects estimators with heterogeneous treatment effects. *American Economic Review* 110(9): 2964–2996.
-3. Yu, N., de Jong, M., Storm, S. & Mi, J. (2013). Spatial spillover effects of transport infrastructure: evidence from Chinese regions. *Journal of Transport Geography* 29: 56–66.
+1. Abadie, A., Athey, S., Imbens, G.W. & Wooldridge, J.M. (2023). When should you adjust standard errors for clustering? *Quarterly Journal of Economics* 138(1): 1-35.
+2. de Chaisemartin, C. & D'Haultfœuille, X. (2020). Two-way fixed effects estimators with heterogeneous treatment effects. *American Economic Review* 110(9): 2964-2996.
+3. Yu, N., de Jong, M., Storm, S. & Mi, J. (2013). Spatial spillover effects of transport infrastructure: evidence from Chinese regions. *Journal of Transport Geography* 29: 56-66.

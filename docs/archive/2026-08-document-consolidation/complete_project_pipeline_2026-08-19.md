@@ -1,9 +1,9 @@
 # Learning How Cities Respond：完整项目与生产管线
 
 本文定义研究对象、因果路由、发布合同和执行顺序。实时队列状态见
-[`docs/operations/current_project_status.md`](../operations/current_project_status.md)，
+[`docs/operations/current_project_status.md`](../../operations/current_project_status.md)，
 服务器命令见
-[`docs/operations/server_deployment.md`](../operations/server_deployment.md)。
+[`docs/operations/server_deployment.md`](../../operations/server_deployment.md)。
 
 ## 1. 项目目标
 

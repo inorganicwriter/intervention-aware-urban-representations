@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pandas as pd
+import pytest
+from summarize_causal_labels import classify_failure
 
 from urban_intervention.causal.gpu.provenance import file_sha256
 from urban_intervention.causal.pooled_event_study import (
     aggregate_effect_paths,
     attach_pretrend_metadata,
     pretrend_tests,
+    read_production_effect_paths,
     run_pooled_path_event_study,
     select_pretrend_rows,
 )
@@ -61,7 +66,7 @@ def test_pretrend_metadata_is_diagnostic_not_an_admission_gate() -> None:
     assert enriched["label_available"].all()
 
 
-def test_pooled_path_runner_reads_manifest_and_writes_metadata(tmp_path) -> None:
+def test_pooled_path_runner_reads_manifest_and_writes_metadata(tmp_path, caplog) -> None:
     task = tmp_path / "staging" / "task"
     task.mkdir(parents=True)
     labels = _paths()
@@ -79,10 +84,63 @@ def test_pooled_path_runner_reads_manifest_and_writes_metadata(tmp_path) -> None
     pd.DataFrame({"field": manifest.keys(), "value": manifest.values()}).to_csv(
         task / "manifest.csv", index=False
     )
+    rejected = tmp_path / "staging" / "missing_manifest"
+    rejected.mkdir()
+    labels.to_parquet(rejected / "causal_response_labels.parquet", index=False)
     output = tmp_path / "result"
     result = run_pooled_path_event_study(
         tmp_path / "staging", output, figures=False
     )
     assert result.diagnostics["treatment_orders"] == 12
+    assert result.diagnostics["admission_candidate_files"] == 2
+    assert result.diagnostics["admission_admitted_files"] == 1
+    assert result.diagnostics["admission_missing_manifest"] == 1
+    persisted = pd.read_csv(output / "diagnostics.csv").iloc[0]
+    assert int(persisted["admission_candidate_files"]) == 2
+    assert int(persisted["admission_admitted_files"]) == 1
+    assert int(persisted["admission_missing_manifest"]) == 1
+    assert "missing_manifest=1" in caplog.text
     assert (output / "effect_paths_with_pretrend.parquet").is_file()
     assert (output / "pretrend_city_cluster.csv").is_file()
+
+
+def test_pooled_path_runner_explains_zero_admission(tmp_path) -> None:
+    task = tmp_path / "staging" / "missing_manifest"
+    task.mkdir(parents=True)
+    _paths().to_parquet(task / "causal_response_labels.parquet", index=False)
+
+    with pytest.raises(ValueError, match="missing_manifest=1"):
+        run_pooled_path_event_study(tmp_path / "staging", tmp_path / "result", figures=False)
+
+
+def test_expected_frequency_filter_is_not_logged_as_warning(tmp_path, caplog) -> None:
+    task = tmp_path / "staging" / "task"
+    task.mkdir(parents=True)
+    labels_path = task / "causal_response_labels.parquet"
+    _paths().to_parquet(labels_path, index=False)
+    manifest = {
+        "run_mode": "production",
+        "production_eligible": "TRUE",
+        "estimator": "gsc",
+        "frequency": "monthly",
+        "specification_fingerprint": "main",
+        "labels_sha256": file_sha256(labels_path),
+    }
+    pd.DataFrame({"field": manifest.keys(), "value": manifest.values()}).to_csv(
+        task / "manifest.csv", index=False
+    )
+
+    caplog.set_level(logging.INFO, logger="urban_intervention.causal.pooled_event_study")
+    paths = read_production_effect_paths(
+        tmp_path / "staging",
+        frequency="annual",
+    )
+
+    assert paths.empty
+    assert paths.attrs["admission_counts"]["frequency_filter_mismatch"] == 1
+    assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
+
+
+def test_task_not_terminal_is_an_execution_state_failure() -> None:
+    assert classify_failure("task_not_terminal") == "execution_state"
+    assert classify_failure("preonly_placebo_quality_gate_failed") == "research"

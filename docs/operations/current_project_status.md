@@ -1,6 +1,6 @@
 # Current project state
 
-Updated: 2026-08-24
+Updated: 2026-08-27
 
 This page contains the state required to resume production. Research definitions
 are maintained in `docs/research/`; dataset locations and source identities are
@@ -19,17 +19,21 @@ maintained in `data/active/catalog/datasets.yaml`.
 | Routing | same-city Matching → GSC → MC → cross-city Matching → GSC → MC → skip |
 
 The treatment list, donor universe, metadata and queues are under
-`data/active/causal/`. These counts describe the spatial design and do not imply
-successful estimation or label availability.
+`data/active/causal/`. These counts describe the spatial design. Successful
+estimation and label availability are reported in the queue tables.
+
+`data/active/` is the frozen input and queue baseline for this workspace. Review
+and cleaning tasks use it as read-only input. A server production run uses an
+isolated working copy and records the hashes of the frozen inputs.
 
 ## Data products
 
 - Canonical housing month, quarter and year panels: `data/active/panels/`;
-- POI grid-year panel, 2012–2024: `data/active/curated/`;
-- annual VIIRS, 2012–2024: `data/active/curated/viirs_annual_aggregated/`;
+- POI grid-year panel, 2012-2024: `data/active/curated/`;
+- annual VIIRS, 2012-2024: `data/active/curated/viirs_annual_aggregated/`;
 - monthly VIIRS source: external path configured by `MIT_VIIRS_RAW`;
 - population panel: `data/active/curated/population/`;
-- Sentinel-2/Landsat panel, 2014–2024: `data/active/curated/sentinel2/`;
+- Sentinel-2/Landsat panel, 2014-2024: `data/active/curated/sentinel2/`;
 - location features: `data/active/curated/location_features/`;
 - pre-treatment transit snapshots and accessibility features:
   `data/active/causal/transit_snapshots/` and
@@ -52,11 +56,11 @@ Detailed source and coverage information belongs in `docs/data/`.
 
 The default estimator backend is `python_gpu`. R `PanelMatch`, `Matching`,
 `gsynth` and `fect` remain reference implementations and the explicit
-`r_reference` backend. Python/GPU production is fail-closed until the active
+`r_reference` backend. Python/GPU production stays stopped until the active
 environment has a valid qualification receipt containing at least three
 Matching, three GSC and three MC parity tasks.
 
-The following parallel modular implementations are not production entry points:
+The following parallel modular implementations remain experimental:
 
 - `scripts/causal_python/run_causal_label_queue_modular.py`;
 - `urban_intervention.config.project_modular`;
@@ -82,12 +86,32 @@ provided shard orchestrator rather than multiple independent writers.
 
 1. Run three representative GSC and three MC parity tasks on the RTX 4090
    server and issue the environment-bound qualification receipt.
-2. Run a server dry-run and limited canary with the frozen inputs and production
+2. Run a server dry-run and bounded test with the frozen inputs and production
    parameters.
 3. Run the 5,048-row control queue and the 20,192 family-level label queue.
 4. Aggregate Matching, GSC and MC event studies and review pre-trend metadata.
-5. Publish the strict Response Artifact and pretraining dataset.
+5. Publish the validated Response Artifact and pretraining dataset.
 6. Train and evaluate the representation model on the formal release.
+
+The code checks are in place: all queue entry points default to `python_gpu`,
+startup prints the selected backend, and Response Artifact publication validates
+the persistent control-record schema, backend, version and method. Production
+launchers stop when the frozen formal spec disagrees with the current code
+contract. These checks leave `data/active/` unchanged.
+
+Before starting the full server run, two data-source and specification records
+need to be aligned:
+
+- all 218 currently `matched` control-queue rows map to task records carrying
+  the historical `Match_M1`/old schema, while the current design is
+  `M5 + static refine`;
+- `data/active/causal/formal_matching_inputs/formal_matching_spec.dput` records
+  `minimum_complete_families = 2`, while the current code contract is 1.
+
+The frozen active file remains unchanged. Confirm the specification version and
+decide whether old records are eligible for the server run. Rebuild in the
+isolated server working copy when the records fail the current checks. The
+release validator will reject records that fail these checks.
 
 GSC production inference uses 200 parametric bootstrap replications. MC uses
 fixed-lambda unit jackknife inference; its `nboots=200` field is compatibility
@@ -105,12 +129,11 @@ Each training run writes:
 Evaluation reports retrieval metrics, bootstrap intervals, response-label
 permutation tests, raw-feature and appearance baselines, and transfer metrics.
 Formal conclusions require the full production release; demo and partial
-releases are not inferential evidence.
+formal inference uses the full production release.
 
-## Result admission
+## Result acceptance
 
-A label is admissible only when its frozen design record, estimator output,
-quality diagnostics, task identity, input hashes and run ID are mutually
-consistent and pass the Response Artifact checks. Partial, smoke, preview and
-stale outputs must carry `production_eligible = FALSE` and cannot enter formal
-training.
+A label enters the formal dataset when its frozen design record, estimator
+output, quality diagnostics, task identity, input hashes and run ID agree and
+pass the Response Artifact checks. Partial, smoke, preview and expired outputs
+carry `production_eligible = FALSE` and stay outside formal training.

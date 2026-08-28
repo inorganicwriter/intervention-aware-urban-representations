@@ -22,6 +22,7 @@ from urban_intervention.data.paths import (  # noqa: E402
     FORMAL_TARGET_SUPPORT,
     OUTCOME_FAMILY_QUEUE,
     OUTPUT_CAUSAL_TASKS_DIR,
+    OUTPUT_CONTROL_TASKS_DIR,
     TREATMENT_UNIT_LIST,
 )
 
@@ -60,6 +61,7 @@ def main() -> int:
         family_queue=OUTCOME_FAMILY_QUEUE,
         control_queue=CONTROL_DESIGN_QUEUE,
         task_root=OUTPUT_CAUSAL_TASKS_DIR,
+        control_task_root=OUTPUT_CONTROL_TASKS_DIR,
         donor_universe=ELIGIBLE_DONORS,
         target_support=FORMAL_TARGET_SUPPORT,
         treatment_orders=treatment_orders,

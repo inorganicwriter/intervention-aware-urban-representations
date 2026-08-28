@@ -69,6 +69,7 @@ HORIZONS = {
     "population": [1, 2, 3],
     "poi": [1, 2, 3],
 }
+DEFAULT_ESTIMATOR_BACKEND = "python_gpu"
 
 
 @dataclass
@@ -80,7 +81,7 @@ class QueueSettings:
     label_window: int = 1
     transaction_count_threshold: int = 1
     run_mode: str = "production"
-    estimator_backend: str = "r_reference"
+    estimator_backend: str = DEFAULT_ESTIMATOR_BACKEND
     max_gsc_cross_city_donors: int = 50_000
     gsc_donor_sampling_seed: int = 20260823
     qualification_receipt: Path | None = None
@@ -98,6 +99,7 @@ settings = QueueSettings()
 
 __all__ = [
     "CONTROL_QUEUE",
+    "DEFAULT_ESTIMATOR_BACKEND",
     "DONOR_UNIVERSE",
     "HORIZONS",
     "OUTCOMES",

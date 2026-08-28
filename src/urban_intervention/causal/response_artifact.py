@@ -19,7 +19,12 @@ import numpy as np
 import pandas as pd
 import pyarrow
 
-from urban_intervention.causal.gpu.contracts import FORMAL_IMPLEMENTATION_VERSION
+from urban_intervention.causal.gpu.contracts import (
+    CONTROL_DESIGN_PROVENANCE,
+    CONTROL_DESIGN_SCHEMA,
+    CONTROL_DESIGN_VIIRS_CACHE_CONTRACT,
+    FORMAL_IMPLEMENTATION_VERSION,
+)
 
 OUTCOME_HORIZONS: dict[str, dict[str, tuple[int, ...]]] = {
     "housing": {"housing_log_price": (1, 3, 6, 12, 18, 24)},
@@ -100,6 +105,10 @@ LABEL_COLUMNS = [
     "implementation_version",
 ]
 CONTROL_COLUMNS = [
+    "schema",
+    "implementation_version",
+    "backend",
+    "viirs_cache_contract",
     "status",
     "active_families",
     "selected_method",
@@ -131,6 +140,7 @@ class ArtifactInputs:
     donor_universe: Path | None = None
     target_support: Path | None = None
     treatment_orders: tuple[int, ...] | None = None
+    control_task_root: Path | None = None
 
 
 from urban_intervention.utils import sha256_file  # noqa: E402
@@ -243,6 +253,127 @@ def require_reproducible_code_state(state: dict[str, object]) -> None:
         raise ValueError("Strict production release requires a known code version")
     if state.get("source") == "git" and bool(state.get("dirty")):
         raise ValueError("Strict production release refuses a dirty Git worktree")
+
+
+def _has_value(value: object) -> bool:
+    if value is None or value is pd.NA:
+        return False
+    try:
+        if bool(pd.isna(value)):
+            return False
+    except (TypeError, ValueError):
+        pass
+    return str(value).strip().lower() not in {"", "nan", "none", "<na>"}
+
+
+def _as_bool(value: object) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "t", "yes", "y"}
+    return bool(value)
+
+
+def _control_record_for_order(
+    queue_row: pd.Series, control_task_root: Path | None
+) -> pd.Series:
+    """Load the durable control record when available, never just its queue summary."""
+    order = int(queue_row["treatment_order"])
+    if control_task_root is not None:
+        path = control_task_root / f"{order:05d}" / "control_record.csv"
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"Strict production control queue lacks durable record for order {order}: {path}"
+            )
+        record = pd.read_csv(path)
+        if len(record) != 1:
+            raise ValueError(f"Control record must contain exactly one row: {path}")
+        return record.iloc[0]
+    required = {
+        "schema",
+        "implementation_version",
+        "backend",
+        "viirs_cache_contract",
+        "selected_method",
+        "control_selection_uses_post_outcome",
+    }
+    missing = required - set(queue_row.index)
+    if missing:
+        raise ValueError(
+            "Strict production control validation requires control_task_root or queue provenance "
+            f"columns; missing {sorted(missing)}"
+        )
+    return queue_row
+
+
+def validate_control_design_provenance(
+    control_queue: pd.DataFrame,
+    *,
+    control_task_root: Path | None = None,
+    expected_backend: str | None = None,
+) -> list[Path]:
+    """Reject stale control records before they can enter a formal release."""
+    required_queue = {"treatment_order", "status"}
+    missing_queue = required_queue - set(control_queue.columns)
+    if missing_queue:
+        raise ValueError(f"Control queue lacks columns: {sorted(missing_queue)}")
+    if expected_backend is not None and expected_backend not in CONTROL_DESIGN_PROVENANCE:
+        raise ValueError(f"Unknown control-design backend: {expected_backend}")
+
+    active = control_queue.loc[
+        control_queue["status"].astype(str).isin({"matched", "gsc_pending"})
+    ]
+    record_paths: list[Path] = []
+    for _, queue_row in active.iterrows():
+        order = int(queue_row["treatment_order"])
+        if control_task_root is not None:
+            record_paths.append(
+                control_task_root / f"{order:05d}" / "control_record.csv"
+            )
+        record = _control_record_for_order(queue_row, control_task_root)
+        if int(record.get("treatment_order", -1)) != order:
+            raise ValueError(f"Control record identity mismatch for order {order}")
+        if str(record.get("schema", "")) != CONTROL_DESIGN_SCHEMA:
+            raise ValueError(
+                f"Control record {order} uses stale control-design schema; "
+                f"expected {CONTROL_DESIGN_SCHEMA}"
+            )
+        if str(record.get("viirs_cache_contract", "")) != CONTROL_DESIGN_VIIRS_CACHE_CONTRACT:
+            raise ValueError(
+                f"Control record {order} lacks the complete monthly VIIRS cache contract"
+            )
+        actual_backend = str(record.get("backend", ""))
+        actual_version = str(record.get("implementation_version", ""))
+        matching_backend = next(
+            (
+                name
+                for name, provenance in CONTROL_DESIGN_PROVENANCE.items()
+                if actual_backend == provenance["backend"]
+                and actual_version == provenance["implementation_version"]
+            ),
+            None,
+        )
+        if matching_backend is None:
+            raise ValueError(
+                f"Control record {order} has unsupported backend/version "
+                f"({actual_backend}, {actual_version})"
+            )
+        if expected_backend is not None and matching_backend != expected_backend:
+            raise ValueError(
+                f"Control record {order} backend {matching_backend} disagrees with "
+                f"requested {expected_backend}"
+            )
+        if not _has_value(record.get("control_selection_uses_post_outcome")):
+            raise ValueError(f"Control record {order} lacks the post-outcome selection flag")
+        if _as_bool(record["control_selection_uses_post_outcome"]):
+            raise ValueError(f"Control record {order} uses post-treatment information")
+        if str(queue_row.get("status", "")) != str(record.get("status", "")):
+            raise ValueError(f"Control queue status disagrees with record for order {order}")
+        if str(queue_row["status"]) == "matched":
+            expected_method = CONTROL_DESIGN_PROVENANCE[matching_backend]["selected_method"]
+            if str(record.get("selected_method", "")) != expected_method:
+                raise ValueError(
+                    f"Control record {order} uses stale matching method; expected {expected_method}"
+                )
+    return record_paths
 
 
 def runtime_versions() -> dict[str, str]:
@@ -515,6 +646,7 @@ def build_response_frame(
             control_queue["treatment_order"].astype(int).isin(selected_orders)
         ].copy()
     expected_families = set(OUTCOME_HORIZONS)
+    control_record_paths: list[Path] = []
     if strict_production:
         if len(treatments) != 5_048:
             raise ValueError("Production release requires the immutable 5,048 treatments")
@@ -541,8 +673,12 @@ def build_response_frame(
             raise ValueError(
                 "Production control queue lacks control_selection_uses_post_outcome column"
             )
-        if control_queue["control_selection_uses_post_outcome"].fillna(True).astype(bool).any():
+        if control_queue["control_selection_uses_post_outcome"].fillna(True).map(_as_bool).any():
             raise ValueError("Production release detected post-treatment control-selection leakage")
+        control_record_paths = validate_control_design_provenance(
+            control_queue,
+            control_task_root=inputs.control_task_root,
+        )
 
     skeleton = expected_label_skeleton(treatments, specification_id)
     labels, task_metadata, task_paths = collect_task_products(
@@ -745,7 +881,7 @@ def build_response_frame(
         "task_status_counts": family_queue["status"].value_counts(dropna=False).to_dict(),
         "quality_grade_counts": artifact["quality_grade"].value_counts(dropna=False).to_dict(),
     }
-    return artifact, diagnostics, task_paths
+    return artifact, diagnostics, task_paths + control_record_paths
 
 
 def publish_response_artifact(

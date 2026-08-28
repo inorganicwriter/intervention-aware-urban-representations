@@ -18,6 +18,11 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 
+def test_direct_queue_default_is_gpu_backend() -> None:
+    assert MODULE.DEFAULT_ESTIMATOR_BACKEND == "python_gpu"
+    assert MODULE._ESTIMATOR_BACKEND == MODULE.DEFAULT_ESTIMATOR_BACKEND
+
+
 def test_mc_runner_filters_on_the_requested_treatment_order() -> None:
     source = (ROOT / "scripts" / "causal_r" / "run_complete_mc.R").read_text(encoding="utf-8")
     assert "treatment_order == treatment_order" not in source
@@ -40,6 +45,7 @@ def test_signature_uses_only_explicit_complete_families() -> None:
 
 
 def test_atomic_resume_finalizes_completed_task(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(MODULE, "_ESTIMATOR_BACKEND", "r_reference")
     family_queue = tmp_path / "family.csv"
     task_root = tmp_path / "tasks"
     monkeypatch.setattr(MODULE, "FAMILY_QUEUE", family_queue)
@@ -316,6 +322,7 @@ def test_write_task_rejects_swapped_treatment_identity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(MODULE, "_ESTIMATOR_BACKEND", "r_reference")
     monkeypatch.setattr(MODULE, "TASK_ROOT", tmp_path / "tasks")
     row = pd.Series(
         {
@@ -348,6 +355,7 @@ def test_mc_scope_keeps_successful_poi_outcomes_when_another_outcome_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(MODULE, "_ESTIMATOR_BACKEND", "r_reference")
     monkeypatch.setattr(MODULE, "ROOT", tmp_path)
     monkeypatch.setattr(MODULE, "STAGING", tmp_path / "outputs" / "complete_estimators" / "staging")
     monkeypatch.setattr(
@@ -452,6 +460,7 @@ def test_mc_scope_rejects_status_from_a_previous_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(MODULE, "_ESTIMATOR_BACKEND", "r_reference")
     monkeypatch.setattr(MODULE, "ROOT", tmp_path)
     monkeypatch.setattr(MODULE, "STAGING", tmp_path / "outputs" / "complete_estimators" / "staging")
     monkeypatch.setattr(MODULE, "new_run_id", lambda: "current-run")
@@ -493,6 +502,7 @@ def test_gsc_scope_rejects_smoke_or_stale_estimator_manifest(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(MODULE, "_ESTIMATOR_BACKEND", "r_reference")
     monkeypatch.setattr(MODULE, "ROOT", tmp_path)
     monkeypatch.setattr(MODULE, "STAGING", tmp_path / "outputs" / "complete_estimators" / "staging")
     monkeypatch.setattr(MODULE, "new_run_id", lambda: "current-gsc-run")

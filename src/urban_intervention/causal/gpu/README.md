@@ -11,7 +11,7 @@ R estimator processes.
 | Path | Python implementation | Formal uncertainty |
 | --- | --- | --- |
 | Matching control design | pre-treatment feature construction, robust city scaling, chunked GPU Mahalanobis search, static refinement and placebo/holdout gates | design-stage diagnostics |
-| Matching ATT | `Matching::Match`-compatible ATT with replacement, bias correction and Abadie–Imbens analytic variance | analytic AI standard error |
+| Matching ATT | `Matching::Match`-compatible ATT with replacement, bias correction and Abadie and Imbens analytic variance | analytic AI standard error |
 | GSC | rolling rank CV, two-way interactive fixed effects, deterministic GPU SVD/EM, same-city and standardized all-city donors | 200-repetition two-stage parametric bootstrap (`auto`: empirical or AR errors) |
 | MC | rolling lambda CV, two-way fixed effects and nuclear-norm completion | unit jackknife matching `fect::jackknifed` pseudo-values |
 
@@ -20,25 +20,25 @@ opening-period and post-period calendars. Housing transaction support,
 cross-city donor scope, convergence, tuning, inference counts and backend
 version are carried into every label and manifest.
 
-## Numerical and academic safeguards
+## Numerical and academic checks
 
 - Formal work uses deterministic float64 PyTorch with TF32 disabled.
-- Donor admission, city scaling, matching and tuning obey their documented
+- Donor selection, city scaling, matching and tuning follow their documented
   pre-treatment information sets; treated post-period outcomes are masked.
 - All-city GSC must pass a pre-only masked target-versus-20-donor placebo gate.
 - The 3.77-million-unit all-city universe is reduced before any outcome is
   read by a fixed-seed stable-hash sample (default 50,000 donors). The cap and
   seed are part of the specification fingerprint; post-treatment outcomes
-  cannot affect admission. Report cap sensitivity for cross-city extensions.
-- Production fails closed when fitting or formal inference is incomplete.
-- R parity is treated as software qualification, not as a second estimate to
-  choose after observing results.
+-  cannot affect selection. Report cap sensitivity for cross-city extensions.
+- Production stops when fitting or formal inference is incomplete.
+- R parity is used for software qualification. It does not select a second
+  estimate after results are observed.
 - Content-addressed tuning caches include the implementation version, tuning
   contract and determining panel cells. GSC rank CV can be reused when the
   complete control panel is identical. MC tuning is reused only when the full
   panel and treatment mask are identical.
 
-## Runtime model
+## Execution model
 
 The deployment design is one process per physical GPU. Four RTX 4090 cards run
 four independent tasks concurrently; they are not exposed as one 96 GB device.
@@ -56,12 +56,13 @@ python scripts/causal_python/run_formal_estimator.py \
   --estimator gsc --donor-scope same_city --run-mode preview --device cuda:0
 ```
 
-Run the production queues across four cards:
+Run the production queues across four cards in an isolated server working copy
+(do not reset the frozen active baseline):
 
 ```bash
 export MIT_CAUSAL_GPU_IDS=0,1,2,3
 python scripts/causal_r/run_parallel_production.py \
-  --run-all --reset-queues --estimator-backend python_gpu \
+  --run-all --estimator-backend python_gpu \
   --qualification-receipt outputs/causal_gpu/formal_qualification.json \
   --gpu-ids 0,1,2,3 --shard-count 4 --workers 4
 ```
@@ -85,21 +86,20 @@ python scripts/causal_gpu/audit_formal_qualification.py \
 ```
 
 The Matching references include both design-stage selections and final
-fixed-control label paths. Production refuses a missing, ineligible, stale or
+fixed-control label paths. Production rejects a missing, ineligible, expired or
 subsequently modified qualification source. Each shard performs the full
 source audit once; estimator subprocesses verify the already-audited receipt
 digest instead of re-hashing every qualification panel. The receipt records
-the numerical environment that actually passed parity, rather than relying on
-a source-code hard lock to one workstation. The qualification run performs native GPU tuning,
+the numerical environment that passed parity. The qualification run performs native GPU tuning,
 200-repetition GSC bootstrap and MC unit-jackknife checks against R reference
-labels; it cannot pass by manually changing a manifest boolean. Preview runs
+labels; a manually changed manifest boolean does not satisfy the checks. Preview runs
 do not require a receipt.
 
 R is therefore retained only for the one-time reference/qualification stage.
 Once an eligible receipt has been issued, the production Matching/GSC/MC queue
 and the all-method event-study aggregation do not invoke R.
 
-The R reference labels used for qualification must be generated with
+The R reference labels used for qualification use
 `observation_window=1`. Legacy R moving-window standard errors combine
 marginal errors without their covariance and are deliberately rejected as an
 inference reference. Production Python windows are rebuilt from the complete
@@ -131,7 +131,7 @@ python scripts/causal_python/run_all_method_event_study.py
 Matching is estimated as a pooled matched-pair TWFE event study. GSC and MC
 retain their estimator-specific effect paths and are pooled separately by
 method and donor scope. Grid- and city-cluster pre-trend results are written as
-diagnostic metadata; they do not automatically delete labels.
+diagnostic metadata. Label status follows the Response Artifact checks.
 
 Phase 1 assigns control-design batches across `MIT_CAUSAL_GPU_IDS`; Phase 2
 sets one `MIT_CAUSAL_DEVICE=cuda:N` for each shard. GSC inference dynamically
@@ -149,6 +149,6 @@ it is not a production entry point.
 
 Local unit, synthetic and representative real-panel checks establish that the
 contracts run and reproduce audited fixtures. Before a full release, the
-server run must still record CUDA device use, deterministic repeatability,
-representative R/Python parity and wall-time/memory benchmarks. A bounded
-preview or canary is not a production label release.
+server run records CUDA device use, deterministic repeatability, representative
+R/Python parity and wall-time/memory benchmarks. A bounded preview or test run
+carries a non-production marker.

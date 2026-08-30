@@ -19,8 +19,9 @@ from urban_intervention.utils import (
     atomic_write_parquet,
 )
 
-from .contracts import FORMAL_IMPLEMENTATION_VERSION, FORMAL_RESULT_SCHEMA
+from .contracts import FORMAL_IMPLEMENTATION_VERSION, FORMAL_RESULT_SCHEMA, PanelData
 from .gsc import GSCConfig, GSCResult, _target_counterfactual, fit_gsc
+from .inference import jackknife_standard_error
 from .io import LoadedPanel, load_estimation_panel
 from .linalg import as_panel_tensors, fit_interactive_fixed_effects
 from .matrix_completion import (
@@ -29,6 +30,7 @@ from .matrix_completion import (
     fit_matrix_completion,
 )
 from .provenance import (
+    estimator_code_fingerprint,
     file_sha256,
     python_environment,
     qualified_environment_differences,
@@ -283,11 +285,11 @@ def _apply_window_replicate_inference(
             if estimator == "gsc":
                 standard_error = float(np.std(aggregated[complete, column], ddof=1))
             else:
-                pseudo = (
-                    point * requested_repetitions
-                    - aggregated[complete, column] * (requested_repetitions - 1)
+                standard_error = float(
+                    jackknife_standard_error(
+                        np.asarray([point]), aggregated[:, [column]]
+                    )[0][0]
                 )
-                standard_error = float(np.sqrt(np.var(pseudo, ddof=1) / valid))
         output.at[index, "valid_inference_repetitions"] = valid
         output.at[index, "standard_error"] = standard_error
         if np.isfinite(standard_error):
@@ -301,6 +303,29 @@ def _apply_window_replicate_inference(
             output.at[index, "confidence_upper"] = np.nan
             output.at[index, "p_value"] = np.nan
     return output, aggregated
+
+
+def _validate_formal_post_inference(
+    labels: pd.DataFrame,
+    *,
+    requested_repetitions: int,
+    minimum_valid_fraction: float,
+) -> None:
+    """Require adequate inference for each publishable post-treatment label."""
+    minimum_valid = max(
+        2, int(np.ceil(requested_repetitions * minimum_valid_fraction))
+    )
+    publishable_post = labels["event_time"].gt(0) & labels[
+        "label_available"
+    ].fillna(False)
+    post_valid = pd.to_numeric(
+        labels.loc[publishable_post, "valid_inference_repetitions"],
+        errors="coerce",
+    )
+    if post_valid.empty:
+        raise RuntimeError("formal result has no publishable post-treatment labels")
+    if bool(post_valid.lt(minimum_valid).any()):
+        raise RuntimeError("too few complete replicate paths for formal window inference")
 
 
 def _fit(
@@ -337,7 +362,7 @@ def _fit(
                 selected_rank = resolved_gsc_config.fixed_rank
                 cv_mean_mspe = {}
             placebo = _cross_city_masked_placebo(
-                loaded, selected_rank, selection_config, runtime, request
+                loaded, selection_config, runtime, request
             )
             if not bool(placebo.loc[placebo["placebo_role"].eq("target"), "target_accepted"].iloc[0]):
                 target_rmspe = float(
@@ -406,7 +431,6 @@ def _validate_production_estimator_config(
 
 def _cross_city_masked_placebo(
     loaded: LoadedPanel,
-    rank: int,
     config: GSCConfig,
     runtime: TorchRuntime,
     request: FormalRunRequest,
@@ -435,6 +459,34 @@ def _cross_city_masked_placebo(
     y, observed, _ = as_panel_tensors(panel, runtime)
     y = y[:pre_count]
     observed = observed[:pre_count]
+    rank_units = np.concatenate([[target], controls])
+    rank_unit_tensor = runtime.tensor(rank_units, dtype=runtime.torch.long)
+    rank_y = y[:, rank_unit_tensor]
+    rank_observed = observed[:, rank_unit_tensor]
+    rank_values = rank_y.detach().cpu().numpy().copy()
+    rank_values[~rank_observed.detach().cpu().numpy()] = np.nan
+    rank_treated = np.zeros(rank_values.shape, dtype=bool)
+    rank_treated[train_end:, 0] = True
+    masked_max_rank = max(0, (train_end - 1) // 2)
+    masked_ranks = tuple(rank for rank in config.ranks if rank <= masked_max_rank)
+    if not masked_ranks:
+        raise ValueError("cross-city masked placebo has no identifiable rank candidate")
+    masked_cv_nobs = min(
+        config.cv_nobs, max(1, train_end - config.min_pre_periods)
+    )
+    rank_result = fit_gsc(
+        PanelData(y=rank_values, treated=rank_treated),
+        config=replace(
+            config,
+            ranks=masked_ranks,
+            fixed_rank=None,
+            cv_nobs=masked_cv_nobs,
+            bootstrap_mode="none",
+            n_bootstrap=0,
+        ),
+        runtime=runtime,
+    )
+    rank = rank_result.selected_rank
     control_indices = runtime.tensor(controls, dtype=runtime.torch.long)
     control_fit = fit_interactive_fixed_effects(
         y[:, control_indices],
@@ -461,6 +513,7 @@ def _cross_city_masked_placebo(
                 "placebo_role": "target" if unit == target else "donor_placebo",
                 "masked_periods": holdout,
                 "masked_rmspe": rmspe,
+                "masked_selected_rank": rank,
             }
         )
     result = pd.DataFrame(rows)
@@ -488,6 +541,7 @@ def run_formal_panel(
     mc_config: MatrixCompletionConfig | None = None,
 ) -> FormalRunResult:
     """Fit, validate and atomically publish one Python formal panel result."""
+    code_fingerprint = estimator_code_fingerprint(request.estimator)
     qualification: dict[str, Any] = {}
     if request.run_mode == "production":
         if request.qualification_receipt is None:
@@ -582,6 +636,7 @@ def run_formal_panel(
             "donor_scope": request.donor_scope,
             "estimator_backend": "python_pytorch",
             "implementation_version": FORMAL_IMPLEMENTATION_VERSION,
+            "code_fingerprint": code_fingerprint,
             "price_measure": request.price_measure,
             "transaction_count": transaction_count,
             "transaction_count_min": transaction_count,
@@ -620,19 +675,15 @@ def run_formal_panel(
                     gsc_config.minimum_valid_fraction if gsc_config is not None else 0.9
                 )
             else:
-                valid_population = max(0, requested_repetitions - 1)
+                valid_population = requested_repetitions
                 valid_fraction = (
                     mc_config.minimum_valid_fraction if mc_config is not None else 0.9
                 )
-            minimum_valid = max(2, int(np.ceil(valid_population * valid_fraction)))
-            post_valid = pd.to_numeric(
-                labels.loc[labels["event_time"].gt(0), "valid_inference_repetitions"],
-                errors="coerce",
+            _validate_formal_post_inference(
+                labels,
+                requested_repetitions=valid_population,
+                minimum_valid_fraction=valid_fraction,
             )
-            if post_valid.empty or bool(post_valid.lt(minimum_valid).any()):
-                raise RuntimeError(
-                    "too few complete replicate paths for formal window inference"
-                )
     pre_effect = labels.loc[labels["event_time"].lt(0), "causal_response_label"]
     labels["pre_rmspe"] = float(np.sqrt(np.nanmean(np.square(pre_effect))))
     labels["pre_observed_periods"] = int(
@@ -722,6 +773,7 @@ def run_formal_panel(
     manifest: dict[str, Any] = {
         "schema": FORMAL_RESULT_SCHEMA,
         "implementation_version": FORMAL_IMPLEMENTATION_VERSION,
+        "code_fingerprint": code_fingerprint,
         "run_id": run_id,
         "estimator": request.estimator,
         "backend": "python_pytorch",
@@ -770,6 +822,7 @@ def run_formal_panel(
             "estimator": fit.provenance.estimator,
             "backend": fit.provenance.backend,
             "implementation_version": fit.provenance.implementation_version,
+            "code_fingerprint": code_fingerprint,
             "numerical_policy": fit.provenance.numerical_policy,
             "notes": fit.provenance.notes,
         },

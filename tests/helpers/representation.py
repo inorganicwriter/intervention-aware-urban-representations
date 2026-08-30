@@ -133,7 +133,7 @@ def build_synthetic_model_inputs(
     )
 
     manifest = {
-        "schema": "urban_intervention_pretraining_dataset_v1",
+        "schema": "urban_intervention_pretraining_dataset",
         "dataset_id": "test_ds",
         "created_utc": "2026-07-30T00:00:00Z",
         "strict_production": False,

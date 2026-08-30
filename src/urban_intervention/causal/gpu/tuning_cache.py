@@ -13,9 +13,10 @@ import numpy as np
 import pandas as pd
 
 from .contracts import FORMAL_IMPLEMENTATION_VERSION
+from .provenance import estimator_code_fingerprint
 
 Estimator = Literal["gsc", "mc"]
-TUNING_CACHE_SCHEMA = "causal_python_tuning_cache_v1"
+TUNING_CACHE_SCHEMA = "causal_python_tuning_cache"
 
 
 def panel_tuning_signature(
@@ -44,6 +45,7 @@ def panel_tuning_signature(
     digest = hashlib.sha256()
     digest.update(estimator.encode("ascii"))
     digest.update(FORMAL_IMPLEMENTATION_VERSION.encode("ascii"))
+    digest.update(estimator_code_fingerprint(estimator).encode("ascii"))
     digest.update(
         json.dumps(tuning_contract, sort_keys=True, separators=(",", ":"), default=str).encode(
             "utf-8"
@@ -69,6 +71,7 @@ def load_tuning_cache(
     if (
         payload.get("schema") != TUNING_CACHE_SCHEMA
         or payload.get("implementation_version") != FORMAL_IMPLEMENTATION_VERSION
+        or payload.get("code_fingerprint") != estimator_code_fingerprint(estimator)
         or payload.get("estimator") != estimator
         or payload.get("panel_signature") != signature
     ):
@@ -94,4 +97,3 @@ def write_tuning_cache(path: Path, payload: dict[str, Any]) -> None:
         encoding="utf-8",
     )
     os.replace(temporary, path)
-

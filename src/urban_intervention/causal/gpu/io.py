@@ -76,12 +76,20 @@ def load_cv_contract_manifest(directory: str | Path, estimator: str) -> dict[str
     if list(frame.columns) != ["field", "value"] or frame["field"].duplicated().any():
         raise ValueError("GPU input manifest must contain unique field/value rows")
     values = dict(zip(frame["field"], frame["value"], strict=True))
-    schema = values.get("schema")
-    if schema not in {"causal_gpu_input_v1", "causal_gpu_input_v2_python_contract"}:
+    schema = values.get("schema", "")
+    python_contract = schema in {
+        "causal_gpu_input_python_contract",
+        "causal_gpu_input_v3_python_contract",
+    }
+    reference_contract = schema in {
+        "causal_gpu_input_reference_contract",
+        "causal_gpu_input_v1",
+    }
+    if not (python_contract or reference_contract):
         raise ValueError("unsupported causal GPU input schema")
     if values.get("production_eligible", "").upper() != "FALSE":
         raise ValueError("GPU input contract must not claim production eligibility")
-    if schema == "causal_gpu_input_v1":
+    if reference_contract:
         if values.get("run_mode") != "gpu_export":
             raise ValueError("R causal GPU input was not produced in gpu_export mode")
         if values.get("fect_version") != "2.4.5":
@@ -121,12 +129,10 @@ def load_cv_contract_manifest(directory: str | Path, estimator: str) -> dict[str
 def load_estimation_panel(path: str | Path | pd.DataFrame, estimator: str) -> LoadedPanel:
     """Load a formal panel artifact or an in-memory Python-built panel.
 
-    The reference MC implementation replaces an unavailable treated-post
-    outcome with the treated unit's pre-period mean before fitting.  Those
-    cells are outside every fit mask, so reproducing that placeholder here is
-    safe and permits counterfactuals for horizons whose observed outcome is
-    unavailable.  The original ``value`` column remains untouched for label
-    availability downstream.
+    Missing outcome cells remain missing in the panel and are carried by the
+    explicit observation mask.  Masked linear algebra replaces them with zero
+    only inside the estimator; jackknife and label code retain their
+    unavailable status.
     """
     if estimator not in {"gsc", "mc"}:
         raise ValueError("estimator must be 'gsc' or 'mc'")
@@ -145,17 +151,6 @@ def load_estimation_panel(path: str | Path | pd.DataFrame, estimator: str) -> Lo
         raise ValueError("estimation panel treatment flags must be binary")
     frame["D"] = treatment_values.astype(np.int8)
     frame["model_value"] = pd.to_numeric(frame["model_value"], errors="coerce")
-    if estimator == "mc" and frame.loc[frame["D"].eq(1), "model_value"].isna().any():
-        treated_units = frame.loc[frame["D"].eq(1), unit_column].unique()
-        if len(treated_units) != 1:
-            raise ValueError("MC panel must contain exactly one treated unit")
-        target = frame[unit_column].eq(treated_units[0])
-        pre = frame.loc[target & frame["D"].eq(0), "model_value"]
-        pre_mean = float(pre.mean())
-        if not np.isfinite(pre_mean):
-            raise ValueError("MC treated pre-period fill value is unavailable")
-        missing_treated = target & frame["D"].eq(1) & frame["model_value"].isna()
-        frame.loc[missing_treated, "model_value"] = pre_mean
     for column in (unit_column, "time_id"):
         numeric = pd.to_numeric(frame[column], errors="raise").to_numpy(dtype=np.float64)
         if not np.isfinite(numeric).all() or not np.equal(numeric, np.floor(numeric)).all():

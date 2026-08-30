@@ -33,6 +33,7 @@ from urban_intervention.causal.gpu.matrix_completion import (  # noqa: E402
     fit_matrix_completion,
 )
 from urban_intervention.causal.gpu.provenance import (  # noqa: E402
+    estimator_code_fingerprint,
     estimator_source_files,
     fingerprint_files,
     python_environment,
@@ -222,6 +223,7 @@ def main() -> None:
     manifest = {
         "schema": SHADOW_SCHEMA,
         "implementation_version": GPU_IMPLEMENTATION_VERSION,
+        "code_fingerprint": estimator_code_fingerprint(args.estimator),
         "estimator": args.estimator,
         "backend": "pytorch",
         "mode": "shadow",

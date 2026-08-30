@@ -5,12 +5,14 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from urban_intervention.causal.gpu.formal_runner import (
     FormalRunRequest,
     _apply_observation_window,
     _apply_window_replicate_inference,
     _cross_city_masked_placebo,
+    _validate_formal_post_inference,
     _validate_production_estimator_config,
     run_formal_panel,
 )
@@ -23,6 +25,7 @@ from urban_intervention.causal.gpu.panel_builder import (
     deterministic_cross_city_gsc_sample,
     monthly_event_calendar,
 )
+from urban_intervention.causal.gpu.provenance import estimator_code_fingerprint
 from urban_intervention.causal.gpu.runtime import RuntimeConfig, TorchRuntime
 
 
@@ -127,17 +130,44 @@ def test_window_inference_rebuilds_mc_jackknife_pseudo_values() -> None:
         }
     )
     windowed = _apply_observation_window(raw, 2)
-    draws = np.asarray([[0.5, 0.5], [1.5, 1.5], [np.nan, np.nan]])
+    draws = np.asarray([[0.5, 0.5], [1.5, 1.5]])
     result, _ = _apply_window_replicate_inference(
         windowed,
         raw_event_time=np.asarray([1, 2]),
         replicate_estimates=draws,
         estimator="mc",
         window=2,
-        requested_repetitions=3,
+        requested_repetitions=2,
     )
-    # pseudo-values are 2 and 0, whose jackknife SE is sqrt(var / 2) = 1
-    assert result.loc[result["event_time"].eq(2), "standard_error"].iloc[0] == 1.0
+    # With two valid refits, pseudo-values are 1.5 and 0.5.
+    assert result.loc[result["event_time"].eq(2), "standard_error"].iloc[0] == 0.5
+
+
+def test_formal_gate_ignores_unavailable_partial_post_periods() -> None:
+    labels = pd.DataFrame(
+        {
+            "event_time": [1, 2, 3],
+            "label_available": [True, False, True],
+            "valid_inference_repetitions": [6, 0, 6],
+        }
+    )
+    _validate_formal_post_inference(
+        labels, requested_repetitions=6, minimum_valid_fraction=0.9
+    )
+
+
+def test_formal_gate_requires_one_publishable_post_period() -> None:
+    labels = pd.DataFrame(
+        {
+            "event_time": [1, 2],
+            "label_available": [False, False],
+            "valid_inference_repetitions": [0, 0],
+        }
+    )
+    with pytest.raises(RuntimeError, match="no publishable post-treatment labels"):
+        _validate_formal_post_inference(
+            labels, requested_repetitions=6, minimum_valid_fraction=0.9
+        )
 
 
 def test_gsc_builder_uses_pre_only_admission_and_city_pre_scaling() -> None:
@@ -332,9 +362,13 @@ def test_formal_preview_runner_publishes_complete_python_contract(tmp_path: Path
     )
     assert result.labels_path.exists()
     assert result.manifest_path.exists()
-    assert result.manifest["schema"] == "causal_python_formal_result_v3_qualified"
+    assert result.manifest["schema"] == "causal_python_formal_result_qualified"
     assert result.manifest["backend"] == "python_pytorch"
+    assert result.manifest["code_fingerprint"] == estimator_code_fingerprint("gsc")
     assert result.manifest["production_eligible"] is False
+    assert set(result.labels["code_fingerprint"]) == {
+        estimator_code_fingerprint("gsc")
+    }
     assert result.labels["event_time"].tolist() == [-5, -4, -3, -2, -1, 1, 2, 3]
     json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
 
@@ -401,7 +435,6 @@ def test_cross_city_gsc_masked_placebo_compares_target_to_twenty_donors(
     )
     placebo = _cross_city_masked_placebo(
         loaded,
-        0,
         GSCConfig(fixed_rank=0),
         TorchRuntime(RuntimeConfig(device="cpu")),
         request,
@@ -409,3 +442,47 @@ def test_cross_city_gsc_masked_placebo_compares_target_to_twenty_donors(
     assert len(placebo) == 21
     assert placebo["placebo_role"].eq("target").sum() == 1
     assert np.isfinite(placebo["masked_rmspe"]).all()
+    assert placebo["masked_selected_rank"].nunique() == 1
+
+
+def test_cross_city_masked_placebo_accepts_six_annual_pre_periods(
+    tmp_path: Path,
+) -> None:
+    rng = np.random.default_rng(17)
+    periods = np.asarray([2014, 2015, 2016, 2017, 2018, 2019, 2021, 2022])
+    common = np.arange(len(periods), dtype=float)[:, None] * 0.15
+    values = common + np.arange(31, dtype=float)[None, :] * 0.02
+    values += rng.normal(scale=0.001, size=values.shape)
+    rows: list[dict[str, object]] = []
+    for unit in range(values.shape[1]):
+        for time in range(values.shape[0]):
+            rows.append(
+                {
+                    "gsc_unit_id": unit + 1,
+                    "time_id": time + 1,
+                    "period": int(periods[time]),
+                    "model_value": values[time, unit],
+                    "D": int(unit == 30 and time >= 6),
+                }
+            )
+    loaded = load_estimation_panel(pd.DataFrame(rows), "gsc")
+    request = FormalRunRequest(
+        estimator="gsc",
+        output_directory=tmp_path,
+        treatment_order=8,
+        city_key="a",
+        grid_id="target",
+        opening_month="2020-01",
+        outcome_family="population",
+        outcome="population_log",
+        donor_scope="all_city_standardized",
+    )
+    placebo = _cross_city_masked_placebo(
+        loaded,
+        GSCConfig(fixed_rank=0),
+        TorchRuntime(RuntimeConfig(device="cpu")),
+        request,
+    )
+    assert len(placebo) == 21
+    assert placebo["masked_periods"].eq(1).all()
+    assert placebo["masked_selected_rank"].max() <= 2

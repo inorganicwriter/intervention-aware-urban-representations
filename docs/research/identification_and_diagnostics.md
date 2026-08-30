@@ -43,6 +43,32 @@ H0: β_k = 0  for every clean pre-treatment k < 0, k ≠ k0
 
 结果判读同时查看：每个 `β_k` 的点估计与置信区间、所有 clean leads 的联合 Wald/F 检验、城市聚类和网格聚类两套结果，以及处理前支持数量。
 
+### 3.1 聚类协方差与有限样本修正
+
+设残差化后的事件期设计矩阵为 `X`，回归残差为 `u`，聚类集合为 `g=1,...,G`。
+每个聚类的得分向量为：
+
+```text
+S_g = Σ_{i in g} X_i u_i
+```
+
+单向聚类协方差为：
+
+```text
+V = [G/(G-1)] [(n-1)/(n-K)] (X'X)^(-1) [Σ_g S_g S_g'] (X'X)^(-1)
+```
+
+`K` 按 fixest 默认的 nonnested 规则计算。事件期系数计入 `K`。嵌套于当前聚类键的
+固定效应不重复计数。未嵌套的固定效应按其水平数计入 `K`。网格聚类和城市聚类分别
+计算自己的 `G` 与 `K`。系数检验使用自由度 `G-1` 的 t 分布。clean leads 的联合检验为：
+
+```text
+F = (β_pre' V_pre^(-1) β_pre) / q
+```
+
+其中 `q` 是参与联合检验的 clean lead 数，参考分布为 `F(q, G-1)`。聚类数少于 2、
+无可识别 clean lead 或协方差子矩阵不可识别时，检验结果写为缺失并记录支持不足。
+
 ### 当前实现和输出
 
 Python 主事件研究入口是 `scripts/causal_python/run_all_method_event_study.py`，匹配部分调用 `urban_intervention.causal.event_study`：

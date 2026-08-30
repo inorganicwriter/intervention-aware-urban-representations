@@ -16,19 +16,32 @@ def test_runtime_is_deterministic_float64_on_cpu() -> None:
     assert runtime.metadata()["allow_tf32"] is False
 
 
+def test_runtime_copies_readonly_numpy_arrays() -> None:
+    source = np.array([1.0, 2.0], dtype=np.float64)
+    source.flags.writeable = False
+    runtime = TorchRuntime(RuntimeConfig(device="cpu"))
+
+    tensor = runtime.tensor(source)
+    tensor[0] = 9.0
+
+    assert source[0] == 1.0
+    assert tensor[0].item() == 9.0
+
+
 def test_matching_contract_rejects_nonfinite_features() -> None:
     with pytest.raises(ValueError, match="finite"):
         MatchingInput(target=np.array([1.0, np.nan]), donors=np.ones((3, 2)))
 
 
-def test_panel_contract_prohibits_treated_missing_cells() -> None:
+def test_panel_contract_allows_unobserved_treated_cells() -> None:
     y = np.arange(12, dtype=float).reshape(4, 3)
     observed = np.ones_like(y, dtype=bool)
     treated = np.zeros_like(y, dtype=bool)
     observed[3, 0] = False
     treated[3, 0] = True
-    with pytest.raises(ValueError, match="treated cells"):
-        PanelData(y=y, observed=observed, treated=treated)
+    panel = PanelData(y=y, observed=observed, treated=treated)
+    assert not panel.observed[3, 0]
+    assert panel.treated[3, 0]
 
 
 def test_panel_contract_finds_absorbing_treatment() -> None:

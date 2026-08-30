@@ -5,7 +5,7 @@ suppressPackageStartupMessages({
 
 causal_label_spec <- function() {
   list(
-    schema = "causal_response_labels_v1",
+    schema = "causal_response_labels",
     specification_id = "main_a6_r1km",
     monthly_horizons = c(1L, 3L, 6L, 12L, 18L, 24L),
     annual_horizons = 1:3,

@@ -46,6 +46,8 @@ env/
 # Temporary
 *.tmp
 *.log
+MIT_summer_code_*.tar.gz
+MIT_summer_code_*.tar.gz.sha256
 .tmp/
 tmp/
 .r-lib/

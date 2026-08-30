@@ -332,6 +332,15 @@ fit <- gsynth(Y ~ D, CV = FALSE, r = selected_r, se = TRUE, nboots = 200, ...)
 
 掩盖目标网格最后 12 个月（月度）或 1 年（年度）的预处理数据，用 gsynth 拟合剩余预处理期。从 donor 中抽样 20 个做相同的伪处理。目标网格的 masked RMSPE 需要处于 donor 伪处理第 95 百分位以内。
 
+因子数在未掩盖的训练段内重新交叉验证。被掩盖的时期不参与因子数选择、固定效应拟合
+或载荷估计。目标网格和 20 个 donor placebo 使用同一个训练段、控制池和已选择因子数。
+输出记录 donor 身份、掩盖期数、选择的因子数、各单元 RMSPE、donor 第 95 百分位和
+目标是否通过。
+
+设掩盖前可用于训练的时期数为 `T_train`。masked rank 候选满足
+`r <= floor((T_train - 1) / 2)`。年度最低合法边界包含 6 个原始处理前期，其中 1 年
+用于 masked holdout，剩余 5 年进入 rank 选择和载荷估计。
+
 ### 6.7 标签生成
 
 ```text
@@ -416,6 +425,12 @@ MSPE 交叉验证；`lambda.cv`、CV MSPE、处理前观测期数和处理前 RM
 manifest。处理单元的处理后结果在 CV 和拟合前统一替换为仅由处理前数据计算的均值，
 保持响应信息隔离。`min.T0=1` 的标签标记为
 `mc_*_minimal_pre_support`，但仍保留为可用响应标签。
+
+20 个候选值包含 19 个递减的正 lambda 和 `lambda=0` 端点。Python 生产与资格验证
+读取同一份持久化 folds 和 lambda grid。R 参考选择阶段使用并行 CV 路径评估完整网格。
+jackknife 删除处理单元自身的无效遗漏列。每个时期以该时期有限的 donor omission refit
+数量构造伪值和标准误。处理后原始结果缺失的时期保持不可用，其余可用时期独立执行
+最少有效 refit 门禁。
 
 ## 9. 已知局限
 

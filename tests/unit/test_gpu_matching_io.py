@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from urban_intervention.causal.gpu.contracts import EstimatorProvenance, MatchingResult
 from urban_intervention.causal.gpu.matching_io import (
@@ -25,7 +26,7 @@ def test_matching_artifact_adapter_and_parity(tmp_path) -> None:
     frame.to_parquet(tmp_path / "matching_input.parquet", index=False)
     pd.DataFrame(
         {
-            "schema": ["causal_gpu_matching_reference_v2_exact_stable_ties"],
+            "schema": ["causal_gpu_matching_reference_exact_stable_ties"],
             "training_features": ["x__lag2"],
             "static_features": ["s"],
             "holdout_features": ["x__lag1"],
@@ -87,7 +88,7 @@ def test_matching_artifacts_allow_input_only_mode(tmp_path) -> None:
     ).to_parquet(tmp_path / "matching_input.parquet", index=False)
     pd.DataFrame(
         {
-            "schema": ["causal_gpu_matching_input_v2_exact_stable_ties"],
+            "schema": ["causal_gpu_matching_input_exact_stable_ties"],
             "training_features": ["x"],
             "static_features": [""],
             "holdout_features": ["h"],
@@ -103,6 +104,29 @@ def test_matching_artifacts_allow_input_only_mode(tmp_path) -> None:
 
     assert artifacts.reference_candidates is None
     assert artifacts.reference_selection is None
+
+
+def test_matching_artifacts_reject_unknown_future_schema(tmp_path) -> None:
+    pd.DataFrame(
+        {
+            "role": ["donor", "donor", "donor", "treated"],
+            "unit_key": ["d0", "d1", "d2", "target"],
+            "x": [0.0, 1.0, 2.0, 1.1],
+        }
+    ).to_parquet(tmp_path / "matching_input.parquet", index=False)
+    pd.DataFrame(
+        {
+            "schema": ["causal_gpu_matching_v999_incompatible"],
+            "training_features": ["x"],
+            "static_features": [""],
+            "holdout_features": [""],
+            "distance_tolerance": [0],
+            "tie_policy": ["distance_then_original_donor_index"],
+        }
+    ).to_csv(tmp_path / "metadata.csv", index=False)
+
+    with pytest.raises(ValueError, match="unsupported matching GPU contract schema"):
+        load_matching_artifacts(tmp_path)
 
 
 def test_matching_final_label_parity_compares_complete_paths() -> None:

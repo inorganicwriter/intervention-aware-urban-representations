@@ -19,7 +19,10 @@ from urban_intervention.causal.gpu.contracts import (  # noqa: E402
     SHADOW_SCHEMA,
 )
 from urban_intervention.causal.gpu.io import cv_contract_artifact_paths  # noqa: E402
-from urban_intervention.causal.gpu.provenance import fingerprints_match  # noqa: E402
+from urban_intervention.causal.gpu.provenance import (  # noqa: E402
+    estimator_code_fingerprint,
+    fingerprints_match,
+)
 from urban_intervention.causal.gpu.runtime import RuntimeConfig, TorchRuntime  # noqa: E402
 from urban_intervention.causal.gpu.scheduler import (  # noqa: E402
     GpuTask,
@@ -59,6 +62,10 @@ def _already_passed(output: Path, args: argparse.Namespace) -> bool:
         ):
             return False
         estimator = payload.get("estimator")
+        if estimator not in {"matching", "gsc", "mc"} or payload.get(
+            "code_fingerprint"
+        ) != estimator_code_fingerprint(estimator):
+            return False
         if estimator in {"gsc", "mc"}:
             config = payload.get("estimator_config", {})
             expected_contract = getattr(args, "contract_backend", "any")
@@ -183,6 +190,7 @@ def discover_tasks(args: argparse.Namespace) -> list[GpuTask]:
                         "contract_backend": args.contract_backend,
                         "gsc_bootstrap_mode": args.gsc_bootstrap_mode,
                         "gsc_n_bootstrap": args.gsc_n_bootstrap,
+                        "seed": 20260723 if estimator == "gsc" else 20260725,
                         "mc_inference": args.mc_inference,
                         "inference_batch_size": args.inference_batch_size,
                         "inference_relative_rmse_tolerance": (

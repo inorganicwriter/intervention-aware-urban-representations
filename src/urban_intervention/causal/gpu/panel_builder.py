@@ -499,7 +499,7 @@ def build_estimation_panel_from_frames(
 
     panel = panel.sort_values([unit_column, "time_id"], kind="stable").reset_index(drop=True)
     metadata: dict[str, object] = {
-        "schema": "causal_python_panel_v1",
+        "schema": "causal_python_panel",
         "estimator": request.estimator,
         "treatment_order": int(target["treatment_order"]),
         "city_key": str(target["city_key"]),

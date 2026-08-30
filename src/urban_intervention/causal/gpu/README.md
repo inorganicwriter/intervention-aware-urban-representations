@@ -110,6 +110,13 @@ endpoint. Production requires a finite non-negative selected lambda and records
 `mc_regularized` explicitly; a valid zero endpoint is not treated as a failed
 fit.
 
+The Python-native CV contract is the formal tuning contract. Qualification and
+production both load its persisted folds, grid and panel hash. R labels remain
+the reference for point-path and inference parity. MC jackknife pseudo-values
+use the finite donor-omission refits at each period. A missing treated
+post-period remains unavailable and does not enter the minimum-refit gate for
+the other publishable periods.
+
 Housing transaction support is configurable without changing the default:
 
 ```bash

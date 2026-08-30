@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from urban_intervention.causal.gpu.provenance import all_estimator_code_fingerprints
 from urban_intervention.causal.response_artifact import (
     ArtifactInputs,
     build_response_frame,
@@ -114,7 +115,7 @@ def _fixture(tmp_path: Path) -> ArtifactInputs:
         (directory / "manifest.json").write_text(
             json.dumps(
                 {
-                    "schema": "causal_response_labels_v1",
+                    "schema": "causal_response_labels",
                     "status": "matched_labelled" if order == 1 else "gsc_labelled",
                     "treatment_order": order,
                     "outcome_family": "population",
@@ -130,6 +131,21 @@ def _fixture(tmp_path: Path) -> ArtifactInputs:
             encoding="utf-8",
         )
     return ArtifactInputs(treatment_path, family_path, control_path, task_root)
+
+
+def _mark_python_tasks(inputs: ArtifactInputs, details: dict[str, object]) -> None:
+    for order in (1, 2):
+        directory = inputs.task_root / f"{order:05d}" / "population"
+        label_path = directory / "labels.parquet"
+        labels = pd.read_parquet(label_path)
+        labels["estimator_backend"] = "python_gpu"
+        labels["implementation_version"] = "python-causal"
+        labels.to_parquet(label_path, index=False)
+        manifest_path = directory / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["details"] = {"run_id": f"run-{order}", **details}
+        manifest["labels_sha256"] = sha256_file(label_path)
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
 
 def test_response_artifact_preserves_expected_failures_and_quality(tmp_path: Path) -> None:
@@ -252,7 +268,7 @@ def test_response_artifact_release_is_immutable_and_hashed(tmp_path: Path) -> No
         project_root=tmp_path,
     )
     manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["schema"] == "urban_response_artifact_release_v1"
+    assert manifest["schema"] == "urban_response_artifact_release"
     assert manifest["strict_production"] is False
     assert manifest["artifact"]["rows"] == 54
     with pytest.raises(FileExistsError):
@@ -279,8 +295,8 @@ def test_control_provenance_rejects_legacy_record(tmp_path: Path) -> None:
             {
                 "treatment_order": 1,
                 "status": "matched",
-                "schema": "grid_control_design_v1",
-                "implementation_version": "r-reference-grid-v1",
+                "schema": "grid_control_design_legacy",
+                "implementation_version": "r-reference-grid-legacy",
                 "backend": "r_matching",
                 "viirs_cache_contract": "complete_44_city_2012_2024_monthly_v1",
                 "selected_method": "Matching::Match_M1",
@@ -302,8 +318,9 @@ def test_control_provenance_accepts_current_gpu_record(tmp_path: Path) -> None:
             {
                 "treatment_order": 1,
                 "status": "matched",
-                "schema": "grid_control_design_v3_exact_stable_ties",
-                "implementation_version": "python-causal-v3",
+                "schema": "grid_control_design_exact_stable_ties",
+                "implementation_version": "python-causal",
+                "code_fingerprint": all_estimator_code_fingerprints()["matching"],
                 "backend": "python_pytorch",
                 "viirs_cache_contract": "complete_44_city_2012_2024_monthly_v1",
                 "selected_method": "python_gpu_M5_static_refine",
@@ -326,18 +343,35 @@ def test_strict_task_collection_rejects_unqualified_python_manifest(
     inputs = _fixture(tmp_path)
     treatments = pd.read_parquet(inputs.treatments)
     family_queue = pd.read_csv(inputs.family_queue)
-    for order in (1, 2):
-        directory = inputs.task_root / f"{order:05d}" / "population"
-        label_path = directory / "labels.parquet"
-        labels = pd.read_parquet(label_path)
-        labels["estimator_backend"] = "python_gpu"
-        labels["implementation_version"] = "python-causal-v3"
-        labels.to_parquet(label_path, index=False)
-        manifest_path = directory / "manifest.json"
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        manifest["details"] = {"run_id": f"run-{order}"}
-        manifest["labels_sha256"] = sha256_file(label_path)
-        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    _mark_python_tasks(inputs, {})
+    with pytest.raises(ValueError, match="qualification proof"):
+        collect_task_products(
+            family_queue,
+            treatments,
+            inputs.task_root,
+            "main_a6_r1km",
+            strict_production=True,
+            workers=1,
+        )
+
+
+def test_strict_task_collection_rejects_stale_qualification_code_map(
+    tmp_path: Path,
+) -> None:
+    inputs = _fixture(tmp_path)
+    treatments = pd.read_parquet(inputs.treatments)
+    family_queue = pd.read_csv(inputs.family_queue)
+    stale = all_estimator_code_fingerprints()
+    stale["gsc"] = "sha256:" + "0" * 64
+    _mark_python_tasks(
+        inputs,
+        {
+            "formal_qualification_eligible": True,
+            "formal_qualification_receipt_sha256": "1" * 64,
+            "formal_qualification_code_fingerprints": stale,
+        },
+    )
+
     with pytest.raises(ValueError, match="qualification proof"):
         collect_task_products(
             family_queue,

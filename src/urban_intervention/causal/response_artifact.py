@@ -1,4 +1,4 @@
-"""Publish per-task causal labels as one versioned training-label artifact."""
+"""Publish per-task causal labels as one content-addressed training artifact."""
 
 from __future__ import annotations
 
@@ -24,6 +24,14 @@ from urban_intervention.causal.gpu.contracts import (
     CONTROL_DESIGN_SCHEMA,
     CONTROL_DESIGN_VIIRS_CACHE_CONTRACT,
     FORMAL_IMPLEMENTATION_VERSION,
+)
+from urban_intervention.causal.gpu.provenance import (
+    all_estimator_code_fingerprints,
+    estimator_code_fingerprint,
+)
+from urban_intervention.causal.schemas import (
+    CAUSAL_RESPONSE_LABELS_SCHEMA,
+    accepts_legacy_version,
 )
 
 OUTCOME_HORIZONS: dict[str, dict[str, tuple[int, ...]]] = {
@@ -356,6 +364,12 @@ def validate_control_design_provenance(
                 f"Control record {order} has unsupported backend/version "
                 f"({actual_backend}, {actual_version})"
             )
+        if matching_backend == "python_gpu" and str(
+            record.get("code_fingerprint", "")
+        ) != estimator_code_fingerprint("matching"):
+            raise ValueError(
+                f"Control record {order} uses stale matching source code"
+            )
         if expected_backend is not None and matching_backend != expected_backend:
             raise ValueError(
                 f"Control record {order} backend {matching_backend} disagrees with "
@@ -518,7 +532,9 @@ def collect_task_products(
         tasks
     ):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if manifest.get("schema") != "causal_response_labels_v1":
+        if not accepts_legacy_version(
+            manifest.get("schema"), CAUSAL_RESPONSE_LABELS_SCHEMA
+        ):
             raise ValueError(f"Unknown task manifest schema: {manifest_path}")
         if manifest.get("status") != queue_status:
             raise ValueError(f"Task manifest status disagrees with queue: {manifest_path}")
@@ -575,6 +591,8 @@ def collect_task_products(
                 not isinstance(details, dict)
                 or details.get("formal_qualification_eligible") is not True
                 or len(str(details.get("formal_qualification_receipt_sha256", ""))) != 64
+                or details.get("formal_qualification_code_fingerprints")
+                != all_estimator_code_fingerprints()
             ):
                 raise ValueError(
                     f"Production Python task lacks formal qualification proof: {manifest_path}"
@@ -942,7 +960,7 @@ def publish_response_artifact(
             for name, path in source_paths.items()
         }
         manifest = {
-            "schema": "urban_response_artifact_release_v1",
+            "schema": "urban_response_artifact_release",
             "release_id": release_id,
             "run_id": run_id,
             "created_utc": datetime.now(UTC).isoformat(),

@@ -30,6 +30,7 @@ from .panel_builder import (
     read_monthly_housing,
     read_monthly_viirs,
 )
+from .provenance import estimator_code_fingerprint
 from .runtime import RuntimeConfig, TorchRuntime
 
 Scope = Literal["same_city", "all_city_standardized"]
@@ -360,6 +361,7 @@ def _base_record(target: pd.Series, families: tuple[str, ...], status: str, reas
     return {
         "schema": CONTROL_DESIGN_SCHEMA,
         "implementation_version": FORMAL_IMPLEMENTATION_VERSION,
+        "code_fingerprint": estimator_code_fingerprint("matching"),
         "backend": "python_pytorch",
         "viirs_cache_contract": VIIRS_CACHE_CONTRACT,
         "treatment_order": int(target["treatment_order"]),

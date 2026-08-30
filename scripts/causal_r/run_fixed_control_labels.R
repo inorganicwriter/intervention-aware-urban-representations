@@ -46,7 +46,7 @@ fwrite(labels[, .(
   outcome, event_time, label_available, treated_baseline, control_baseline
 )], file.path(output, "label_availability.csv"), bom = TRUE)
 write_run_manifest(output, list(
-  schema = "fixed_control_labels_v1",
+  schema = "fixed_control_labels",
   run_id = causal_run_id,
   estimator = "frozen_matched_change",
   treatment_order = treatment_order,

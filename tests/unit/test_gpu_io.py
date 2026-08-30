@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from urban_intervention.causal.gpu.io import (
     compare_counterfactuals,
@@ -19,7 +20,7 @@ def _write_cv_manifest(path, estimator: str) -> None:
         else {"cv_folds": 20, "cv_nobs": 1, "cv_buffer": 0, "cv_seed": 20260725}
     )
     fields = {
-        "schema": "causal_gpu_input_v1",
+        "schema": "causal_gpu_input_reference_contract",
         "run_mode": "gpu_export",
         "production_eligible": "FALSE",
         "fect_version": "2.4.5",
@@ -53,6 +54,24 @@ def test_load_estimation_panel_preserves_nonzero_target_column(tmp_path) -> None
     assert loaded.panel.single_treated_unit() == 1
     assert loaded.panel.treatment_start() == 2
     assert loaded.periods == (2010, 2011, 2012, 2013)
+
+
+def test_load_mc_panel_preserves_missing_treated_post_observation(tmp_path) -> None:
+    rows = []
+    for unit in (10, 20, 30):
+        for period in range(4):
+            treated = unit == 20 and period >= 2
+            rows.append(
+                {
+                    "mc_unit_id": unit,
+                    "time_id": period + 1,
+                    "model_value": np.nan if treated and period == 2 else float(unit + period),
+                    "D": int(treated),
+                }
+            )
+    loaded = load_estimation_panel(pd.DataFrame(rows), "mc")
+    assert not loaded.panel.observed[2, 1]
+    assert np.isnan(loaded.panel.y[2, 1])
 
 
 def test_counterfactual_comparison_applies_absolute_and_relative_gate(tmp_path) -> None:
@@ -128,6 +147,19 @@ def test_load_gsc_cv_folds_aligns_exported_numeric_ids(tmp_path) -> None:
     assert len(folds) == 5
     assert folds[0].removed[0].tolist() == [True, True]
     assert folds[1].scored[1].tolist() == [True, True]
+
+
+def test_gpu_contract_rejects_unknown_future_schema(tmp_path) -> None:
+    _write_cv_manifest(tmp_path, "gsc")
+    manifest_path = tmp_path / "manifest.csv"
+    manifest = pd.read_csv(manifest_path, dtype=str)
+    manifest.loc[manifest["field"].eq("schema"), "value"] = (
+        "causal_gpu_input_v999_incompatible"
+    )
+    manifest.to_csv(manifest_path, index=False)
+
+    with pytest.raises(ValueError, match="unsupported causal GPU input schema"):
+        load_gsc_cv_folds(tmp_path / "gsc_cv_folds.parquet", None)  # type: ignore[arg-type]
 
 
 def test_load_mc_cv_contract_aligns_folds_and_lambda_grid(tmp_path) -> None:

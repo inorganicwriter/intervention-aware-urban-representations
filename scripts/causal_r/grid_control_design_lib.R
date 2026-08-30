@@ -11,7 +11,7 @@ source(file.path("scripts", "causal_r", "complete_estimators_lib.R"))
 
 grid_control_spec <- function() {
   list(
-    schema = "grid_control_design_v3_exact_stable_ties",
+    schema = "grid_control_design_exact_stable_ties",
     minimum_families = 1L,
     anticipation_months = 6L,
     monthly_blocks = 3L,
@@ -531,7 +531,7 @@ control_design_record <- function(result) {
   target <- result$target
   base <- data.table(
     schema = grid_control_spec()$schema,
-    implementation_version = "r-reference-grid-v3",
+    implementation_version = "r-reference-grid",
     backend = "r_matching",
     viirs_cache_contract = .viirs_cache_contract,
     treatment_order = target$treatment_order,

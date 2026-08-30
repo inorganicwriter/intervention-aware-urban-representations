@@ -69,7 +69,7 @@ def main() -> None:
     summary = pd.DataFrame(city_rows).sort_values("city_key")
     summary.to_csv(GRID_UNIVERSE_BY_CITY, index=False, encoding="utf-8-sig")
     metadata = {
-        "schema": "counterfactual_grid_universe_v1",
+        "schema": "counterfactual_grid_universe",
         "cities": len(summary),
         "all_grids": int(summary["all_grids"].sum()),
         "experimental_grids": int(summary["experimental_grids"].sum()),

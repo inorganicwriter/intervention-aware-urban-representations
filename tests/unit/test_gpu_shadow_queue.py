@@ -10,7 +10,10 @@ from urban_intervention.causal.gpu.contracts import (
     GPU_IMPLEMENTATION_VERSION,
     SHADOW_SCHEMA,
 )
-from urban_intervention.causal.gpu.provenance import fingerprint_files
+from urban_intervention.causal.gpu.provenance import (
+    estimator_code_fingerprint,
+    fingerprint_files,
+)
 from urban_intervention.causal.gpu.scheduler import TaskResult
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -42,6 +45,7 @@ def test_completed_manifest_must_match_code_config_and_source_age(tmp_path) -> N
     manifest = {
         "schema": SHADOW_SCHEMA,
         "implementation_version": GPU_IMPLEMENTATION_VERSION,
+        "code_fingerprint": estimator_code_fingerprint("gsc"),
         "formal_eligible": False,
         "estimator": "gsc",
         "panel": str(panel),
@@ -72,6 +76,14 @@ def test_completed_manifest_must_match_code_config_and_source_age(tmp_path) -> N
     assert not MODULE._already_passed(output, changed)
 
     panel.write_bytes(b"other")
+    assert not MODULE._already_passed(output, _args())
+
+    panel.write_bytes(b"panel")
+    manifest["source_fingerprints"] = fingerprint_files(
+        [panel, tmp_path / "gsc_cv_folds.parquet", tmp_path / "manifest.csv"]
+    )
+    manifest["code_fingerprint"] = "sha256:" + "0" * 64
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     assert not MODULE._already_passed(output, _args())
 
 

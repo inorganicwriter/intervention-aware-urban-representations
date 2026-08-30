@@ -8,7 +8,6 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 TASK_ROOT = ROOT / "outputs" / "causal_labels" / "tasks"
 QUEUE_ROOT = ROOT / "data" / "active" / "causal"

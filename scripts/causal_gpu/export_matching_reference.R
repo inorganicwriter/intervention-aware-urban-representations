@@ -50,7 +50,7 @@ if (mode == "gpu_input") {
   dir.create(output, recursive = TRUE, showWarnings = FALSE)
   write_parquet(prepared, file.path(output, "matching_input.parquet"), compression = "zstd")
   fwrite(data.table(
-    schema = "causal_gpu_matching_input_v2_exact_stable_ties",
+    schema = "causal_gpu_matching_input_exact_stable_ties",
     treatment_order = order,
     scope = scope,
     active_families = paste(active, collapse = "+"),
@@ -115,7 +115,7 @@ write_parquet(
   compression = "zstd"
 )
 fwrite(data.table(
-  schema = "causal_gpu_matching_reference_v3_final_labels",
+  schema = "causal_gpu_matching_reference_final_labels",
   treatment_order = order,
   scope = scope,
   active_families = paste(active, collapse = "+"),

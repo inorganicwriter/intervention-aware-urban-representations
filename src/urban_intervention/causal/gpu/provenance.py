@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import platform
 import sys
 from collections.abc import Iterable
+from functools import lru_cache
 from importlib import metadata
 from pathlib import Path
 from typing import Any
@@ -41,6 +43,53 @@ def estimator_source_files(estimator: str) -> tuple[Path, ...]:
     if estimator not in specific:
         raise ValueError(f"unknown causal estimator source set: {estimator}")
     return tuple(sorted({*common, *specific[estimator]}, key=str))
+
+
+def source_code_fingerprint(
+    paths: Iterable[str | Path], *, root: str | Path
+) -> str:
+    """Hash normalized source bytes and relative paths deterministically.
+
+    Line endings are normalized so the same archive has one identity on
+    Windows and Linux. Absolute paths and timestamps never enter the digest.
+    """
+    resolved_root = Path(root).resolve()
+    resolved_paths = sorted({Path(path).resolve() for path in paths}, key=str)
+    if not resolved_paths:
+        raise ValueError("cannot fingerprint an empty source set")
+    digest = hashlib.sha256(b"urban-intervention-estimator-source\0")
+    for path in resolved_paths:
+        if not path.is_file():
+            raise FileNotFoundError(f"cannot fingerprint missing source: {path}")
+        try:
+            relative = path.relative_to(resolved_root).as_posix()
+        except ValueError as exc:
+            raise ValueError(f"source is outside fingerprint root: {path}") from exc
+        content = path.read_bytes().replace(b"\r\n", b"\n")
+        relative_bytes = relative.encode("utf-8")
+        digest.update(len(relative_bytes).to_bytes(8, "big"))
+        digest.update(relative_bytes)
+        digest.update(len(content).to_bytes(8, "big"))
+        digest.update(content)
+    return f"sha256:{digest.hexdigest()}"
+
+
+@lru_cache(maxsize=3)
+def estimator_code_fingerprint(estimator: str) -> str:
+    """Return the immutable numerical source identity for one estimator."""
+    package = Path(__file__).resolve().parent
+    return source_code_fingerprint(
+        estimator_source_files(estimator),
+        root=package.parent,
+    )
+
+
+def all_estimator_code_fingerprints() -> dict[str, str]:
+    """Return stable-name to source-fingerprint bindings for qualification."""
+    return {
+        estimator: estimator_code_fingerprint(estimator)
+        for estimator in ("matching", "gsc", "mc")
+    }
 
 
 def file_sha256(path: str | Path, *, block_size: int = 1024 * 1024) -> str:

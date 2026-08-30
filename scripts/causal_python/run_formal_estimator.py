@@ -17,13 +17,20 @@ import pandas as pd
 CODE_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(CODE_ROOT / "src"))
 
+from urban_intervention.causal.gpu.contract_builder import build_python_contract  # noqa: E402
 from urban_intervention.causal.gpu.contracts import FORMAL_IMPLEMENTATION_VERSION  # noqa: E402
 from urban_intervention.causal.gpu.formal_runner import (  # noqa: E402
     FormalRunRequest,
     run_formal_panel,
 )
 from urban_intervention.causal.gpu.gsc import GSCConfig, fit_gsc  # noqa: E402
-from urban_intervention.causal.gpu.io import load_estimation_panel  # noqa: E402
+from urban_intervention.causal.gpu.io import (  # noqa: E402
+    cv_contract_artifact_paths,
+    load_cv_contract_manifest,
+    load_estimation_panel,
+    load_gsc_cv_folds,
+    load_mc_cv_contract,
+)
 from urban_intervention.causal.gpu.matrix_completion import (  # noqa: E402
     MatrixCompletionConfig,
     fit_matrix_completion,
@@ -32,6 +39,10 @@ from urban_intervention.causal.gpu.panel_builder import (  # noqa: E402
     OUTCOMES,
     PanelBuildRequest,
     build_estimation_panel,
+)
+from urban_intervention.causal.gpu.provenance import (  # noqa: E402
+    estimator_code_fingerprint,
+    file_sha256,
 )
 from urban_intervention.causal.gpu.runtime import RuntimeConfig, TorchRuntime  # noqa: E402
 from urban_intervention.causal.gpu.tuning_cache import (  # noqa: E402
@@ -118,19 +129,48 @@ def family_status_directory(
 
 
 def _resolve_tuning(
-    panel: pd.DataFrame,
+    panel_path: Path,
     estimator: str,
     *,
     device: str,
     run_mode: str,
 ) -> tuple[GSCConfig | None, MatrixCompletionConfig | None, dict[str, object]]:
-    """Load or compute an estimator tuning choice under an exact panel signature."""
+    """Tune from the same persisted CV contract used by formal qualification."""
+    panel_path = panel_path.resolve()
+    panel = pd.read_parquet(panel_path)
+    runtime = TorchRuntime(
+        RuntimeConfig(
+            device=device,
+            seed=20260723 if estimator == "gsc" else 20260725,
+        )
+    )
+    build_python_contract(
+        panel_path,
+        estimator,  # type: ignore[arg-type]
+        runtime=runtime,
+        force=True,
+    )
+    contract_manifest = load_cv_contract_manifest(panel_path.parent, estimator)
+    contract_paths = cv_contract_artifact_paths(panel_path.parent, estimator)
+    contract_hashes = {path.name: file_sha256(path) for path in contract_paths}
+    loaded = load_estimation_panel(panel_path, estimator)
     if estimator == "gsc":
         selection_config = GSCConfig(bootstrap_mode="none", n_bootstrap=0, seed=20260723)
-        tuning_contract = asdict(selection_config) | {"fixed_rank": None}
+        tuning_contract = asdict(selection_config) | {
+            "fixed_rank": None,
+            "cv_contract_backend": contract_manifest["contract_backend"],
+            "cv_contract_artifacts": contract_hashes,
+        }
+        cv_folds = load_gsc_cv_folds(contract_paths[0], loaded)
+        lambda_grid = None
     else:
         selection_config = MatrixCompletionConfig(inference="none", seed=20260725)
-        tuning_contract = asdict(selection_config) | {"fixed_lambda": None}
+        tuning_contract = asdict(selection_config) | {
+            "fixed_lambda": None,
+            "cv_contract_backend": contract_manifest["contract_backend"],
+            "cv_contract_artifacts": contract_hashes,
+        }
+        cv_folds, lambda_grid = load_mc_cv_contract(panel_path.parent, loaded)
     signature = panel_tuning_signature(
         panel, estimator, tuning_contract=tuning_contract
     )
@@ -138,20 +178,22 @@ def _resolve_tuning(
     cached = load_tuning_cache(cache_path, estimator=estimator, signature=signature)
     cache_hit = cached is not None
     if cached is None:
-        runtime = TorchRuntime(
-            RuntimeConfig(
-                device=device,
-                seed=20260723 if estimator == "gsc" else 20260725,
-            )
-        )
-        loaded = load_estimation_panel(panel, estimator)
         if estimator == "gsc":
-            selected = fit_gsc(loaded.panel, config=selection_config, runtime=runtime)
+            selected = fit_gsc(
+                loaded.panel,
+                config=selection_config,
+                cv_folds=cv_folds,
+                runtime=runtime,
+            )
             selected_tuning: float | int = int(selected.selected_rank)
             cv_mean = selected.cv_mean_mspe
         else:
             selected = fit_matrix_completion(
-                loaded.panel, config=selection_config, runtime=runtime
+                loaded.panel,
+                config=selection_config,
+                cv_folds=cv_folds,
+                lambda_grid=lambda_grid,
+                runtime=runtime,
             )
             selected_tuning = float(selected.selected_lambda)
             cv_mean = selected.cv_mean_mspe
@@ -160,6 +202,7 @@ def _resolve_tuning(
         cached = {
             "schema": TUNING_CACHE_SCHEMA,
             "implementation_version": FORMAL_IMPLEMENTATION_VERSION,
+            "code_fingerprint": estimator_code_fingerprint(estimator),
             "estimator": estimator,
             "panel_signature": signature,
             "selected_tuning": selected_tuning,
@@ -197,7 +240,11 @@ def _resolve_tuning(
         "tuning_source": "content_addressed_cache" if cache_hit else "fresh_gpu_cv_then_cached",
         "tuning_cache_hit": cache_hit,
         "tuning_panel_signature": signature,
+        "code_fingerprint": estimator_code_fingerprint(estimator),
         "tuning_cache_path": str(cache_path),
+        "tuning_contract_backend": contract_manifest["contract_backend"],
+        "tuning_contract_manifest": str(panel_path.parent / "gpu_contract_manifest.csv"),
+        "tuning_contract_artifacts": contract_hashes,
     }
     return gsc_config, mc_config, metadata
 
@@ -263,16 +310,8 @@ def main() -> int:
                 transaction_count_threshold=args.transaction_count_threshold,
             )
             built = build_estimation_panel(build_request)
-            gsc_config, mc_config, tuning_metadata = _resolve_tuning(
-                built.panel,
-                args.estimator,
-                device=args.device,
-                run_mode=args.run_mode,
-            )
-            metadata = built.metadata | tuning_metadata
-            last_metadata = metadata
             output = output_directory(
-                metadata,
+                built.metadata,
                 args.estimator,
                 args.run_mode,
                 args.transaction_count_threshold,
@@ -280,6 +319,14 @@ def main() -> int:
             output.mkdir(parents=True, exist_ok=True)
             panel_path = output / "estimation_panel.parquet"
             built.panel.to_parquet(panel_path, index=False, compression="zstd")
+            gsc_config, mc_config, tuning_metadata = _resolve_tuning(
+                panel_path,
+                args.estimator,
+                device=args.device,
+                run_mode=args.run_mode,
+            )
+            metadata = built.metadata | tuning_metadata
+            last_metadata = metadata
             (output / "panel_metadata.json").write_text(
                 json.dumps(metadata, ensure_ascii=False, indent=2, default=str),
                 encoding="utf-8",
@@ -307,7 +354,7 @@ def main() -> int:
                 ),
             )
             result = run_formal_panel(
-                built.panel,
+                panel_path,
                 run_request,
                 panel_metadata=metadata,
                 gsc_config=gsc_config,

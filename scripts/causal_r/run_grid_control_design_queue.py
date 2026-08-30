@@ -19,6 +19,9 @@ from urban_intervention.causal.gpu.contracts import (  # noqa: E402
     CONTROL_DESIGN_PROVENANCE,
     CONTROL_DESIGN_SCHEMA,
 )
+from urban_intervention.causal.gpu.provenance import (  # noqa: E402
+    estimator_code_fingerprint,
+)
 from urban_intervention.data.paths import (  # noqa: E402
     CONTROL_DESIGN_QUEUE as QUEUE,
 )
@@ -232,6 +235,12 @@ def validate_durable_record(
         raise ValueError(
             f"Durable control record {expected_order} backend/version {actual} "
             f"does not match requested {expected}"
+        )
+    if expected_backend == "python_gpu" and str(
+        record.get("code_fingerprint", "")
+    ) != estimator_code_fingerprint("matching"):
+        raise ValueError(
+            f"Durable control record {expected_order} uses stale matching source code"
         )
 
 

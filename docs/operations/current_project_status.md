@@ -1,6 +1,6 @@
 # Current project state
 
-Updated: 2026-08-27
+Updated: 2026-08-30
 
 This page contains the state required to resume production. Research definitions
 are maintained in `docs/research/`; dataset locations and source identities are
@@ -116,6 +116,15 @@ release validator will reject records that fail these checks.
 GSC production inference uses 200 parametric bootstrap replications. MC uses
 fixed-lambda unit jackknife inference; its `nboots=200` field is compatibility
 metadata.
+
+## GPU estimator qualification status
+
+The qualification workflow compares three Matching, three GSC and three MC
+tasks with their R references. Production requires all point-estimate,
+inference and quality gates to pass and requires a qualification receipt from
+the same source tree and numerical environment. Qualification does not run the
+5,048-row production queue. Production begins after qualification and the
+server dry run both succeed.
 
 ## Representation output contract
 

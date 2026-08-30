@@ -45,7 +45,7 @@ if (!nzchar(specification_fingerprint)) {
 }
 
 spec <- complete_estimator_spec()
-mc_lambda_cache_schema <- "mc_lambda_cache_v2_explicit_rolling_seed"
+mc_lambda_cache_schema <- "mc_lambda_cache_full_grid_cv"
 
 build_mc_gpu_cv_contract <- function(estimation_data, seed) {
   time_ids <- sort(unique(estimation_data$time_id))
@@ -355,7 +355,7 @@ run_one_outcome <- function(outcome) {
     fwrite(cv_contract$lambdas, file.path(output, "mc_lambda_grid.csv"), bom = TRUE)
     fwrite(units, file.path(output, "unit_map.csv"), bom = TRUE)
     write_run_manifest(output, list(
-      schema = "causal_gpu_input_v1", method = "Matrix completion GPU input export",
+      schema = "causal_gpu_input_reference_contract", method = "Matrix completion GPU input export",
       run_id = causal_run_id, city_key = city_key, cohort = cohort,
       frequency = frequency, treatment_order = treatment_order,
       outcome_family = outcome_family, outcome = outcome,
@@ -416,7 +416,7 @@ run_one_outcome <- function(outcome) {
       cv.method = spec$mc$cv_method, cv.nobs = spec$mc$cv_nobs,
       cv.donut = spec$mc$cv_donut, cv.buffer = spec$mc$cv_buffer,
       se = FALSE,
-      parallel = spec$mc$parallel, cores = spec$mc$cores,
+      parallel = "cv", cores = max(2L, spec$mc$cores),
       min.T0 = spec$mc$min.T0, normalize = FALSE,
       tol = spec$mc$tol, max.iteration = spec$mc$max.iteration,
       seed = 20260725

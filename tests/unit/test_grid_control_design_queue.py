@@ -51,7 +51,7 @@ def test_batch_recovery_reads_each_durable_control_record(tmp_path: Path, monkey
             "failure_reason": [pd.NA],
                 "viirs_cache_contract": [MODULE.VIIRS_CACHE_CONTRACT],
                 "schema": [MODULE.CONTROL_DESIGN_SCHEMA],
-                "implementation_version": ["r-reference-grid-v3"],
+                "implementation_version": ["r-reference-grid"],
                 "backend": ["r_matching"],
         }
     ).to_csv(directory / "control_record.csv", index=False)
@@ -93,7 +93,7 @@ def test_stale_matching_schema_is_rejected() -> None:
             "treatment_order": 7,
             "status": "matched",
             "viirs_cache_contract": MODULE.VIIRS_CACHE_CONTRACT,
-            "schema": "grid_control_design_v1",
+            "schema": "grid_control_design_legacy",
         }
     )
     with pytest.raises(ValueError, match="stale matching schema"):
@@ -107,9 +107,25 @@ def test_durable_record_from_other_backend_is_rejected() -> None:
             "status": "matched",
             "viirs_cache_contract": MODULE.VIIRS_CACHE_CONTRACT,
             "schema": MODULE.CONTROL_DESIGN_SCHEMA,
-            "implementation_version": "r-reference-grid-v3",
+            "implementation_version": "r-reference-grid",
             "backend": "r_matching",
         }
     )
     with pytest.raises(ValueError, match="does not match requested"):
+        MODULE.validate_durable_record(record, 7, "python_gpu")
+
+
+def test_python_durable_record_with_stale_code_fingerprint_is_rejected() -> None:
+    record = pd.Series(
+        {
+            "treatment_order": 7,
+            "status": "matched",
+            "viirs_cache_contract": MODULE.VIIRS_CACHE_CONTRACT,
+            "schema": MODULE.CONTROL_DESIGN_SCHEMA,
+            "implementation_version": "python-causal",
+            "backend": "python_pytorch",
+            "code_fingerprint": "sha256:" + "0" * 64,
+        }
+    )
+    with pytest.raises(ValueError, match="stale matching source code"):
         MODULE.validate_durable_record(record, 7, "python_gpu")

@@ -14,12 +14,15 @@ from .contracts import (
     SHADOW_SCHEMA,
 )
 from .provenance import (
+    all_estimator_code_fingerprints,
+    estimator_code_fingerprint,
+    estimator_source_files,
     file_sha256,
     fingerprints_match,
     numerical_environment_contract,
 )
 
-QUALIFICATION_SCHEMA = "causal_gpu_formal_qualification_v2_environment_bound"
+QUALIFICATION_SCHEMA = "causal_gpu_formal_qualification_environment_bound"
 
 
 def audit_shadow_manifests(
@@ -51,6 +54,10 @@ def audit_shadow_manifests(
             item_reasons.append("stale schema")
         if payload.get("implementation_version") != GPU_IMPLEMENTATION_VERSION:
             item_reasons.append("stale implementation")
+        if estimator in required_sources and payload.get(
+            "code_fingerprint"
+        ) != estimator_code_fingerprint(estimator):
+            item_reasons.append("estimator source fingerprint differs from current code")
         if payload.get("formal_eligible") is not False:
             item_reasons.append("shadow manifest makes an invalid formal claim")
         if payload.get("qualification_requested") is not True:
@@ -129,16 +136,27 @@ def audit_shadow_manifests(
         if not fingerprints_match(source_fingerprints, verify_content=True):
             item_reasons.append("source fingerprints are missing or stale")
         elif estimator in required_sources:
-            source_names = {
-                Path(str(record.get("path", ""))).name
+            source_records = {
+                str(Path(str(record.get("path", ""))).resolve()): str(
+                    record.get("sha256", "")
+                )
                 for record in source_fingerprints
                 if isinstance(record, dict)
             }
+            source_names = {Path(path).name for path in source_records}
             missing_sources = required_sources[estimator] - source_names
             if missing_sources:
                 item_reasons.append(
                     "numerical source fingerprints are incomplete: "
                     + ", ".join(sorted(missing_sources))
+                )
+            current_sources = {
+                str(path.resolve()): file_sha256(path)
+                for path in estimator_source_files(estimator)
+            }
+            if any(source_records.get(path) != digest for path, digest in current_sources.items()):
+                item_reasons.append(
+                    "qualified estimator sources do not match the current source tree"
                 )
         inference = payload.get("inference", {})
         if estimator in {"gsc", "mc"} and (
@@ -153,6 +171,7 @@ def audit_shadow_manifests(
                 "path": str(path.resolve()),
                 "manifest_sha256": file_sha256(path),
                 "estimator": estimator,
+                "code_fingerprint": payload.get("code_fingerprint"),
                 "passed": not item_reasons,
                 "reasons": item_reasons,
             }
@@ -167,6 +186,7 @@ def audit_shadow_manifests(
         "schema": QUALIFICATION_SCHEMA,
         "formal_implementation_version": FORMAL_IMPLEMENTATION_VERSION,
         "shadow_implementation_version": GPU_IMPLEMENTATION_VERSION,
+        "code_fingerprints": all_estimator_code_fingerprints(),
         "eligible": not reasons,
         "minimum_parity_tasks": minimum_parity_tasks,
         "counts": dict(sorted(counts.items())),
@@ -202,6 +222,9 @@ def validate_formal_qualification_receipt(
         raise ValueError("formal qualification receipt targets a stale implementation")
     if payload.get("shadow_implementation_version") != GPU_IMPLEMENTATION_VERSION:
         raise ValueError("formal qualification receipt targets a stale shadow contract")
+    current_code_fingerprints = all_estimator_code_fingerprints()
+    if payload.get("code_fingerprints") != current_code_fingerprints:
+        raise ValueError("formal qualification receipt targets different estimator source code")
     if payload.get("eligible") is not True or payload.get("reasons"):
         raise ValueError("formal qualification receipt is not eligible")
     counts = payload.get("counts")
@@ -254,6 +277,7 @@ def validate_formal_qualification_receipt(
         "formal_qualification_receipt_sha256": receipt_sha256,
         "formal_qualification_minimum_parity_tasks": minimum,
         "formal_qualification_environment": qualified_environment,
+        "formal_qualification_code_fingerprints": current_code_fingerprints,
         "formal_qualification_source_audit": (
             "full_at_worker_start" if verify_bound_sources else "receipt_digest_prevalidated"
         ),

@@ -11,11 +11,11 @@ import numpy.typing as npt
 
 FloatArray = npt.NDArray[np.floating[Any]]
 BoolArray = npt.NDArray[np.bool_]
-GPU_IMPLEMENTATION_VERSION = "gpu-v6"
-SHADOW_SCHEMA = "causal_gpu_shadow_v6_label_parity_contract"
-FORMAL_IMPLEMENTATION_VERSION = "python-causal-v3"
-FORMAL_RESULT_SCHEMA = "causal_python_formal_result_v3_qualified"
-CONTROL_DESIGN_SCHEMA = "grid_control_design_v3_exact_stable_ties"
+GPU_IMPLEMENTATION_VERSION = "gpu"
+SHADOW_SCHEMA = "causal_gpu_shadow_formal_contract"
+FORMAL_IMPLEMENTATION_VERSION = "python-causal"
+FORMAL_RESULT_SCHEMA = "causal_python_formal_result_qualified"
+CONTROL_DESIGN_SCHEMA = "grid_control_design_exact_stable_ties"
 CONTROL_DESIGN_VIIRS_CACHE_CONTRACT = "complete_44_city_2012_2024_monthly_v1"
 CONTROL_DESIGN_PROVENANCE = {
     "python_gpu": {
@@ -25,7 +25,7 @@ CONTROL_DESIGN_PROVENANCE = {
     },
     "r_reference": {
         "backend": "r_matching",
-        "implementation_version": "r-reference-grid-v3",
+        "implementation_version": "r-reference-grid",
         "selected_method": "Matching::Match_M5_static_refine",
     },
 }
@@ -130,8 +130,9 @@ class PanelData:
     """A time-by-unit outcome panel with explicit masks.
 
     ``treated`` marks cells exposed to treatment, while ``observed`` describes
-    data availability.  Pre-treatment fitting always uses
-    ``observed & ~treated`` and therefore cannot leak post-treatment outcomes.
+    data availability.  A treated cell may be unobserved.  Pre-treatment
+    fitting always uses ``observed & ~treated`` and therefore cannot leak
+    post-treatment outcomes.
     """
 
     y: FloatArray
@@ -150,8 +151,6 @@ class PanelData:
             raise ValueError("observed and treated masks must match y")
         if np.isinf(y[observed]).any() or np.isnan(y[observed]).any():
             raise ValueError("observed panel cells must be finite")
-        if np.any(treated & ~observed):
-            raise ValueError("treated cells must also be observed")
         if self.unit_ids is not None and len(self.unit_ids) != y.shape[1]:
             raise ValueError("unit_ids length must equal panel unit count")
         if self.time_ids is not None and len(self.time_ids) != y.shape[0]:

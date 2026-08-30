@@ -115,7 +115,10 @@ class RepresentationDataset(torch.utils.data.Dataset[GridSample]):
         self.max_images_per_grid = max_images_per_grid
         self.load_images = load_images
         self.manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
-        if self.manifest.get("schema") != "urban_intervention_pretraining_dataset_v1":
+        schema = str(self.manifest.get("schema", ""))
+        if schema != "urban_intervention_pretraining_dataset" and not schema.startswith(
+            "urban_intervention_pretraining_dataset_v"
+        ):
             raise ValueError(f"Unsupported manifest schema: {self.manifest.get('schema')}")
 
         self.unit_features = pd.read_parquet(root / "unit_features.parquet")

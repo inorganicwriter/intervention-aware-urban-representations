@@ -78,7 +78,9 @@ class GSCConfig:
     tol: float = 1e-5
     bootstrap_mode: BootstrapMode = "none"
     n_bootstrap: int = 0
-    seed: int = 20260823
+    # Keep the formal inference seed aligned with the R reference contract.
+    # The R runner resets its stream to 20260723 before the fixed-r bootstrap.
+    seed: int = 20260723
     batch_cv: bool | None = None
     inference_batch_size: int = 16
     minimum_valid_fraction: float = 0.9
@@ -232,6 +234,25 @@ def _select_one_standard_error(
     return next(rank for rank in finite if means[rank] <= threshold)
 
 
+def _max_identifiable_rank(observed: npt.ArrayLike) -> int:
+    """Return the largest factor rank admitted by fect's observation checks."""
+    mask = np.asarray(observed, dtype=bool)
+    if mask.ndim != 2 or not mask.any():
+        raise ValueError("GSC control observation mask must be a non-empty matrix")
+    periods, units = mask.shape
+    minimum_unit_observations = int(mask.sum(axis=0).min())
+    dimension_limit = min(periods, units, minimum_unit_observations - 1)
+    observed_count = int(mask.sum())
+    valid = [
+        rank
+        for rank in range(max(0, dimension_limit) + 1)
+        if observed_count - rank * (units + periods) + rank * rank > 0
+    ]
+    if not valid:
+        raise ValueError("GSC control panel does not identify an additive model")
+    return max(valid)
+
+
 def _target_counterfactual(
     y: Any,
     observed: Any,
@@ -297,23 +318,51 @@ def _draw_covering_controls(
     raise RuntimeError("failed to sample a bootstrap control panel with period support")
 
 
-def _residual_vcov(residual: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
-    """Port ``fect:::res.vcov(..., cov.ar=T-1)`` with PSD stabilisation."""
+def _residual_vcov(
+    residual: npt.NDArray[np.float64],
+    *,
+    cov_ar: int | None = None,
+) -> npt.NDArray[np.float64]:
+    """Port ``fect:::res.vcov`` without changing its covariance geometry.
+
+    The R reference zeroes covariance entries beyond ``cov.ar`` and applies
+    a pairwise-observation correction to the remaining entries.  It does not
+    project the result to the PSD cone or add diagonal jitter.  Those
+    operations alter the parametric bootstrap distribution and therefore are
+    not appropriate on the formal parity path.
+    """
     values = np.asarray(residual, dtype=np.float64)
+    if values.ndim != 2:
+        raise ValueError("residual must be a time-by-unit matrix")
+    if cov_ar is None:
+        cov_ar = values.shape[0] - 1
+    if cov_ar < 0:
+        raise ValueError("cov_ar must be non-negative")
     missing = ~np.isfinite(values)
     filled = np.where(missing, 0.0, values)
     covariance = filled @ filled.T
+    weights = np.zeros_like(covariance)
     for left in range(values.shape[0]):
         for right in range(left, values.shape[0]):
+            if right - left > cov_ar:
+                continue
             jointly_observed = int(np.sum(~missing[left] & ~missing[right]))
-            weight = min(1.0 / jointly_observed, 1.0) if jointly_observed else 0.0
-            covariance[left, right] *= weight
-            covariance[right, left] = covariance[left, right]
-    covariance = (covariance + covariance.T) / 2.0
-    eigenvalues, eigenvectors = np.linalg.eigh(covariance)
-    projected = (eigenvectors * np.maximum(eigenvalues, 0.0)) @ eigenvectors.T
-    jitter = max(float(np.max(np.diag(projected))), 1.0) * 1e-12
-    return projected + np.eye(projected.shape[0]) * jitter
+            weight = min(1.0 / jointly_observed, 1.0) if jointly_observed else 1.0
+            weights[left, right] = weight
+            weights[right, left] = weight
+    return covariance * weights
+
+
+def _fect_bootstrap_fit_out(
+    fitted: npt.NDArray[np.float64],
+    observed: npt.NDArray[np.bool_],
+) -> npt.NDArray[np.float64]:
+    """Build the ``fect_boot`` fitted-value matrix before error injection."""
+    values = np.asarray(fitted, dtype=np.float64)
+    mask = np.asarray(observed, dtype=bool)
+    if values.shape != mask.shape:
+        raise ValueError("fitted and observed must have the same shape")
+    return np.where(mask, values, 0.0)
 
 
 def _placebo_target_errors(
@@ -404,6 +453,7 @@ def _bootstrap_effects(
 ) -> tuple[npt.NDArray[np.float64], int]:
     """Run the two-stage fect-style parametric bootstrap for one target."""
     control_observed = observed[:, controls]
+    # ``fect`` resolves para.error from the raw observation mask ``I``.
     complete = bool(observed.all())
     resolved_mode = (
         "reference_empirical"
@@ -414,12 +464,21 @@ def _bootstrap_effects(
     )
     if resolved_mode == "reference_empirical" and not complete:
         raise ValueError("reference_empirical bootstrap requires a complete control panel")
-    rng = np.random.default_rng(config.seed + 10_000)
+    # CV folds are supplied separately on the formal path, so the bootstrap
+    # stream must start from the contract seed itself, as the R reference does.
+    rng = np.random.default_rng(config.seed)
     control_y = y[:, controls]
     residual = (control_y - fit.fitted).detach().cpu().numpy()
     observed_np = control_observed.detach().cpu().numpy()
     residual[~observed_np] = np.nan
     fitted_controls = fit.fitted.detach().cpu().numpy()
+    # fect::fect_boot constructs fit.out = out$Y.ct and then sets every
+    # I == 0 cell to zero before adding the simulated error.  The zero is
+    # intentional: impute_Y0 receives the I/II masks and reconstructs those
+    # cells during the bootstrap refit.  Supplying the already-completed
+    # value here changes the EM starting matrix and systematically narrows
+    # the GSC bootstrap distribution on incomplete donor panels.
+    fit_out_controls = _fect_bootstrap_fit_out(fitted_controls, observed_np)
     fitted_target = _target_counterfactual(
         y,
         observed,
@@ -428,6 +487,8 @@ def _bootstrap_effects(
         fit,
         rank,
     ).detach().cpu().numpy()
+    target_observed = observed[:, target_index].detach().cpu().numpy()
+    fit_out_target = _fect_bootstrap_fit_out(fitted_target, target_observed)
     placebo_errors, placebo_batch_size = _placebo_target_errors(
         y,
         observed,
@@ -442,7 +503,6 @@ def _bootstrap_effects(
         target_covariance = _residual_vcov(placebo_errors.T)
         control_covariance = _residual_vcov(residual)
     draws = np.full((config.n_bootstrap, y.shape[0]), np.nan, dtype=np.float64)
-    target_observed = observed[:, target_index].detach().cpu().numpy()
     target_treated = treated[:, target_index]
     inference_batch_size = _resolved_inference_batch_size(
         y, control_y.shape[1], config.inference_batch_size
@@ -468,18 +528,22 @@ def _bootstrap_effects(
             else:
                 assert target_covariance is not None and control_covariance is not None
                 target_error = rng.multivariate_normal(
-                    np.zeros(y.shape[0]), target_covariance, method="svd"
+                    np.zeros(y.shape[0]),
+                    target_covariance,
+                    check_valid="ignore",
+                    method="svd",
                 ).T
                 control_error = rng.multivariate_normal(
                     np.zeros(y.shape[0]),
                     control_covariance,
                     size=control_y.shape[1],
+                    check_valid="ignore",
                     method="svd",
                 ).T
                 control_error[~sampled_observed] = 0.0
             target_error = np.where(target_observed, target_error, 0.0)
-            synthetic_target = fitted_target + target_error
-            synthetic_controls = fitted_controls[:, sampled] + control_error
+            synthetic_target = fit_out_target + target_error
+            synthetic_controls = fit_out_controls[:, sampled] + control_error
             boot_y[row, :, 0] = y.new_tensor(synthetic_target)
             boot_y[row, :, 1:] = y.new_tensor(synthetic_controls)
             boot_observed[row, :, 0] = observed[:, target_index]
@@ -548,12 +612,25 @@ def fit_gsc(
         raise ValueError("a GSC control unit has no observed untreated outcomes")
     if bool((control_observed.sum(dim=1) == 0).any()):
         raise ValueError("a GSC period has no observed control outcomes")
-    valid_ranks = tuple(rank for rank in config.ranks if rank <= min(y.shape[0], controls.numel()))
+    target_pre_periods = int(fit_mask[:, target_index].sum())
+    max_target_rank = target_pre_periods - 1
+    max_control_rank = _max_identifiable_rank(
+        control_observed.detach().cpu().numpy()
+    )
+    valid_ranks = tuple(
+        rank
+        for rank in config.ranks
+        if rank <= min(max_control_rank, max_target_rank)
+    )
     if not valid_ranks:
         raise ValueError("no requested GSC rank fits the control panel dimensions")
     if config.fixed_rank is not None:
-        if config.fixed_rank > min(y.shape[0], controls.numel()):
-            raise ValueError("fixed_rank does not fit the control panel dimensions")
+        if config.fixed_rank > max_control_rank:
+            raise ValueError("fixed_rank is not identified by the observed control panel")
+        if config.fixed_rank > max_target_rank:
+            raise ValueError(
+                "fixed_rank requires more observed target pre-periods than available"
+            )
         selected_rank = config.fixed_rank
         means: dict[int, float] = {}
         standard_errors: dict[int, float] = {}
@@ -570,7 +647,7 @@ def fit_gsc(
             )
             cv_contract = "python_rolling"
         else:
-            cv_contract = "r_exported_rolling"
+            cv_contract = "persisted_rolling"
         if len(cv_folds) != config.folds:
             raise ValueError("GSC CV contract fold count does not match config.folds")
         scores: dict[int, list[float]] = {rank: [] for rank in valid_ranks}
@@ -658,7 +735,8 @@ def fit_gsc(
         assert panel.observed is not None and panel.treated is not None
         resolved_mode = (
             "reference_empirical"
-            if config.bootstrap_mode == "auto" and bool(panel.observed.all())
+            if config.bootstrap_mode == "auto"
+            and bool(panel.observed.all())
             else "reference_ar"
             if config.bootstrap_mode == "auto"
             else config.bootstrap_mode

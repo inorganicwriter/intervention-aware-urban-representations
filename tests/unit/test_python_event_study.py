@@ -60,6 +60,8 @@ def test_twfe_event_study_keeps_post_periods_and_clusters() -> None:
     assert np.all(city_half_width > 1.96 * coefficients["standard_error_city"])
     assert result.grid_cluster_pretrend.iloc[0]["df1"] == 2
     assert result.diagnostics["treated_events"] == 24
+    assert result.diagnostics["grid_ssc_parameters"] > result.diagnostics["parameters"]
+    assert result.diagnostics["city_ssc_parameters"] > result.diagnostics["parameters"]
 
 
 def test_matching_event_study_figure_is_written(tmp_path: Path) -> None:
@@ -95,7 +97,7 @@ def test_event_study_builder_requires_accepted_task_manifest(
     labels = pd.DataFrame({"estimator_backend": ["r_reference"]})
     labels.to_parquet(task / "labels.parquet", index=False)
     manifest = {
-        "schema": "causal_response_labels_v1",
+        "schema": "causal_response_labels",
         "status": "matched_labelled",
         "method": "frozen_matched_change_12m_baseline",
         "outcome_family": "population",

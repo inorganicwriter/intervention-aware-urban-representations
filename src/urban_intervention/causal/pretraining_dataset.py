@@ -505,7 +505,7 @@ def publish_pretraining_dataset(
             for split in ("train", "validation", "test")
         }
         manifest = {
-            "schema": "urban_intervention_pretraining_dataset_v1",
+            "schema": "urban_intervention_pretraining_dataset",
             "dataset_id": dataset_id,
             "created_utc": datetime.now(UTC).isoformat(),
             "strict_production": strict_production,

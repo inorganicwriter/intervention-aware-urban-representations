@@ -12,10 +12,17 @@ import pandas as pd
 from .contracts import MatchingInput, MatchingResult
 
 MATCHING_SCHEMAS = {
+    "causal_gpu_matching_input_exact_stable_ties",
+    "causal_gpu_matching_reference_exact_stable_ties",
+    "causal_gpu_matching_reference_final_labels",
     "causal_gpu_matching_input_v2_exact_stable_ties",
     "causal_gpu_matching_reference_v2_exact_stable_ties",
     "causal_gpu_matching_reference_v3_final_labels",
 }
+
+
+def _supported_schema(schema: str) -> bool:
+    return schema in MATCHING_SCHEMAS
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,7 +47,7 @@ def load_matching_artifacts(directory: Path) -> MatchingArtifacts:
     frame = pd.read_parquet(directory / "matching_input.parquet")
     metadata_row = pd.read_csv(directory / "metadata.csv", encoding="utf-8-sig").iloc[0]
     schema = str(metadata_row.get("schema", ""))
-    if schema not in MATCHING_SCHEMAS:
+    if not _supported_schema(schema):
         raise ValueError(f"unsupported matching GPU contract schema: {schema!r}")
     distance_tolerance = pd.to_numeric(
         pd.Series([metadata_row.get("distance_tolerance")]), errors="coerce"

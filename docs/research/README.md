@@ -1,8 +1,7 @@
 # Research Documentation
 
-Only the current research contract is indexed here. Superseded housing-DID designs,
-prototype feasibility notes, and result-driven improvement plans are stored under
-`../archive/` as historical records.
+Only the current research contract is indexed here. Superseded designs and
+prototype notes are removed after their durable content is merged below.
 
 ## Authoritative design
 
@@ -18,10 +17,6 @@ prototype feasibility notes, and result-driven improvement plans are stored unde
 - [`project_abstract.md`](project_abstract.md): project title and abstract.
 - [`related_work_literature.md`](related_work_literature.md): literature review.
 - [`robustness_plan.md`](robustness_plan.md): robustness specifications and reporting requirements.
-
-The former `complete_project_pipeline.md` duplicated the root project guide and
-the causal design. It is archived in `../archive/2026-08-document-consolidation/`;
-use [`../PROJECT_GUIDE.md`](../PROJECT_GUIDE.md) for the end-to-end project map.
 
 Dataset-specific documentation belongs in [`../data/`](../data/) and
 [`../operations/`](../operations/). The active causal design keeps the research rules.

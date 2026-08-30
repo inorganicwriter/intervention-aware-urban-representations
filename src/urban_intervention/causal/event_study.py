@@ -15,6 +15,10 @@ from urban_intervention.causal.gpu.panel_builder import (
     read_monthly_viirs,
 )
 from urban_intervention.causal.gpu.provenance import file_sha256
+from urban_intervention.causal.schemas import (
+    CAUSAL_RESPONSE_LABELS_SCHEMA,
+    accepts_legacy_version,
+)
 from urban_intervention.data.paths import (
     CONTROL_DESIGN_QUEUE,
     OUTCOME_FAMILY_QUEUE,
@@ -110,20 +114,43 @@ def _cluster_covariance(
     design: np.ndarray,
     residual: np.ndarray,
     clusters: np.ndarray,
-) -> tuple[np.ndarray, int]:
+    *,
+    fixed_effects: tuple[np.ndarray, ...] = (),
+) -> tuple[np.ndarray, int, int]:
     unique, inverse = np.unique(clusters, return_inverse=True)
     cluster_count = len(unique)
     nobs, parameter_count = design.shape
-    if cluster_count < 2 or nobs <= parameter_count:
-        return np.full((parameter_count, parameter_count), np.nan), cluster_count
+    effective_parameter_count = parameter_count
+    for fixed_effect in fixed_effects:
+        fixed_effect = np.asarray(fixed_effect)
+        if fixed_effect.shape != clusters.shape:
+            raise ValueError("fixed-effect and cluster arrays must align")
+        _, fixed_inverse = np.unique(fixed_effect, return_inverse=True)
+        nested = True
+        for level in range(int(fixed_inverse.max()) + 1):
+            if np.unique(clusters[fixed_inverse == level]).size != 1:
+                nested = False
+                break
+        if not nested:
+            effective_parameter_count += int(np.unique(fixed_effect).size)
+    if cluster_count < 2 or nobs <= effective_parameter_count:
+        return (
+            np.full((parameter_count, parameter_count), np.nan),
+            cluster_count,
+            effective_parameter_count,
+        )
     scores = np.zeros((cluster_count, parameter_count), dtype=np.float64)
     np.add.at(scores, inverse, design * residual[:, None])
     bread = np.linalg.pinv(design.T @ design, hermitian=True)
     correction = (cluster_count / (cluster_count - 1)) * (
-        (nobs - 1) / (nobs - parameter_count)
+        (nobs - 1) / (nobs - effective_parameter_count)
     )
     covariance = correction * bread @ (scores.T @ scores) @ bread
-    return (covariance + covariance.T) / 2, cluster_count
+    return (
+        (covariance + covariance.T) / 2,
+        cluster_count,
+        effective_parameter_count,
+    )
 
 
 def _wald_zero(
@@ -211,11 +238,21 @@ def fit_twfe_event_study(
     if rank < x.shape[1]:
         raise ValueError("event-study design remains rank deficient after collinearity removal")
     regression_residual = y - x @ coefficients
-    grid_covariance, grid_clusters = _cluster_covariance(
-        x, regression_residual, frame[grid_cluster_column].astype(str).to_numpy()
+    fixed_effects = (
+        frame[unit_column].astype(str).to_numpy(),
+        frame[period_column].astype(str).to_numpy(),
     )
-    city_covariance, city_clusters = _cluster_covariance(
-        x, regression_residual, frame[city_cluster_column].astype(str).to_numpy()
+    grid_covariance, grid_clusters, grid_ssc_parameters = _cluster_covariance(
+        x,
+        regression_residual,
+        frame[grid_cluster_column].astype(str).to_numpy(),
+        fixed_effects=fixed_effects,
+    )
+    city_covariance, city_clusters, city_ssc_parameters = _cluster_covariance(
+        x,
+        regression_residual,
+        frame[city_cluster_column].astype(str).to_numpy(),
+        fixed_effects=fixed_effects,
     )
     grid_se = np.sqrt(np.maximum(np.diag(grid_covariance), 0))
     city_se = np.sqrt(np.maximum(np.diag(city_covariance), 0))
@@ -270,6 +307,8 @@ def fit_twfe_event_study(
             "grid_clusters": grid_clusters,
             "city_clusters": city_clusters,
             "parameters": len(coefficients),
+            "grid_ssc_parameters": grid_ssc_parameters,
+            "city_ssc_parameters": city_ssc_parameters,
             "absorption_iterations": absorption_iterations,
             "reference_event_time": reference_event_time,
             "variance": "CRV1",
@@ -393,7 +432,9 @@ def build_matching_event_study_panel(
         except OSError:
             continue
         if (
-            payload.get("schema") != "causal_response_labels_v1"
+            not accepts_legacy_version(
+                payload.get("schema"), CAUSAL_RESPONSE_LABELS_SCHEMA
+            )
             or payload.get("status") != "matched_labelled"
             or not str(payload.get("method", "")).startswith("frozen_matched_change")
             or payload.get("outcome_family") != outcome_family
@@ -475,7 +516,7 @@ def build_matching_event_study_panel(
         part["treatment_order"] = order
         part["unit"] = part["role"] + "_" + str(order) + "_" + part["source_city"] + "::" + part["source_grid"]
         part["grid_cluster"] = part["source_city"] + "::" + part["source_grid"]
-        part["city_cluster"] = str(record["city_key"])
+        part["city_cluster"] = part["source_city"].astype(str)
         parts.append(part)
     if not parts:
         raise ValueError("no matched event-study outcome panels could be built")

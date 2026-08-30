@@ -410,21 +410,41 @@ def fit_nuclear_norm_completion_batched(
     masks: Any,
     *,
     penalty: float,
-    initial_fits: Any,
+    initial_fits: Any | None = None,
     force: Force = "two-way",
     max_iter: int = 500,
     tol: float = 1e-8,
 ) -> list[LowRankFit]:
-    """Fit one MC lambda over all CV folds using batched SVDs."""
+    """Fit one MC lambda over batched panels using batched SVDs.
+
+    ``initial_fits`` is retained for the rolling-CV fast path.  Formal
+    leave-one-unit-out jackknife calls omit it so every reduced panel receives
+    its own fresh additive fixed-effect initialization, matching
+    ``fect_mc(..., fit_init = NULL)``.
+    """
     if penalty < 0:
         raise ValueError("penalty must be non-negative")
-    if masks.ndim != 3 or initial_fits.shape != masks.shape:
-        raise ValueError("masks and initial_fits must be batch x time x unit")
+    if masks.ndim != 3:
+        raise ValueError("masks must be batch x time x unit")
     batch = masks.shape[0]
     y_batch = y.unsqueeze(0).expand(batch, -1, -1) if y.ndim == 2 else y
     if y_batch.shape != masks.shape:
         raise ValueError("y does not match the batched MC masks")
-    fitted = initial_fits.clone()
+    if initial_fits is None:
+        initial_fixed = fit_fixed_effects_batched(
+            y_batch,
+            masks,
+            force=force,
+            max_iter=max_iter,
+            tol=min(tol * 0.1, 1e-12),
+        )
+        fitted = y_batch.new_empty(y_batch.shape)
+        for index, fixed in enumerate(initial_fixed):
+            fitted[index] = fixed.matrix()
+    else:
+        if initial_fits.shape != masks.shape:
+            raise ValueError("initial_fits must be batch x time x unit")
+        fitted = initial_fits.clone()
     previous_fit = fitted.clone()
     low_rank = y_batch.new_zeros(y_batch.shape)
     grand, unit, time, _ = _fect_complete_fixed_effects_batched(fitted, force)

@@ -150,6 +150,33 @@ def inference_from_standard_error(
     )
 
 
+def jackknife_standard_error(
+    estimate: npt.ArrayLike,
+    leave_one_out_estimates: npt.ArrayLike,
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.int64]]:
+    """Return fect-equivalent unit-jackknife SEs and valid refit counts.
+
+    ``fect`` removes an invalid leave-one-out column before constructing
+    pseudo-values.  Consequently, each period must use the number of finite
+    refits for that period as ``N``.  Counting an omitted treated unit whose
+    refit is undefined inflates the standard error.
+    """
+    point = np.asarray(estimate, dtype=np.float64)
+    draws = np.asarray(leave_one_out_estimates, dtype=np.float64)
+    if point.ndim != 1 or draws.ndim != 2 or draws.shape[1] != point.size:
+        raise ValueError("leave-one-out estimates must be refits by periods")
+    valid = np.sum(np.isfinite(draws), axis=0).astype(np.int64)
+    standard_error = np.full(point.shape, np.nan, dtype=np.float64)
+    for period in np.flatnonzero(np.isfinite(point) & (valid >= 2)):
+        local = draws[np.isfinite(draws[:, period]), period]
+        count = local.size
+        pseudo_values = point[period] * count - local * (count - 1)
+        standard_error[period] = float(
+            np.sqrt(np.var(pseudo_values, ddof=1) / count)
+        )
+    return standard_error, valid
+
+
 def normal_inference_from_replicates(
     estimate: npt.ArrayLike,
     replicate_estimates: npt.ArrayLike,

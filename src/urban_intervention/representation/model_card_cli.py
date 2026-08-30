@@ -93,7 +93,7 @@ def build_model_card(run_dir: Path, out_path: Path | None = None) -> dict:
 
     best_epoch = min(history, key=lambda entry: entry["val_total"]) if history else None
     card: dict = {
-        "schema": "urban_intervention_model_card_v1",
+        "schema": "urban_intervention_model_card",
         "dataset_id": config.get("dataset_id", ""),
         "strict_production": config.get("strict_production", False),
         "architecture": config.get("architecture", {}),

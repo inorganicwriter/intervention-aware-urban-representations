@@ -22,6 +22,7 @@ from urban_intervention.causal.gpu.matching_io import (  # noqa: E402
     matching_result_frames,
 )
 from urban_intervention.causal.gpu.provenance import (  # noqa: E402
+    estimator_code_fingerprint,
     estimator_source_files,
     fingerprint_files,
     python_environment,
@@ -75,6 +76,7 @@ def main() -> None:
     manifest = {
         "schema": SHADOW_SCHEMA,
         "implementation_version": GPU_IMPLEMENTATION_VERSION,
+        "code_fingerprint": estimator_code_fingerprint("matching"),
         "estimator": "matching",
         "backend": "pytorch",
         "mode": "shadow",

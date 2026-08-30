@@ -392,7 +392,7 @@ run_one_outcome <- function(outcome) {
     )
     fwrite(units, file.path(output, "unit_map.csv"), bom = TRUE)
     write_run_manifest(output, list(
-      schema = "causal_gpu_input_v1", method = "Xu GSC GPU input export",
+      schema = "causal_gpu_input_reference_contract", method = "Xu GSC GPU input export",
       run_id = causal_run_id, city_key = city_key, cohort = cohort,
       frequency = frequency, treatment_order = treatment_order,
       outcome_family = outcome_family, outcome = outcome,

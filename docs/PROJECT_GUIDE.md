@@ -123,8 +123,6 @@ python scripts/causal_r/run_parallel_production.py \
 6. 运行状态：[`operations/current_project_status.md`](operations/current_project_status.md)；
 7. 服务器操作：[`operations/server_deployment.md`](operations/server_deployment.md)。
 
-历史阶段说明只在 [`archive/`](archive/README.md) 中保留，不代表当前实现或当前队列状态。
-
 ## 8. 当前状态
 
 代码检查结果、队列数量和服务器待办事项集中记录在

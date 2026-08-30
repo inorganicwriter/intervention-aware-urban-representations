@@ -145,7 +145,6 @@ artifacts carry a non-production marker.
 - [Econometric methods and identification](docs/research/econometric_methods.md)
 - [DID parallel trends and executable diagnostics](docs/research/identification_and_diagnostics.md)
 - [Intervention-conditioned representation learning](docs/research/representation_learning.md)
-- [Sample-run execution plan](docs/operations/sample_run_execution_plan.md)
 - [Core research architecture](docs/architecture/research_architecture.md)
 - [Current run status](docs/operations/current_project_status.md)
 - [Data contracts](docs/data/README.md)
@@ -153,4 +152,4 @@ artifacts carry a non-production marker.
 - [Related-work literature](docs/research/related_work_literature.md)
 - [Estimator formulas](docs/research/estimator_formulas.md)
 
-Use the frozen DDRs and current production code as the authority. Historical pooled DID, annual panels, prototype estimators, smoke runs and partial releases are archived diagnostics. Formal response labels come from the current production route. The former end-to-end pipeline note is archived under `docs/archive/` after its current content was consolidated into the project guide and the causal design document.
+Use the frozen DDRs and current production code as the authority. Formal response labels come from the current production route. Superseded notes are removed after their durable content is consolidated into the project guide and causal design documentation.

@@ -1,4 +1,4 @@
-"""Python-native, versioned CV contracts for GSC and matrix completion."""
+"""Python-native CV contracts for GSC and matrix completion."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ from .provenance import file_sha256
 from .runtime import RuntimeConfig, TorchRuntime
 
 Estimator = Literal["gsc", "mc"]
-PYTHON_CONTRACT_SCHEMA = "causal_gpu_input_v2_python_contract"
+PYTHON_CONTRACT_SCHEMA = "causal_gpu_input_python_contract"
 
 
 def _gsc_fold_frame(panel_path: Path) -> tuple[pd.DataFrame, dict[str, Any]]:

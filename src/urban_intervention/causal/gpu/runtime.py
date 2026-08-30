@@ -8,6 +8,8 @@ import sys
 from dataclasses import asdict, dataclass
 from typing import Any
 
+import numpy as np
+
 
 class TorchUnavailableError(RuntimeError):
     """Raised when the optional GPU backend is used without PyTorch."""
@@ -99,7 +101,18 @@ class TorchRuntime:
             torch.use_deterministic_algorithms(True)
 
     def tensor(self, value: Any, *, dtype: Any | None = None) -> Any:
-        """Create a tensor on the configured device without implicit down-casting."""
+        """Create a tensor without exposing read-only NumPy storage to PyTorch.
+
+        ``torch.as_tensor`` may share NumPy storage.  Arrow- and Parquet-backed
+        arrays can be read-only, while PyTorch tensors do not carry a read-only
+        flag.  Copy only those arrays so writable inputs retain the existing
+        zero-copy CPU path and read-only inputs cannot be mutated through a
+        tensor view.
+        """
+        if isinstance(value, np.ndarray) and not value.flags.writeable:
+            return self.torch.tensor(
+                value, dtype=dtype or self.dtype, device=self.device
+            )
         return self.torch.as_tensor(value, dtype=dtype or self.dtype, device=self.device)
 
     def empty_cache(self) -> None:

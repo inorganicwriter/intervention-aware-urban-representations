@@ -9,7 +9,11 @@ import numpy as np
 import numpy.typing as npt
 
 from .contracts import EstimatorProvenance, PanelData
-from .inference import InferenceResult, inference_from_standard_error
+from .inference import (
+    InferenceResult,
+    inference_from_standard_error,
+    jackknife_standard_error,
+)
 from .linalg import (
     as_panel_tensors,
     fit_fixed_effects,
@@ -53,7 +57,7 @@ class MatrixCompletionConfig:
     max_iter: int = 5000
     tol: float = 1e-5
     inference: Literal["none", "jackknife"] = "none"
-    seed: int = 20260823
+    seed: int = 20260725
     batch_cv: bool = True
     batch_inference: bool = True
     inference_batch_size: int = 16
@@ -110,7 +114,7 @@ def make_rolling_cv_folds(
     buffer: int,
     proportion: float = 0.1,
     min_pre_periods: int = 1,
-    seed: int = 20260823,
+    seed: int = 20260725,
 ) -> list[RollingFold]:
     """Build fect-style rolling-origin masks without future leakage."""
     available = np.asarray(observed_untreated, dtype=bool)
@@ -182,18 +186,20 @@ def _select_lambda(
 
 def _jackknife_refits(
     y: Any,
+    observed: Any,
     fit_mask: Any,
     treated: Any,
     target_index: int,
     selected_lambda: float,
     full_effect: npt.NDArray[np.float64],
-    initial_fit: Any,
     config: MatrixCompletionConfig,
 ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
     unit_count = y.shape[1]
-    draws = np.full((unit_count, y.shape[0]), np.nan, dtype=np.float64)
-    target_y = y[:, target_index].detach().cpu().numpy()
     omitted_units = [index for index in range(unit_count) if index != target_index]
+    draws = np.full((len(omitted_units), y.shape[0]), np.nan, dtype=np.float64)
+    target_y = y[:, target_index].detach().cpu().numpy()
+    target_observed = observed[:, target_index].detach().cpu().numpy()
+    target_y[~target_observed] = np.nan
     keep_sets = [
         [index for index in range(unit_count) if index != omitted]
         for omitted in omitted_units
@@ -205,11 +211,9 @@ def _jackknife_refits(
             batch_shape = (len(local_keeps), y.shape[0], y.shape[1] - 1)
             y_batch = y.new_empty(batch_shape)
             mask_batch = fit_mask.new_empty(batch_shape)
-            initial_batch = initial_fit.new_empty(batch_shape)
             for row, keep in enumerate(local_keeps):
                 y_batch[row] = y[:, keep]
                 mask_batch[row] = fit_mask[:, keep]
-                initial_batch[row] = initial_fit[:, keep]
             fits = fit_nuclear_norm_completion_batched(
                 y_batch,
                 mask_batch,
@@ -217,7 +221,6 @@ def _jackknife_refits(
                 force="two-way",
                 max_iter=config.max_iter,
                 tol=config.tol,
-                initial_fits=initial_batch,
             )
         else:
             fits = [
@@ -228,24 +231,18 @@ def _jackknife_refits(
                     force="two-way",
                     max_iter=config.max_iter,
                     tol=config.tol,
-                    initial_fit=initial_fit[:, keep],
                 )
                 for keep in local_keeps
             ]
-        for omitted, fit in zip(local_omitted, fits, strict=True):
+        for row, (omitted, fit) in enumerate(
+            zip(local_omitted, fits, strict=True), start=start
+        ):
             if not fit.converged:
                 continue
             local_target = target_index - int(omitted < target_index)
             counterfactual = fit.fitted[:, local_target].detach().cpu().numpy()
-            draws[omitted] = target_y - counterfactual
-    # Match fect::jackknifed: construct pseudo-values using total N, calculate
-    # sample variance over valid refits, then divide by their valid count.
-    pseudo_values = full_effect[None, :] * unit_count - draws * (unit_count - 1)
-    valid_count = np.sum(np.isfinite(pseudo_values), axis=0)
-    standard_error = np.sqrt(
-        np.nanvar(pseudo_values, axis=0, ddof=1) / np.maximum(valid_count, 1)
-    )
-    standard_error[valid_count < 2] = np.nan
+            draws[row] = target_y - counterfactual
+    standard_error, _ = jackknife_standard_error(full_effect, draws)
     return draws, standard_error
 
 
@@ -289,7 +286,7 @@ def fit_matrix_completion(
             )
             cv_contract = "python_rolling"
         else:
-            cv_contract = "r_exported_rolling"
+            cv_contract = "persisted_rolling"
         if len(cv_folds) != config.folds:
             raise ValueError("MC CV contract fold count does not match config.folds")
         lambdas = lambda_grid if lambda_grid is not None else make_lambda_grid(y, fit_mask, config)
@@ -303,10 +300,13 @@ def fit_matrix_completion(
             if fold.training.shape != tuple(fit_mask.shape):
                 raise ValueError("MC CV contract shape does not match the panel")
             training = runtime.tensor(fold.training, dtype=runtime.torch.bool)
+            score = runtime.tensor(fold.score, dtype=runtime.torch.bool)
             if bool((training & ~fit_mask).any()):
                 raise ValueError("MC CV contract trains on an unavailable panel cell")
+            if bool((score & ~fit_mask).any()):
+                raise ValueError("MC CV contract scores an unavailable panel cell")
             training_tensors.append(training)
-            score_tensors.append(runtime.tensor(fold.score, dtype=runtime.torch.bool))
+            score_tensors.append(score)
         training_batch = runtime.torch.stack(training_tensors)
         if config.batch_cv:
             initial_fixed = fit_fixed_effects_batched(
@@ -333,12 +333,8 @@ def fit_matrix_completion(
         score_sse: dict[float, float] = {penalty: 0.0 for penalty in lambdas}
         score_count: dict[float, int] = {penalty: 0 for penalty in lambdas}
         evaluated: list[float] = []
-        best = 1e20
-        selected_by_one_percent = lambdas[0]
-        break_check = False
-        break_count = 0
         cv_tolerance = max(config.tol, 1e-3)
-        for penalty_index, penalty in enumerate(lambdas):
+        for penalty in lambdas:
             if config.batch_cv:
                 fits = fit_nuclear_norm_completion_batched(
                     y,
@@ -374,20 +370,7 @@ def fit_matrix_completion(
                 scores[penalty].append(float(squared.mean().detach().cpu()))
                 score_sse[penalty] += float(squared.sum().detach().cpu())
                 score_count[penalty] += int(error.numel())
-            pooled = score_sse[penalty] / score_count[penalty]
             evaluated.append(penalty)
-            if (best - pooled) > 0.01 * best:
-                best = pooled
-                selected_by_one_percent = penalty
-                break_check = False
-                break_count = 0
-            elif penalty_index > 0 and selected_by_one_percent == lambdas[penalty_index - 1]:
-                break_check = True
-                break_count = 0
-            if break_check:
-                break_count += 1
-            if break_count == 3:
-                break
         means = {penalty: score_sse[penalty] / score_count[penalty] for penalty in evaluated}
         standard_errors = {
             penalty: float(np.std(values, ddof=1) / np.sqrt(len(values)))
@@ -411,12 +394,12 @@ def fit_matrix_completion(
     if config.inference == "jackknife":
         jackknife_draws, jackknife_se = _jackknife_refits(
             y,
+            observed,
             fit_mask,
             treated,
             target_index,
             selected_lambda,
             effect,
-            final_fit.fitted,
             config,
         )
         valid_repetitions = np.sum(np.isfinite(jackknife_draws), axis=0).astype(
@@ -426,18 +409,19 @@ def fit_matrix_completion(
             effect,
             jackknife_se,
             method="mc_unit_jackknife",
-            requested_repetitions=panel.y.shape[1],
+            requested_repetitions=jackknife_draws.shape[0],
             valid_repetitions=valid_repetitions,
             replicate_estimates=jackknife_draws,
         )
-        estimable_repetitions = panel.y.shape[1] - 1
+        estimable_repetitions = jackknife_draws.shape[0]
         minimum = max(
             2,
             int(np.ceil(estimable_repetitions * config.minimum_valid_fraction)),
         )
         assert panel.treated is not None
         treated_periods = panel.treated[:, target_index]
-        if np.any(valid_repetitions[treated_periods] < minimum):
+        estimable_treated_periods = treated_periods & observed[:, target_index].detach().cpu().numpy()
+        if np.any(valid_repetitions[estimable_treated_periods] < minimum):
             raise RuntimeError("too few converged MC jackknife refits")
     provenance = EstimatorProvenance(
         estimator="matrix_completion",

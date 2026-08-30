@@ -12,7 +12,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import io
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -21,7 +20,6 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "src"))
 
-from urban_intervention.config.project import ACTIVE_CITIES  # noqa: E402
 from urban_intervention.data.paths import STAGING_DIR  # noqa: E402
 
 FOLDER_NAME = "MIT_Summer_VIIRS"
@@ -49,7 +47,7 @@ def main() -> int:
         for attempt in range(20):
             try:
                 return request.execute()
-            except Exception as exc:  # noqa: BLE001
+            except Exception:  # noqa: BLE001
                 if attempt == 19:
                     raise
                 import time

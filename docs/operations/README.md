@@ -12,7 +12,6 @@
 
 处理网格与 1km donor 空间审计的冻结口径见
 [`../research/decisions/DDR-001_spatial_treatment_and_donor_exclusion.md`](../research/decisions/DDR-001_spatial_treatment_and_donor_exclusion.md)。
-被取代的阶段性文档统一归档于 [`../archive/`](../archive/README.md)。
 
 ## 支持的入口
 

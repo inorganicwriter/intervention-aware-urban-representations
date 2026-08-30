@@ -31,7 +31,12 @@ from .matching_io import (
     matching_result_frames,
 )
 from .matrix_completion import MatrixCompletionConfig, fit_matrix_completion
-from .provenance import estimator_source_files, fingerprint_files, python_environment
+from .provenance import (
+    estimator_code_fingerprint,
+    estimator_source_files,
+    fingerprint_files,
+    python_environment,
+)
 from .runtime import RuntimeConfig, TorchRuntime
 
 
@@ -41,6 +46,7 @@ def _runtime(payload: dict[str, Any], cache: dict[object, Any]) -> TorchRuntime:
         payload.get("dtype", "float64"),
         int(payload.get("chunk_size", 65_536)),
         float(payload.get("memory_fraction", 0.85)),
+        int(payload.get("seed", 20260723)),
     )
     if key not in cache:
         cache[key] = TorchRuntime(
@@ -51,6 +57,7 @@ def _runtime(payload: dict[str, Any], cache: dict[object, Any]) -> TorchRuntime:
                 allow_tf32=False,
                 chunk_size=int(key[2]),
                 memory_fraction=float(key[3]),
+                seed=int(key[4]),
             )
         )
     return cache[key]
@@ -148,6 +155,7 @@ def run_shadow_task(payload: dict[str, Any], cache: dict[object, Any]) -> dict[s
         manifest = {
             "schema": SHADOW_SCHEMA,
             "implementation_version": GPU_IMPLEMENTATION_VERSION,
+            "code_fingerprint": estimator_code_fingerprint("matching"),
             "estimator": estimator,
             "backend": "pytorch",
             "mode": "shadow",
@@ -246,6 +254,7 @@ def run_shadow_task(payload: dict[str, Any], cache: dict[object, Any]) -> dict[s
                     tol=float(payload.get("tol", 1e-5)),
                     bootstrap_mode=str(payload.get("gsc_bootstrap_mode", "none")),  # type: ignore[arg-type]
                     n_bootstrap=int(payload.get("gsc_n_bootstrap", 0)),
+                    seed=int(payload.get("seed", 20260723)),
                     inference_batch_size=int(payload.get("inference_batch_size", 16)),
                 ),
                 cv_folds=gsc_folds,
@@ -284,6 +293,7 @@ def run_shadow_task(payload: dict[str, Any], cache: dict[object, Any]) -> dict[s
                     tol=float(payload.get("tol", 1e-5)),
                     inference=str(payload.get("mc_inference", "none")),  # type: ignore[arg-type]
                     batch_inference=True,
+                    seed=int(payload.get("seed", 20260725)),
                     inference_batch_size=int(payload.get("inference_batch_size", 16)),
                 ),
                 cv_folds=mc_folds,
@@ -364,6 +374,7 @@ def run_shadow_task(payload: dict[str, Any], cache: dict[object, Any]) -> dict[s
         manifest = {
             "schema": SHADOW_SCHEMA,
             "implementation_version": GPU_IMPLEMENTATION_VERSION,
+            "code_fingerprint": estimator_code_fingerprint(estimator),
             "estimator": estimator,
             "backend": "pytorch",
             "mode": "shadow",

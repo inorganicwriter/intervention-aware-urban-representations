@@ -134,18 +134,21 @@ python -c "import pandas as pd; r='outputs/causal_labels/summary_presentation_sa
 
 ## 9. 所有样本的 pooled event-study
 
-入口按任务文件纳入所有可接纳样本，但不跨 outcome 量纲混合：每个结果族内分别汇总 Matching、GSC、MC。三种方法只比较共同支持：
+入口按任务文件纳入所有可接纳样本，但不跨 outcome 量纲混合：每个结果族内分别汇总 Matching、GSC、MC。事件研究诊断不再把图形机械截断为固定 3 年；它先保留每个 outcome 的全部可用 clean history，再按该 outcome 实际存在的方法计算最长共同重叠区间：
 
-- 月度：clean pre `-42:-7`；post `1,3,6,12,18,24`；window=3；t=0 仅 Matching 作为边界诊断正常绘制；
-- 年度：clean pre `-4:-1`；post `1,2,3`；window=1；
-- GSC/MC 拟合可使用更长年度 pre 历史，但共同图不会显示额外时期；
-- `-6:-1` 月度 anticipation 不参加平行趋势检验。
+- 月度：显示所有可用时期；window=3；`-6:-1` anticipation 用灰色背景标识但不参加 clean-pre 检验；t=0 若产物可用则正常绘制；
+- 年度：显示所有可用时期；window=1；t=0 作为开通边界诊断，不进入 clean-pre 检验；
+- Matching、GSC、MC 的拟合和正式标签规格不变；这里只改变诊断读取和图形支持；
+- 比较图使用各可用方法区间的交集，不用某一种方法的额外历史冒充跨方法证据；
+- `-6:-1` 月度 anticipation 不参加平行趋势检验，但不再从图形删除，因此曲线不会在处理边界前人为中断。月度 GSC/MC 的旧正式产物若未保存 t=0，不伪造该点，而是连接 `h=-1` 与 `h=1` 并保留开通月阴影。
 
 ```bash
 PYTHONUNBUFFERED=1 python scripts/causal_python/run_all_method_event_study.py --staging-root outputs/causal_labels/presentation_sample_estimator_paths_20260902 --tasks-file outputs/causal_labels/presentation_sample_tasks.csv --output-directory outputs/event_study_presentation_sample --latest-pre-periods 5 --observation-window 3 2>&1 | tee outputs/event_study_presentation_sample.log
 python -c "import pandas as pd; r='outputs/event_study_presentation_sample'; print(pd.read_csv(r+'/suite_status.csv').to_string(index=False)); print(pd.read_csv(r+'/sample_aggregation_coverage.csv').to_string(index=False)); assert pd.read_csv(r+'/suite_status.csv')['status'].eq('completed').all()"
-python -c "import pandas as pd; p='outputs/event_study_presentation_sample/gsc_mc_paths/effect_paths_with_pretrend.parquet'; x=pd.read_parquet(p); assert set(x.loc[x.frequency.eq('monthly'),'observation_window'])=={3}; assert set(x.loc[x.frequency.eq('annual'),'observation_window'])<= {1}; assert x.loc[x.frequency.eq('monthly'),'event_time'].isin(list(range(-42,-6))+[1,3,6,12,18,24]).all(); assert x.loc[x.frequency.eq('annual'),'event_time'].isin(list(range(-4,0))+[1,2,3]).all(); print(x.groupby(['outcome_family','method','frequency','observation_window'])['treatment_order'].nunique().to_string())"
+python -c "import pandas as pd; r='outputs/event_study_presentation_sample'; x=pd.read_parquet(r+'/gsc_mc_paths/effect_paths_with_pretrend.parquet'); assert set(x.loc[x.frequency.eq('monthly'),'observation_window'])=={3}; assert set(x.loc[x.frequency.eq('annual'),'observation_window'])<= {1}; print(pd.read_csv(r+'/event_time_support.csv').to_string(index=False)); print(pd.read_csv(r+'/event_time_coverage.csv').to_string(index=False))"
 ```
+
+`event_time_support.csv` 给出每种方法自身的最早/最晚时期及该 outcome 的共同区间；`event_time_coverage.csv` 给出每个事件期实际贡献的 treated grids。最长尾部时期若只剩很少网格，只能作为探索性趋势，不能与支持充分的中心时期同等解释。
 
 如果正式 estimator paths 被复制到单独目录，应把 `--staging-root` 指向那个目录；不能指向只含汇总 labels、没有 estimator manifest 的 release。
 

@@ -45,12 +45,6 @@ class PooledPathEventStudyResult:
     diagnostics: dict[str, Any]
 
 
-MONTHLY_CLEAN_PRE_SUPPORT = range(-42, -6)
-MONTHLY_POST_SUPPORT = frozenset({1, 3, 6, 12, 18, 24})
-ANNUAL_CLEAN_PRE_SUPPORT = range(-4, 0)
-ANNUAL_POST_SUPPORT = frozenset({1, 2, 3})
-
-
 def _read_manifest(path: Path) -> dict[str, str]:
     frame = pd.read_csv(path, encoding="utf-8-sig", dtype=str, keep_default_na=False)
     if set(frame.columns) != {"field", "value"} or frame["field"].duplicated().any():
@@ -226,22 +220,15 @@ def read_production_effect_paths(
 
 
 def restrict_to_common_event_support(paths: pd.DataFrame) -> pd.DataFrame:
-    """Keep the frozen event-time support shared by Matching, GSC and MC.
+    """Keep every valid event time available for cross-method comparison.
 
-    Estimators may use additional pre-periods for fitting.  Those extra rows
-    are intentionally excluded only from the cross-method event-study
-    comparison so different methods are never judged on different horizons.
+    Anticipation and opening periods remain visible as diagnostics.  The
+    pre-trend test excludes them separately, and the plotting layer selects
+    the longest interval shared by the methods available for each outcome.
     """
     event_time = pd.to_numeric(paths["event_time"], errors="coerce")
-    monthly = paths["frequency"].eq("monthly")
-    annual = paths["frequency"].eq("annual")
-    monthly_supported = event_time.isin(MONTHLY_CLEAN_PRE_SUPPORT) | event_time.isin(
-        MONTHLY_POST_SUPPORT
-    )
-    annual_supported = event_time.isin(ANNUAL_CLEAN_PRE_SUPPORT) | event_time.isin(
-        ANNUAL_POST_SUPPORT
-    )
-    return paths.loc[(monthly & monthly_supported) | (annual & annual_supported)].copy()
+    valid_frequency = paths["frequency"].isin({"monthly", "annual"})
+    return paths.loc[valid_frequency & np.isfinite(event_time)].copy()
 
 
 def aggregate_effect_paths(paths: pd.DataFrame) -> pd.DataFrame:
@@ -358,9 +345,15 @@ def select_pretrend_rows(
     """Select clean pre-period paths without assuming anticipation periods are -1..-6."""
     if min_pre_event_time is not None and min_pre_event_time >= 0:
         raise ValueError("min_pre_event_time must be negative")
+    event_time = pd.to_numeric(paths["event_time"], errors="coerce")
+    clean_pre = (
+        paths["frequency"].eq("monthly") & event_time.le(-7)
+    ) | (
+        paths["frequency"].eq("annual") & event_time.lt(0)
+    )
     pre = paths.loc[
         paths["label_available"].fillna(False)
-        & paths["event_time"].lt(0)
+        & clean_pre
         & np.isfinite(pd.to_numeric(paths["causal_response_label"], errors="coerce"))
     ].copy()
     if min_pre_event_time is not None:
@@ -626,7 +619,8 @@ def run_pooled_path_event_study(
         "requested_task_keys": len(task_keys) if task_keys is not None else None,
         "observation_window_monthly": observation_window,
         "common_support_policy": (
-            "monthly_pre_-42_-7_post_1_3_6_12_18_24;annual_pre_-4_-1_post_1_2_3"
+            "all_available_periods; monthly_anticipation_-6_-1_and_t0_visual_only; "
+            "longest_cross_method_overlap_selected_per_outcome_at_plot_time"
         ),
         "rows_excluded_outside_common_support": admitted_before_common_support - len(paths),
     }

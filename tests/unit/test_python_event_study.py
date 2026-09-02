@@ -65,6 +65,19 @@ def test_twfe_event_study_keeps_post_periods_and_clusters() -> None:
     assert result.diagnostics["pretrend_restrictions"] == 2
 
 
+def test_monthly_pretrend_cutoff_excludes_visible_anticipation_coefficients() -> None:
+    panel = _staggered_panel()
+    result = fit_twfe_event_study(
+        panel,
+        reference_event_time=-3,
+        pretrend_max_event_time=-3,
+        pretrend_window=3,
+    )
+
+    assert {-2, -1}.issubset(set(result.coefficients["event_time"]))
+    assert result.diagnostics["pretrend_restrictions"] == 0
+
+
 def test_monthly_post_window_preserves_t0_and_matches_formal_trailing_mean() -> None:
     frame = pd.DataFrame(
         {
@@ -164,3 +177,66 @@ def test_event_study_builder_requires_accepted_task_manifest(
     )
     assert set(panel["treatment_order"]) == {1}
     assert 0 in set(panel["event_time"])
+
+
+def test_matching_event_study_default_requests_full_available_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    controls = pd.DataFrame(
+        {
+            "treatment_order": [1],
+            "status": ["matched"],
+            "control_unit_key": ["alpha::c1"],
+        }
+    )
+    families = pd.DataFrame(
+        {
+            "treatment_order": [1],
+            "city_key": ["alpha"],
+            "grid_id": ["t1"],
+            "opening_month": ["2020-01"],
+            "outcome_family": ["population"],
+            "status": ["matched_labelled"],
+        }
+    )
+    task = tmp_path / "tasks" / "00001" / "population"
+    task.mkdir(parents=True)
+    labels = pd.DataFrame({"estimator_backend": ["r_reference"]})
+    labels.to_parquet(task / "labels.parquet", index=False)
+    manifest = {
+        "schema": "causal_response_labels",
+        "status": "matched_labelled",
+        "method": "frozen_matched_change_12m_baseline",
+        "outcome_family": "population",
+        "run_mode": "production",
+        "production_eligible": True,
+        "labels_sha256": event_study.file_sha256(task / "labels.parquet"),
+        "price_measure": "median",
+        "details": {"donor_scope": "same_city", "control_unit_key": "alpha::c1"},
+    }
+    (task / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    requested_bounds: list[tuple[int | None, int | None]] = []
+
+    def fake_pair(row, _family, _root, minimum, maximum):
+        requested_bounds.append((minimum, maximum))
+        return pd.DataFrame(
+            {
+                "period": [2010, 2020, 2025, 2010, 2020, 2025],
+                "outcome": [1.0, 2.0, 3.0, 1.0, 1.5, 2.0],
+                "role": ["treated"] * 3 + ["control"] * 3,
+                "source_city": ["alpha"] * 6,
+                "source_grid": ["t1"] * 3 + ["c1"] * 3,
+            }
+        )
+
+    monkeypatch.setattr(event_study, "_annual_pair_panel", fake_pair)
+    panel, _ = event_study.build_matching_event_study_panel(
+        "population",
+        root=tmp_path,
+        control_queue=controls,
+        family_queue=families,
+        task_root=tmp_path / "tasks",
+    )
+
+    assert requested_bounds == [(None, None)]
+    assert set(panel["event_time"]) == {-10, 0, 5}

@@ -27,7 +27,6 @@ FAMILY_TITLES = {
 }
 METHOD_TITLES = {"matching": "Matching TWFE", "gsc": "GSC", "mc": "Matrix completion"}
 METHOD_COLORS = {"matching": "#3B6C8E", "gsc": "#C47A45", "mc": "#668F80"}
-MONTHLY_LABEL_HORIZONS = frozenset({1, 3, 6, 12, 18, 24})
 
 
 def _method_family(value: object) -> str | None:
@@ -43,7 +42,10 @@ def _segments(frame: pd.DataFrame) -> list[pd.DataFrame]:
     ordered = frame.sort_values("event_time").reset_index(drop=True)
     if ordered.empty:
         return []
-    return [part for _, part in ordered.groupby(ordered["event_time"].diff().ne(1).cumsum())]
+    difference = ordered["event_time"].diff()
+    bridges_omitted_t0 = ordered["event_time"].eq(1) & ordered["event_time"].shift().eq(-1)
+    breaks = difference.ne(1) & ~bridges_omitted_t0
+    return [part for _, part in ordered.groupby(breaks.cumsum())]
 
 
 def _format_p(value: object) -> str:
@@ -55,9 +57,6 @@ def _style_axis(axis: Any, *, family: str) -> None:
     monthly = family in {"housing", "viirs"}
     if monthly:
         axis.axvspan(-6.5, -0.5, color="#D9D9D9", alpha=0.18, linewidth=0)
-        axis.set_xlim(-42.5, 24.5)
-    else:
-        axis.set_xlim(-4.5, 3.5)
     axis.axvspan(-0.5, 0.5, color="#E7B45A", alpha=0.16, linewidth=0)
     axis.axhline(0, color="#666666", linewidth=0.8, linestyle="--")
     axis.axvline(0, color="#333333", linewidth=0.9)
@@ -117,9 +116,6 @@ def _matching_frame(result: EventStudyResult, *, family: str) -> pd.DataFrame:
             "confidence_upper_city": "upper",
         }
     )
-    if family in {"housing", "viirs"}:
-        event_time = pd.to_numeric(frame["event_time"], errors="coerce")
-        frame = frame.loc[event_time.le(0) | event_time.isin(MONTHLY_LABEL_HORIZONS)].copy()
     reference = int(result.diagnostics["reference_event_time"])
     return pd.concat(
         [
@@ -173,6 +169,202 @@ def _save_bundle(figure: Any, base: Path) -> list[Path]:
     return paths
 
 
+def _family_method_supports(
+    matching_results: Mapping[str, EventStudyResult],
+    pooled: PooledPathEventStudyResult | None,
+    family: str,
+    *,
+    donor_scope: str,
+) -> dict[str, set[int]]:
+    """Return observed event times for each available estimator family."""
+    supports: dict[str, set[int]] = {}
+    matching = matching_results.get(family)
+    if matching is not None:
+        matching_frame = _matching_frame(matching, family=family)
+        finite = np.isfinite(pd.to_numeric(matching_frame["estimate"], errors="coerce"))
+        supports["matching"] = set(
+            pd.to_numeric(matching_frame.loc[finite, "event_time"], errors="raise")
+            .astype(int)
+            .tolist()
+        )
+    if pooled is None or pooled.series.empty:
+        return supports
+    outcome = PRIMARY_OUTCOMES[family]
+    candidates = pooled.series.loc[
+        pooled.series["outcome_family"].eq(family)
+        & pooled.series["outcome"].eq(outcome)
+        & pooled.series["donor_scope"].eq(donor_scope)
+    ].copy()
+    candidates["method_family"] = candidates["method"].map(_method_family)
+    for method_family, part in candidates.groupby("method_family", dropna=True, sort=True):
+        finite = np.isfinite(pd.to_numeric(part["mean_label"], errors="coerce"))
+        supports[str(method_family)] = set(
+            pd.to_numeric(part.loc[finite, "event_time"], errors="raise").astype(int).tolist()
+        )
+    return supports
+
+
+def _longest_common_bounds(supports: Mapping[str, set[int]]) -> dict[str, int | None]:
+    """Find the longest pre/post interval covered by every available method."""
+    result: dict[str, int | None] = {
+        "common_pre_min": None,
+        "common_pre_max": None,
+        "common_post_min": None,
+        "common_post_max": None,
+    }
+    pre = [sorted(value for value in times if value < 0) for times in supports.values()]
+    if pre and all(pre):
+        lower = max(values[0] for values in pre)
+        upper = min(values[-1] for values in pre)
+        if lower <= upper:
+            result["common_pre_min"] = lower
+            result["common_pre_max"] = upper
+    post = [sorted(value for value in times if value > 0) for times in supports.values()]
+    if post and all(post):
+        lower = max(values[0] for values in post)
+        upper = min(values[-1] for values in post)
+        if lower <= upper:
+            result["common_post_min"] = lower
+            result["common_post_max"] = upper
+    return result
+
+
+def event_study_support_table(
+    matching_results: Mapping[str, EventStudyResult],
+    pooled: PooledPathEventStudyResult | None,
+    *,
+    donor_scope: str = "same_city",
+) -> pd.DataFrame:
+    """Describe method-specific and longest common event-time support."""
+    rows: list[dict[str, object]] = []
+    for family in FAMILIES:
+        supports = _family_method_supports(
+            matching_results, pooled, family, donor_scope=donor_scope
+        )
+        common = _longest_common_bounds(supports)
+        for method in ("matching", "gsc", "mc"):
+            times = supports.get(method, set())
+            pre = [value for value in times if value < 0]
+            post = [value for value in times if value > 0]
+            rows.append(
+                {
+                    "outcome_family": family,
+                    "method": method,
+                    "available": bool(times),
+                    "method_pre_min": min(pre) if pre else None,
+                    "method_pre_max": max(pre) if pre else None,
+                    "method_post_min": min(post) if post else None,
+                    "method_post_max": max(post) if post else None,
+                    "t0_available": 0 in times,
+                    **common,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def event_study_coverage_table(
+    matching_results: Mapping[str, EventStudyResult],
+    pooled: PooledPathEventStudyResult | None,
+    *,
+    donor_scope: str = "same_city",
+) -> pd.DataFrame:
+    """Report changing treated-grid support at every plotted event time."""
+    rows: list[dict[str, object]] = []
+    support = event_study_support_table(
+        matching_results, pooled, donor_scope=donor_scope
+    )
+    for family, result in matching_results.items():
+        frame = _matching_frame(result, family=family)
+        counts = (
+            result.coefficients.set_index("event_time")["n_treated"].to_dict()
+            if "n_treated" in result.coefficients
+            else {}
+        )
+        reference = int(result.diagnostics["reference_event_time"])
+        for event_time in sorted(set(frame["event_time"].astype(int))):
+            rows.append(
+                {
+                    "outcome_family": family,
+                    "method": "matching",
+                    "event_time": event_time,
+                    "treated_grids": int(
+                        counts.get(event_time, result.diagnostics["reference_treated"])
+                        if event_time == reference
+                        else counts.get(event_time, 0)
+                    ),
+                }
+            )
+    if pooled is not None and not pooled.paths.empty:
+        paths = pooled.paths.loc[
+            pooled.paths["donor_scope"].eq(donor_scope)
+            & pooled.paths["label_available"].fillna(False)
+        ].copy()
+        paths["method"] = paths["method"].map(_method_family)
+        paths = paths.loc[paths["method"].notna()]
+        grouped = (
+            paths.groupby(["outcome_family", "method", "event_time"], sort=True)
+            ["treatment_order"]
+            .nunique()
+        )
+        for (family, method, event_time), count in grouped.items():
+            rows.append(
+                {
+                    "outcome_family": str(family),
+                    "method": str(method),
+                    "event_time": int(event_time),
+                    "treated_grids": int(count),
+                }
+            )
+    result = pd.DataFrame(rows)
+    if result.empty:
+        return pd.DataFrame(
+            columns=[
+                "outcome_family",
+                "method",
+                "event_time",
+                "treated_grids",
+                "included_in_comparison_figure",
+            ]
+        )
+    bounds = support.drop_duplicates("outcome_family").set_index("outcome_family")
+
+    def included(row: pd.Series) -> bool:
+        family_bounds = bounds.loc[str(row["outcome_family"])]
+        event_time = int(row["event_time"])
+        if event_time == 0:
+            return True
+        side = "pre" if event_time < 0 else "post"
+        lower = family_bounds[f"common_{side}_min"]
+        upper = family_bounds[f"common_{side}_max"]
+        return bool(pd.notna(lower) and pd.notna(upper) and lower <= event_time <= upper)
+
+    result["included_in_comparison_figure"] = result.apply(included, axis=1)
+    return result.sort_values(["outcome_family", "method", "event_time"]).reset_index(
+        drop=True
+    )
+
+
+def _restrict_to_bounds(
+    frame: pd.DataFrame,
+    bounds: Mapping[str, int | None],
+    *,
+    keep_t0: bool,
+) -> pd.DataFrame:
+    event_time = pd.to_numeric(frame["event_time"], errors="coerce")
+    selected = pd.Series(False, index=frame.index)
+    pre_min = bounds["common_pre_min"]
+    pre_max = bounds["common_pre_max"]
+    if pre_min is not None and pre_max is not None:
+        selected |= event_time.between(pre_min, pre_max)
+    post_min = bounds["common_post_min"]
+    post_max = bounds["common_post_max"]
+    if post_min is not None and post_max is not None:
+        selected |= event_time.between(post_min, post_max)
+    if keep_t0:
+        selected |= event_time.eq(0)
+    return frame.loc[selected].copy()
+
+
 def write_pooled_outcome_event_studies(
     matching_results: Mapping[str, EventStudyResult],
     pooled: PooledPathEventStudyResult | None,
@@ -197,8 +389,25 @@ def write_pooled_outcome_event_studies(
         }
     )
     written: list[Path] = []
+    support_table = event_study_support_table(
+        matching_results, pooled, donor_scope=donor_scope
+    )
     for family in FAMILIES:
         outcome = PRIMARY_OUTCOMES[family]
+        family_support = support_table.loc[support_table["outcome_family"].eq(family)]
+        common = {
+            column: (
+                None
+                if family_support.empty or pd.isna(family_support[column].iloc[0])
+                else int(family_support[column].iloc[0])
+            )
+            for column in (
+                "common_pre_min",
+                "common_pre_max",
+                "common_post_min",
+                "common_post_max",
+            )
+        }
         figure, axes = plt.subplots(1, 3, figsize=(7.2, 3.05), sharey=True)
         limits: list[tuple[float, float]] = []
         matching = matching_results.get(family)
@@ -217,7 +426,9 @@ def write_pooled_outcome_event_studies(
         else:
             limit = _draw_path(
                 axis,
-                _matching_frame(matching, family=family),
+                _restrict_to_bounds(
+                    _matching_frame(matching, family=family), common, keep_t0=True
+                ),
                 color=METHOD_COLORS["matching"],
             )
             if limit:
@@ -266,7 +477,7 @@ def write_pooled_outcome_event_studies(
             for method, part in candidates.groupby("method", sort=True):
                 limit = _draw_path(
                     axis,
-                    _pooled_frame(part),
+                    _restrict_to_bounds(_pooled_frame(part), common, keep_t0=True),
                     color=METHOD_COLORS[method_family],
                     label=str(method) if candidates["method"].nunique() > 1 else None,
                 )
@@ -297,6 +508,14 @@ def write_pooled_outcome_event_studies(
             span = max(upper - lower, 1e-9)
             for axis in axes:
                 axis.set_ylim(lower - 0.08 * span, upper + 0.08 * span)
+        x_values = [0]
+        for key in ("common_pre_min", "common_pre_max", "common_post_min", "common_post_max"):
+            if common[key] is not None:
+                x_values.append(int(common[key]))
+        x_min, x_max = min(x_values), max(x_values)
+        padding = max((x_max - x_min) * 0.02, 0.5)
+        for axis in axes:
+            axis.set_xlim(x_min - padding, x_max + padding)
         axes[0].set_ylabel("Causal response (transformed outcome scale)")
         figure.suptitle(f"{FAMILY_TITLES[family]} pooled event study", fontsize=11, y=0.97)
         figure.text(
@@ -304,7 +523,9 @@ def write_pooled_outcome_event_studies(
             0.035,
             "For monthly outcomes, gray marks excluded anticipation months; amber marks "
             "the opening period (t=0, shown but excluded from the pre-trend test).\n"
-            "Error bars are 95% city-cluster intervals when available.",
+            "Each outcome uses its longest overlap across available methods; anticipation is "
+            "shown but excluded from the clean-lead test. Error bars are 95% city-cluster "
+            "intervals when available.",
             ha="center",
             va="bottom",
             fontsize=7,

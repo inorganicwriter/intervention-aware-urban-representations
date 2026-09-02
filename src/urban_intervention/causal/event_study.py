@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -24,6 +25,7 @@ from urban_intervention.data.paths import (
     OUTCOME_FAMILY_QUEUE,
     OUTPUT_CAUSAL_TASKS_DIR,
     PROJECT_ROOT,
+    VIIRS_MONTHLY_DIR,
 )
 
 
@@ -277,6 +279,7 @@ def fit_twfe_event_study(
     grid_cluster_column: str = "grid_cluster",
     city_cluster_column: str = "city_cluster",
     pretrend_window: int | None = 5,
+    pretrend_max_event_time: int | None = None,
     post_observation_window: int = 1,
 ) -> EventStudyResult:
     """Fit one matched-pair TWFE event study and two clustered VCOVs."""
@@ -393,6 +396,10 @@ def fit_twfe_event_study(
     if pretrend_window is not None and pretrend_window < 2:
         raise ValueError("pretrend_window must include the reference and at least one lead")
     pre_mask = active_event_times < 0
+    if pretrend_max_event_time is not None:
+        if pretrend_max_event_time >= 0:
+            raise ValueError("pretrend_max_event_time must be negative")
+        pre_mask &= active_event_times <= pretrend_max_event_time
     if pretrend_window is not None:
         pre_mask &= active_event_times >= reference_event_time - (pretrend_window - 1)
     pre_positions = np.flatnonzero(pre_mask)
@@ -422,6 +429,11 @@ def fit_twfe_event_study(
                 ].nunique()
             ),
             "pretrend_window": pretrend_window if pretrend_window is not None else "all",
+            "pretrend_max_event_time": (
+                pretrend_max_event_time
+                if pretrend_max_event_time is not None
+                else "last_negative_period"
+            ),
             "pretrend_restrictions": int(pre_positions.size),
             "post_observation_window": post_observation_window,
             "variance": "CRV1",
@@ -429,25 +441,50 @@ def fit_twfe_event_study(
     )
 
 
+@lru_cache(maxsize=64)
+def _available_viirs_months(root_value: str, city: str) -> tuple[pd.Timestamp, ...]:
+    """Discover the complete monthly VIIRS calendar without touching estimator code."""
+    root = Path(root_value)
+    base = root / VIIRS_MONTHLY_DIR.relative_to(PROJECT_ROOT) / f"city_key={city}"
+    result: list[pd.Timestamp] = []
+    for path in sorted(base.glob("year=*/month=*/part.parquet")):
+        try:
+            year = int(path.parents[1].name.split("=", 1)[1])
+            month = int(path.parent.name.split("=", 1)[1])
+            result.append(pd.Timestamp(year=year, month=month, day=1))
+        except (IndexError, ValueError):
+            continue
+    return tuple(result)
+
+
 def _monthly_pair_panel(
     row: pd.Series,
     family: str,
     root: Path,
-    min_pre: int,
-    max_post: int,
+    min_pre: int | None,
+    max_post: int | None,
     price_measure: str,
 ) -> pd.DataFrame:
     opening = pd.Timestamp(str(row["opening_month"]) + "-01")
-    periods = pd.date_range(
-        opening + pd.DateOffset(months=min_pre),
-        opening + pd.DateOffset(months=max_post),
-        freq="MS",
+    periods = (
+        pd.date_range(
+            opening + pd.DateOffset(months=min_pre),
+            opening + pd.DateOffset(months=max_post),
+            freq="MS",
+        )
+        if min_pre is not None and max_post is not None
+        else None
     )
 
     def reader(city: str) -> pd.DataFrame:
         if family == "housing":
             return read_monthly_housing(root, city, price_measure)
-        return read_monthly_viirs(root, city, periods)
+        selected_periods = (
+            periods
+            if periods is not None
+            else pd.DatetimeIndex(_available_viirs_months(str(root.resolve()), city))
+        )
+        return read_monthly_viirs(root, city, selected_periods)
 
     outcome = "housing_log_price" if family == "housing" else "viirs_avg_asinh"
     parts: list[pd.DataFrame] = []
@@ -498,7 +535,11 @@ def _apply_monthly_post_window(frame: pd.DataFrame, window: int) -> pd.DataFrame
 
 
 def _annual_pair_panel(
-    row: pd.Series, family: str, root: Path, min_pre: int, max_post: int
+    row: pd.Series,
+    family: str,
+    root: Path,
+    min_pre: int | None,
+    max_post: int | None,
 ) -> pd.DataFrame:
     opening_year = int(str(row["opening_month"])[:4])
     outcome = "poi_count_log" if family == "poi" else "population_log"
@@ -513,7 +554,10 @@ def _annual_pair_panel(
         part = part.loc[part["grid_id"].eq(grid), ["year", outcome]].rename(
             columns={"year": "period", outcome: "outcome"}
         )
-        part = part.loc[part["period"].between(opening_year + min_pre, opening_year + max_post)]
+        if min_pre is not None:
+            part = part.loc[part["period"].ge(opening_year + min_pre)]
+        if max_post is not None:
+            part = part.loc[part["period"].le(opening_year + max_post)]
         part["role"] = role
         part["source_city"] = city
         part["source_grid"] = grid
@@ -542,8 +586,8 @@ def build_matching_event_study_panel(
     annual = outcome_family in {"poi", "population"}
     if outcome_family not in {"housing", "viirs", "poi", "population"}:
         raise ValueError("unsupported event-study family")
-    minimum = (-4 if annual else -42) if min_pre is None else min_pre
-    maximum = (3 if annual else 24) if max_post is None else max_post
+    minimum = min_pre
+    maximum = max_post
     reference = -1 if annual else -7
     if not 1 <= observation_window <= 6:
         raise ValueError("observation_window must be between 1 and 6")
@@ -660,9 +704,12 @@ def build_matching_event_study_panel(
             part["event_time"] = (
                 (values.dt.year - opening_year) * 12 + values.dt.month - opening_month
             )
-        part = part.loc[
-            part["event_time"].between(minimum, reference) | part["event_time"].between(0, maximum)
-        ].copy()
+        selected = pd.Series(True, index=part.index)
+        if minimum is not None:
+            selected &= part["event_time"].ge(minimum)
+        if maximum is not None:
+            selected &= part["event_time"].le(maximum)
+        part = part.loc[selected].copy()
         if not annual:
             part = _apply_monthly_post_window(part, observation_window)
         order = int(record["treatment_order"])
@@ -709,6 +756,7 @@ def run_matching_event_study(
         panel,
         reference_event_time=reference,
         pretrend_window=pretrend_window,
+        pretrend_max_event_time=reference,
         post_observation_window=(
             1 if outcome_family in {"poi", "population"} else observation_window
         ),

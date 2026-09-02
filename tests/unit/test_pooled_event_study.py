@@ -9,6 +9,8 @@ from summarize_causal_labels import classify_failure
 
 from urban_intervention.causal.diagnostic_figures import (
     _matching_frame,
+    event_study_coverage_table,
+    event_study_support_table,
     write_pooled_outcome_event_studies,
 )
 from urban_intervention.causal.event_study import EventStudyResult
@@ -209,7 +211,7 @@ def test_effect_path_reader_rejects_a_different_monthly_window(tmp_path) -> None
     assert paths.attrs["admission_counts"]["observation_window_filter_mismatch"] == 1
 
 
-def test_common_event_support_aligns_monthly_and_annual_methods() -> None:
+def test_event_support_keeps_full_history_including_visual_diagnostic_periods() -> None:
     frame = pd.DataFrame(
         {
             "frequency": ["monthly"] * 7 + ["annual"] * 6,
@@ -221,8 +223,21 @@ def test_common_event_support_aligns_monthly_and_annual_methods() -> None:
 
     monthly = supported.loc[supported["frequency"].eq("monthly"), "event_time"].tolist()
     annual = supported.loc[supported["frequency"].eq("annual"), "event_time"].tolist()
-    assert monthly == [-42, -7, 1, 24]
-    assert annual == [-4, -1, 1]
+    assert monthly == [-43, -42, -7, -6, 1, 2, 24]
+    assert annual == [-5, -4, -1, 0, 1, 4]
+
+
+def test_monthly_pretrend_excludes_anticipation_periods() -> None:
+    paths = _paths()
+    anticipation = paths.loc[paths["event_time"].eq(-7)].copy()
+    anticipation["event_time"] = -1
+    anticipation["causal_response_label"] = 100.0
+    paths = pd.concat([paths, anticipation], ignore_index=True)
+
+    selected = select_pretrend_rows(paths, latest_n=5)
+
+    assert -1 not in set(selected["event_time"])
+    assert selected["causal_response_label"].abs().max() < 100.0
 
 
 def test_task_not_terminal_is_an_execution_state_failure() -> None:
@@ -243,7 +258,7 @@ def test_four_primary_outcome_event_study_bundles_are_written(tmp_path) -> None:
     assert all(path.is_file() for path in written)
 
 
-def test_monthly_matching_figure_uses_formal_label_horizons_and_keeps_t0() -> None:
+def test_monthly_matching_figure_keeps_all_available_periods_and_t0() -> None:
     event_times = [-9, -8, -7, 0, 1, 2, 3, 6, 12, 18, 24]
     coefficients = pd.DataFrame(
         {
@@ -265,6 +280,7 @@ def test_monthly_matching_figure_uses_formal_label_horizons_and_keeps_t0() -> No
 
     assert set(plotted.loc[plotted["event_time"].gt(0), "event_time"]) == {
         1,
+        2,
         3,
         6,
         12,
@@ -272,4 +288,49 @@ def test_monthly_matching_figure_uses_formal_label_horizons_and_keeps_t0() -> No
         24,
     }
     assert 0 in set(plotted["event_time"])
-    assert 2 not in set(plotted["event_time"])
+
+
+def test_support_table_uses_longest_overlap_across_available_methods() -> None:
+    matching_times = [-12, -11, -10, -9, -8, -7, 0, 1, 2, 3, 4]
+    coefficients = pd.DataFrame(
+        {
+            "event_time": matching_times,
+            "estimate": np.zeros(len(matching_times)),
+            "confidence_lower_city": np.full(len(matching_times), -0.1),
+            "confidence_upper_city": np.full(len(matching_times), 0.1),
+        }
+    )
+    empty_test = pd.DataFrame([{"p_value": np.nan}])
+    matching = EventStudyResult(
+        coefficients,
+        empty_test,
+        empty_test,
+        {"reference_event_time": -7, "reference_treated": 1},
+    )
+    paths = _paths()
+    pooled = PooledPathEventStudyResult(
+        paths,
+        aggregate_effect_paths(paths),
+        pretrend_tests(paths, cluster="grid", latest_n=2),
+        pretrend_tests(paths, cluster="city", latest_n=2),
+        {},
+    )
+
+    support = event_study_support_table({"viirs": matching}, pooled)
+    row = support.loc[
+        support["outcome_family"].eq("viirs") & support["method"].eq("matching")
+    ].iloc[0]
+    assert row["method_pre_min"] == -12
+    assert row["common_pre_min"] == -9
+    assert row["common_pre_max"] == -7
+    assert row["common_post_min"] == 1
+    assert row["common_post_max"] == 2
+
+    coverage = event_study_coverage_table({"viirs": matching}, pooled)
+    matching_coverage = coverage.loc[
+        coverage["outcome_family"].eq("viirs") & coverage["method"].eq("matching")
+    ].set_index("event_time")
+    assert not bool(matching_coverage.loc[-12, "included_in_comparison_figure"])
+    assert bool(matching_coverage.loc[-9, "included_in_comparison_figure"])
+    assert bool(matching_coverage.loc[0, "included_in_comparison_figure"])
+    assert not bool(matching_coverage.loc[4, "included_in_comparison_figure"])

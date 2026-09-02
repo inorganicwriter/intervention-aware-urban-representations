@@ -97,17 +97,20 @@ gap[i, k, t] = Y_observed[i, k, t] - Y_hat_0[i, k, t]
 4. 由于同一城市的网格共享城市冲击，再把处理前 gap 先聚合到城市均值，在城市之间做同样的 one-sample t 检验；
 5. 主 Python 实现默认使用每个网格最近的 5 个 clean pre-period，不把 anticipation 期误当作 `-1:-6` 的清洁趋势。
 
-三种方法的跨方法图只使用冻结的共同事件时间支持：月度 clean pre 为
-`-42:-7`、post 为 `1,3,6,12,18,24`；年度 clean pre 为 `-4:-1`、post
-为 `1,2,3`。GSC/MC 仍可在拟合时使用更早的年度历史，但这些额外时期不会进入
-Matching/GSC/MC 横向比较。月度 Matching 与 GSC/MC 必须使用相同的
+三种方法的跨方法图按 outcome 动态选择最长共同事件时间支持。图形保留所有可用
+事件期，然后分别取 Matching、GSC、MC 中实际可用方法的最早/最晚区间交集。
+月度 `h=-6:-1` anticipation 和 `h=0` 开通边界可以显示，但只有 `h<=-7` 进入
+clean-pre 检验；年度 `h=0` 可以显示但不进入检验。
+因此早期 history 不再被固定的 3 年展示窗口人为删除，但某一种方法独有的额外时期也
+不会冒充跨方法比较。月度 Matching 与 GSC/MC 必须使用相同的
 `observation_window`（主规格为 3）；年度窗口固定为 1。读取器对缺失、非法或不同
 窗口的 estimator manifest 采用 fail-closed。
 
 “pooled”表示把任务清单内所有被各方法接纳的 treated grids，在**同一结果族、同一
 方法、同一 donor scope 和同一窗口**内聚合。housing、VIIRS、POI、population 的
 量纲和频率不同，不把四类 outcome 强行混成一个系数。入口同时写出
-`sample_aggregation_coverage.csv`，用于核对每个结果族和方法实际进入聚合的网格数。
+`sample_aggregation_coverage.csv`、`event_time_support.csv` 和
+`event_time_coverage.csv`，用于核对每个结果族、方法和事件期实际进入聚合的网格数。
 
 输出目录由运行参数决定，通常包含：
 

@@ -13,6 +13,8 @@ CODE_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(CODE_ROOT / "src"))
 
 from urban_intervention.causal.diagnostic_figures import (  # noqa: E402
+    event_study_coverage_table,
+    event_study_support_table,
     write_pooled_outcome_event_studies,
 )
 from urban_intervention.causal.event_study import run_matching_event_study  # noqa: E402
@@ -197,6 +199,16 @@ def main() -> int:
     args.output_directory.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(coverage_rows).to_csv(
         args.output_directory / "sample_aggregation_coverage.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+    event_study_support_table(matching_results, path_result).to_csv(
+        args.output_directory / "event_time_support.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+    event_study_coverage_table(matching_results, path_result).to_csv(
+        args.output_directory / "event_time_coverage.csv",
         index=False,
         encoding="utf-8-sig",
     )

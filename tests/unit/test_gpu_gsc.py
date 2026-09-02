@@ -7,11 +7,13 @@ from urban_intervention.causal.gpu.gsc import (
     GSCConfig,
     _fect_bootstrap_fit_out,
     _max_identifiable_rank,
+    _placebo_target_errors,
     _residual_vcov,
     estimate_gsc_inference_batch_bytes,
     fit_gsc,
     make_all_unit_cv_masks,
 )
+from urban_intervention.causal.gpu.linalg import as_panel_tensors
 from urban_intervention.causal.gpu.runtime import RuntimeConfig, TorchRuntime
 
 
@@ -76,6 +78,37 @@ def test_fect_bootstrap_fit_out_zeroes_unobserved_cells() -> None:
         _fect_bootstrap_fit_out(fitted, observed),
         np.array([[1.0, 0.0], [0.0, 4.0]]),
     )
+
+
+def test_placebo_target_error_pool_masks_untreated_periods_like_fect() -> None:
+    panel = _synthetic_panel()
+    runtime = TorchRuntime(RuntimeConfig(device="cpu", seed=41))
+    y, observed, treated = as_panel_tensors(panel, runtime)
+    controls = runtime.torch.tensor(
+        list(range(1, y.shape[1])),
+        dtype=runtime.torch.long,
+        device=runtime.device,
+    )
+    errors, _ = _placebo_target_errors(
+        y,
+        observed,
+        treated[:, :1],
+        controls,
+        1,
+        GSCConfig(
+            fixed_rank=1,
+            ranks=(1,),
+            folds=2,
+            seed=41,
+            max_iter=100,
+            bootstrap_mode="reference_ar",
+            n_bootstrap=3,
+        ),
+        np.random.default_rng(41),
+    )
+
+    assert np.isnan(errors[:, :12]).all()
+    assert np.isfinite(errors[:, 12:]).all()
 
 
 def test_cv_masks_preserve_training_support_and_are_reproducible() -> None:

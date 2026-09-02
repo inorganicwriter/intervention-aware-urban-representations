@@ -45,14 +45,30 @@ rownames(single_fit$est.att) <- as.character(one_target$event_time)
 # real gsynth object so the fixture exercises the production contract.
 class(single_fit) <- "gsynth"
 with_uncertainty <- attach_single_target_gsc_uncertainty(
+  one_target, single_fit, nboots = 200L, effect_scale = 2,
+  normalization_scale = 4
+)
+stopifnot(
+  all(with_uncertainty$standard_error == 0.125),
+  all(abs(
+    with_uncertainty$confidence_lower -
+      (with_uncertainty$causal_response_label - stats::qnorm(0.975) * 0.125)
+  ) < 1e-12),
+  all(abs(
+    with_uncertainty$confidence_upper -
+      (with_uncertainty$causal_response_label + stats::qnorm(0.975) * 0.125)
+  ) < 1e-12),
+  all(with_uncertainty$bootstrap_repetitions == 200L),
+  all(with_uncertainty$uncertainty_source == "gsynth_parametric_bootstrap")
+)
+unscaled_uncertainty <- attach_single_target_gsc_uncertainty(
   one_target, single_fit, nboots = 200L, effect_scale = 2
 )
 stopifnot(
-  all(with_uncertainty$standard_error == 0.50),
-  all(with_uncertainty$confidence_lower ==
+  all(unscaled_uncertainty$standard_error == 0.50),
+  all(unscaled_uncertainty$confidence_lower ==
       single_fit$est.att[, "CI.lower"] * 2),
-  all(with_uncertainty$bootstrap_repetitions == 200L),
-  all(with_uncertainty$uncertainty_source == "gsynth_parametric_bootstrap")
+  all(unscaled_uncertainty$p_value == single_fit$est.att[, "p.value"])
 )
 
 stopifnot(identical(

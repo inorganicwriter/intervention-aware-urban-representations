@@ -6,6 +6,9 @@
 
 ## 1. 服务器建议规格
 
+当前生产服务器的实测资源、容器配额、NFS 挂载和并发测试基线见
+[`server_runtime_profile.md`](server_runtime_profile.md)。
+
 | 资源 | 建议 | 说明 |
 |---|---|---|
 | CPU | ≥ 32 核 | 数据读取、面板构建与 VIIRS 缓存校验 |

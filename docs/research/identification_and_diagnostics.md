@@ -35,13 +35,13 @@ Y_it = α_i + γ_t + Σ_{k∈K, k≠k0} β_k [treated_i × 1(event_time=k)] + ε
 - `α_i` 是配对中每个网格的固定效应；`γ_t` 是日历期固定效应；
 - 控制网格始终作为未处理单元，事件期虚拟变量只作用于 treated 单元；
 - `k0=-7`（月度）或 `k0=-1`（年度）是最后一个清洁处理前参考期；
-- 重点检验清洁处理前 lead 的联合原假设：
+- 主检验使用最近 5 个清洁处理前期，其中最后一期为参考期，因此联合检验包含最多 4 个 lead。完整清洁处理前窗口保留在图形和系数表中。该低维检验避免约束数超过城市聚类自由度。联合原假设为：
 
 ```text
 H0: β_k = 0  for every clean pre-treatment k < 0, k ≠ k0
 ```
 
-结果判读同时查看：每个 `β_k` 的点估计与置信区间、所有 clean leads 的联合 Wald/F 检验、城市聚类和网格聚类两套结果，以及处理前支持数量。
+结果判读同时查看：每个 `β_k` 的点估计与置信区间、最近 5 个 clean periods 的联合 Wald/F 检验、城市聚类和网格聚类两套结果，以及处理前支持数量。完整 clean lead 路径用于检查更早期的漂移，不在聚类自由度不足时强行构造高维联合 p 值。
 
 ### 3.1 聚类协方差与有限样本修正
 
@@ -89,13 +89,25 @@ GSC/MC 保留每个任务的处理前反事实 gap：
 gap[i, k, t] = Y_observed[i, k, t] - Y_hat_0[i, k, t]
 ```
 
-项目把这些 gap 对齐到事件时间，再按 `frequency × outcome_family × outcome × method × donor_scope` 分开聚合：
+项目把这些 gap 对齐到事件时间，再按 `frequency × outcome_family × outcome × method × donor_scope × observation_window` 分开聚合。不同 observation window 的历史产物不会混在同一条曲线中：
 
 1. 每个事件期先报告网格间均值、标准差、样本量和 95% 区间；
 2. 若任务提供标准误，聚合方差包含 `mean(SE_i²)/n` 的 within-task 成分和网格间方差成分；
 3. 处理前联合检验先在每个网格内对选定 clean pre-period 求均值，再在网格层面做 one-sample t 检验；
 4. 由于同一城市的网格共享城市冲击，再把处理前 gap 先聚合到城市均值，在城市之间做同样的 one-sample t 检验；
 5. 主 Python 实现默认使用每个网格最近的 5 个 clean pre-period，不把 anticipation 期误当作 `-1:-6` 的清洁趋势。
+
+三种方法的跨方法图只使用冻结的共同事件时间支持：月度 clean pre 为
+`-42:-7`、post 为 `1,3,6,12,18,24`；年度 clean pre 为 `-4:-1`、post
+为 `1,2,3`。GSC/MC 仍可在拟合时使用更早的年度历史，但这些额外时期不会进入
+Matching/GSC/MC 横向比较。月度 Matching 与 GSC/MC 必须使用相同的
+`observation_window`（主规格为 3）；年度窗口固定为 1。读取器对缺失、非法或不同
+窗口的 estimator manifest 采用 fail-closed。
+
+“pooled”表示把任务清单内所有被各方法接纳的 treated grids，在**同一结果族、同一
+方法、同一 donor scope 和同一窗口**内聚合。housing、VIIRS、POI、population 的
+量纲和频率不同，不把四类 outcome 强行混成一个系数。入口同时写出
+`sample_aggregation_coverage.csv`，用于核对每个结果族和方法实际进入聚合的网格数。
 
 输出目录由运行参数决定，通常包含：
 

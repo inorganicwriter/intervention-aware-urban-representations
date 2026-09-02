@@ -8,6 +8,7 @@ does not use post-treatment outcomes to decide whether a donor is admitted.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal, TypedDict
 
@@ -54,7 +55,7 @@ class PanelBuildRequest:
     anticipation_months: int = 6
     price_measure: Literal["median", "hedonic"] = "median"
     max_mc_donors: int = 2000
-    max_gsc_cross_city_donors: int = 50_000
+    max_gsc_cross_city_donors: int = 5_000
     gsc_donor_sampling_seed: int = 20260823
     transaction_count_threshold: int = 1
     root: Path = PROJECT_ROOT
@@ -162,7 +163,9 @@ def monthly_event_calendar(
     }
 
 
-def read_annual_outcome(root: Path, city: str, family: str) -> pd.DataFrame:
+@lru_cache(maxsize=96)
+def _read_annual_outcome_full(root_value: str, city: str, family: str) -> pd.DataFrame:
+    root = Path(root_value)
     if family == "housing":
         frame = pd.read_parquet(
             root / housing_annual_path(city).relative_to(PROJECT_ROOT),
@@ -211,9 +214,26 @@ def read_annual_outcome(root: Path, city: str, family: str) -> pd.DataFrame:
     return frame
 
 
-def read_monthly_housing(
-    root: Path, city: str, price_measure: Literal["median", "hedonic"]
+def read_annual_outcome(
+    root: Path,
+    city: str,
+    family: str,
+    *,
+    grid_ids: set[str] | frozenset[str] | None = None,
 ) -> pd.DataFrame:
+    frame = _read_annual_outcome_full(str(root.resolve()), city, family)
+    if grid_ids is None:
+        return frame.copy()
+    return frame.loc[frame["grid_id"].astype(str).isin(grid_ids)].copy()
+
+
+@lru_cache(maxsize=64)
+def _read_monthly_housing_source(
+    root_value: str,
+    city: str,
+    price_measure: Literal["median", "hedonic"],
+) -> pd.DataFrame:
+    root = Path(root_value)
     if price_measure == "hedonic":
         path = (
             root
@@ -261,7 +281,35 @@ def read_monthly_housing(
         frame["transaction_count"] = pd.to_numeric(
             frame["n_transaction"], errors="coerce"
         )
-    frame["period"] = pd.to_datetime(frame["observed_month"]).dt.to_period("M").dt.to_timestamp()
+    frame["period"] = (
+        pd.to_datetime(frame["observed_month"]).dt.to_period("M").dt.to_timestamp()
+    )
+    return frame[[
+        "city_key",
+        "grid_id",
+        "period",
+        "housing_log_price",
+        "transaction_count",
+    ]]
+
+
+def read_monthly_housing(
+    root: Path,
+    city: str,
+    price_measure: Literal["median", "hedonic"],
+    *,
+    months: pd.DatetimeIndex | None = None,
+    grid_ids: set[str] | frozenset[str] | None = None,
+) -> pd.DataFrame:
+    frame = _read_monthly_housing_source(
+        str(root.resolve()), city, price_measure
+    )
+    mask = pd.Series(True, index=frame.index)
+    if grid_ids is not None:
+        mask &= frame["grid_id"].astype(str).isin(grid_ids)
+    if months is not None:
+        mask &= frame["period"].isin(months)
+    frame = frame.loc[mask].copy()
     return frame.groupby(
         ["city_key", "grid_id", "period"], as_index=False, sort=False
     ).agg(
@@ -319,23 +367,28 @@ def read_outcomes_for_request(
         for city in cities:
             grid_ids = units_by_city.get(city, set()) if units_by_city is not None else None
             part = (
-                read_monthly_housing(request.root, city, request.price_measure)
+                read_monthly_housing(
+                    request.root,
+                    city,
+                    request.price_measure,
+                    months=monthly_times,
+                    grid_ids=grid_ids,
+                )
                 if request.outcome_family == "housing"
                 else read_monthly_viirs(
                     request.root, city, monthly_times, grid_ids=grid_ids
                 )
             )
-            if grid_ids is not None and request.outcome_family == "housing":
-                part = part.loc[part["grid_id"].astype(str).isin(grid_ids)].copy()
             if not part.empty:
                 parts.append(part)
     else:
         for city in cities:
-            part = read_annual_outcome(request.root, city, request.outcome_family)
-            if units_by_city is not None:
-                part = part.loc[
-                    part["grid_id"].astype(str).isin(units_by_city.get(city, set()))
-                ].copy()
+            part = read_annual_outcome(
+                request.root,
+                city,
+                request.outcome_family,
+                grid_ids=(units_by_city.get(city, set()) if units_by_city is not None else None),
+            )
             if part.empty:
                 continue
             part.rename(columns={"year": "period"}, inplace=True)
@@ -553,10 +606,26 @@ def build_estimation_panel_from_frames(
     return BuiltPanel(panel=panel, metadata=metadata)
 
 
+@lru_cache(maxsize=4)
+def _cached_panel_treatments(root_value: str) -> pd.DataFrame:
+    root = Path(root_value)
+    return pd.read_parquet(root / TREATMENT_UNIT_LIST.relative_to(PROJECT_ROOT))
+
+
+@lru_cache(maxsize=4)
+def _cached_panel_donors(root_value: str) -> pd.DataFrame:
+    root = Path(root_value)
+    return pd.read_parquet(
+        root / ELIGIBLE_DONORS.relative_to(PROJECT_ROOT),
+        columns=["city_key", "grid_id", "unit_id"],
+    )
+
+
 def build_estimation_panel(request: PanelBuildRequest) -> BuiltPanel:
     """Build one formal panel directly from the canonical Python data assets."""
     root = request.root.resolve()
-    treatments = pd.read_parquet(root / TREATMENT_UNIT_LIST.relative_to(PROJECT_ROOT))
+    root_value = str(root)
+    treatments = _cached_panel_treatments(root_value)
     selected = treatments.loc[
         pd.to_numeric(treatments["treatment_order"], errors="raise").eq(
             request.treatment_order
@@ -565,10 +634,7 @@ def build_estimation_panel(request: PanelBuildRequest) -> BuiltPanel:
     if len(selected) != 1:
         raise ValueError(f"expected one treatment_order={request.treatment_order}")
     target = selected.iloc[0].copy()
-    donor_frame = pd.read_parquet(
-        root / ELIGIBLE_DONORS.relative_to(PROJECT_ROOT),
-        columns=["city_key", "grid_id", "unit_id"],
-    )
+    donor_frame = _cached_panel_donors(root_value).copy()
     if request.donor_scope == "same_city":
         donor_frame = donor_frame.loc[donor_frame["city_key"].eq(target["city_key"])].copy()
     if donor_frame.empty or donor_frame.duplicated(["city_key", "grid_id"]).any():
@@ -576,8 +642,7 @@ def build_estimation_panel(request: PanelBuildRequest) -> BuiltPanel:
     eligible_scope_donors = len(donor_frame)
     pre_outcome_donor_cap = "none"
     if (
-        request.estimator == "gsc"
-        and request.donor_scope == "all_city_standardized"
+        request.donor_scope == "all_city_standardized"
         and len(donor_frame) > request.max_gsc_cross_city_donors
     ):
         donor_frame = deterministic_cross_city_gsc_sample(

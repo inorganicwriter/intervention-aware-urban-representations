@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
@@ -168,6 +169,32 @@ def test_response_artifact_preserves_expected_failures_and_quality(tmp_path: Pat
     assert not unavailable.cross_city_extension_mask.any()
     assert set(unavailable.failure_reason) == {"no_outcome_support"}
     assert diagnostics["training_labels"] == 6
+
+
+def test_response_artifact_task_subset_does_not_expand_to_other_families(
+    tmp_path: Path,
+) -> None:
+    inputs = replace(
+        _fixture(tmp_path),
+        task_keys=((1, "population"), (2, "housing")),
+    )
+    artifact, diagnostics, _ = build_response_frame(
+        inputs, "main_a6_r1km", strict_production=False, workers=1
+    )
+
+    keys = set(
+        zip(
+            artifact["treatment_order"].astype(int),
+            artifact["outcome_family"].astype(str),
+            strict=False,
+        )
+    )
+    assert keys == {(1, "population"), (2, "housing")}
+    assert len(artifact) == 3 + 6
+    assert diagnostics["task_status_counts"] == {
+        "matched_labelled": 1,
+        "skipped": 1,
+    }
 
 
 def test_response_artifact_accepts_cross_validated_mc_labels(tmp_path: Path) -> None:

@@ -46,8 +46,19 @@ def main() -> int:
         type=Path,
         help="Optional CSV with treatment_order values; restricts a canary release to those grids.",
     )
+    parser.add_argument(
+        "--tasks-file",
+        type=Path,
+        help=(
+            "Optional CSV with treatment_order and outcome_family; restricts a "
+            "canary release to those exact independently sampled tasks."
+        ),
+    )
     args = parser.parse_args()
+    if args.orders_file is not None and args.tasks_file is not None:
+        parser.error("--orders-file and --tasks-file are mutually exclusive")
     treatment_orders = None
+    task_keys = None
     if args.orders_file is not None:
         orders_frame = pd.read_csv(args.orders_file)
         if "treatment_order" not in orders_frame.columns:
@@ -56,6 +67,20 @@ def main() -> int:
         if parsed_orders.isna().any() or parsed_orders.duplicated().any():
             raise ValueError("Orders file must contain unique integer treatment_order values")
         treatment_orders = tuple(int(value) for value in parsed_orders)
+    elif args.tasks_file is not None:
+        tasks_frame = pd.read_csv(args.tasks_file)
+        required = {"treatment_order", "outcome_family"}
+        missing = required - set(tasks_frame.columns)
+        if missing:
+            raise ValueError(f"Tasks file lacks columns: {sorted(missing)}")
+        parsed_orders = pd.to_numeric(tasks_frame["treatment_order"], errors="coerce")
+        families = tasks_frame["outcome_family"].astype(str)
+        parsed = tuple(zip(parsed_orders, families, strict=False))
+        if parsed_orders.isna().any() or len(set(parsed)) != len(parsed) or not parsed:
+            raise ValueError(
+                "Tasks file must contain unique treatment_order/outcome_family keys"
+            )
+        task_keys = tuple((int(order), family) for order, family in parsed)
     inputs = ArtifactInputs(
         treatments=TREATMENT_UNIT_LIST,
         family_queue=OUTCOME_FAMILY_QUEUE,
@@ -65,6 +90,7 @@ def main() -> int:
         donor_universe=ELIGIBLE_DONORS,
         target_support=FORMAL_TARGET_SUPPORT,
         treatment_orders=treatment_orders,
+        task_keys=task_keys,
     )
     destination = publish_response_artifact(
         inputs,

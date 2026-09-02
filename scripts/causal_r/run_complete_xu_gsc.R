@@ -446,6 +446,14 @@ run_one_outcome <- function(outcome) {
     min.T0 = spec$xu_gsc$min.T0, normalize = spec$xu_gsc$normalize,
     seed = 20260723
   )
+  fect_normalization_scale <- if (isTRUE(spec$xu_gsc$normalize)) {
+    stats::sd(estimation_data$Y, na.rm = TRUE)
+  } else {
+    1
+  }
+  if (!is.finite(fect_normalization_scale) || fect_normalization_scale <= 0) {
+    stop("fect normalization requires one finite positive outcome scale")
+  }
   if (run_mode == "preview") {
     fit_args$parallel <- FALSE
     fit_args$cores <- 1L
@@ -498,7 +506,8 @@ run_one_outcome <- function(outcome) {
     )]
   } else {
     paths <- attach_single_target_gsc_uncertainty(
-      paths, fit, run_nboots, effect_scale = target_scale
+      paths, fit, run_nboots, effect_scale = target_scale,
+      normalization_scale = fect_normalization_scale
     )
   }
   if (frequency == "monthly") {
@@ -568,8 +577,12 @@ run_one_outcome <- function(outcome) {
     cv_prop = spec$xu_gsc$cv_prop, cv_nobs = spec$xu_gsc$cv_nobs,
     cv_buffer = spec$xu_gsc$cv_buffer, cv_rule = spec$xu_gsc$cv_rule,
     tol = spec$xu_gsc$tol, max_iteration = spec$xu_gsc$max.iteration,
-    min_T0 = spec$xu_gsc$min.T0, se = spec$xu_gsc$se && run_mode != "preview",
+    min_T0 = spec$xu_gsc$min.T0, normalize = spec$xu_gsc$normalize,
+    se = spec$xu_gsc$se && run_mode != "preview",
     inference = spec$xu_gsc$inference, nboots = run_nboots,
+    fect_normalization_scale = fect_normalization_scale,
+    parametric_bootstrap_se_scale_correction =
+      "divide_once_by_fect_normalization_scale",
     run_mode = run_mode,
     production_eligible = run_mode == "production",
     price_measure = price_measure,

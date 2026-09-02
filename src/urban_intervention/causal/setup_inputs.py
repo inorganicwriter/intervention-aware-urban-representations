@@ -42,6 +42,8 @@ REQUIRED_TREATMENT_COLUMNS = (
 )
 FORMAL_SPEC_SCHEMA = "formal_counterfactual_design_v1"
 MINIMUM_COMPLETE_FAMILIES = 1
+FORMAL_MATCHING_METHOD = "outcome_mahalanobis_m5_static_refine"
+FORMAL_MATCHING_CANDIDATES = 5
 FORMAL_SPEC_RELATIVE_PATH = Path(
     "data/active/causal/formal_matching_inputs/formal_matching_spec.dput"
 )
@@ -51,6 +53,8 @@ def validate_frozen_formal_matching_spec(
     root: Path,
     *,
     expected_minimum_complete_families: int = MINIMUM_COMPLETE_FAMILIES,
+    expected_matching_method: str = FORMAL_MATCHING_METHOD,
+    expected_matching_candidates: int = FORMAL_MATCHING_CANDIDATES,
 ) -> dict[str, object]:
     """Validate the read-only frozen spec before a formal production run.
 
@@ -64,26 +68,52 @@ def validate_frozen_formal_matching_spec(
     text = path.read_text(encoding="utf-8-sig")
     schema_match = re.search(r'schema\s*=\s*"([^"]+)"', text)
     minimum_match = re.search(r"minimum_complete_families\s*=\s*(\d+)L?", text)
-    if schema_match is None or minimum_match is None:
+    method_match = re.search(r'matching_method\s*=\s*"([^"]+)"', text)
+    candidates_match = re.search(r"matching_candidates\s*=\s*(\d+)L?", text)
+    if any(
+        match is None
+        for match in (schema_match, minimum_match, method_match, candidates_match)
+    ):
         raise ValueError(f"Frozen formal matching spec is not parseable: {path}")
+    assert schema_match is not None
+    assert minimum_match is not None
+    assert method_match is not None
+    assert candidates_match is not None
     schema = schema_match.group(1)
     minimum = int(minimum_match.group(1))
+    method = method_match.group(1)
+    candidates = int(candidates_match.group(1))
     if schema != FORMAL_SPEC_SCHEMA:
         raise ValueError(
             f"Frozen formal matching spec schema {schema!r} does not match "
             f"{FORMAL_SPEC_SCHEMA!r}"
         )
+    differences: list[str] = []
     if minimum != expected_minimum_complete_families:
-        raise ValueError(
-            "Frozen formal matching spec is stale: "
+        differences.append(
             f"minimum_complete_families={minimum}, expected "
-            f"{expected_minimum_complete_families}. Reconcile the spec in an "
+            f"{expected_minimum_complete_families}"
+        )
+    if method != expected_matching_method:
+        differences.append(
+            f"matching_method={method!r}, expected {expected_matching_method!r}"
+        )
+    if candidates != expected_matching_candidates:
+        differences.append(
+            f"matching_candidates={candidates}, expected {expected_matching_candidates}"
+        )
+    if differences:
+        raise ValueError(
+            "Frozen formal matching spec is stale: " + "; ".join(differences) + ". "
+            "Reconcile the spec in an "
             "isolated server working copy before production; data/active is immutable."
         )
     return {
         "path": str(path),
         "schema": schema,
         "minimum_complete_families": minimum,
+        "matching_method": method,
+        "matching_candidates": candidates,
     }
 
 
@@ -219,9 +249,19 @@ def _formal_spec() -> dict[str, Any]:
         "treatment_history_lag_years": 3,
         "pre_year_lags": [1, 2, 3],
         "minimum_complete_families": MINIMUM_COMPLETE_FAMILIES,
+        "matching_method": FORMAL_MATCHING_METHOD,
+        "matching_candidates": FORMAL_MATCHING_CANDIDATES,
         "matching_with_replacement": True,
         "matches_per_treated": 1,
         "post_treatment_data_used_for_matching": False,
+        "distance": (
+            "pre-treatment outcome Mahalanobis distance selects five candidates; "
+            "location and transit Mahalanobis distance selects the final donor"
+        ),
+        "quality_gate": (
+            "donor-placebo q95 thresholds for training distance, holdout RMS, "
+            "and holdout maximum absolute standardized gap"
+        ),
         "families": FAMILIES,
         "gsc": {
             "force": "two-way",

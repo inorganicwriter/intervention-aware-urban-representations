@@ -8,13 +8,27 @@ formal_matching_spec <- function() {
     treatment_history_lag_years = 3L,
     pre_year_lags = 1:3,
     minimum_complete_families = 1L,
+    matching_method = "outcome_mahalanobis_m5_static_refine",
+    matching_candidates = 5L,
     matching_with_replacement = TRUE,
     matches_per_treated = 1L,
     distance = paste(
-      "PanelMatch period-specific full-covariance Mahalanobis distances",
-      "averaged over lag years; Moore-Penrose inverse when singular"
+      "pre-treatment outcome Mahalanobis distance selects five candidates;",
+      "location and transit Mahalanobis distance selects the final donor;",
+      "Moore-Penrose inverse is used when covariance is singular"
     ),
-    common_support = "treated value inside closed donor range for every active feature",
+    common_support = paste(
+      "treated value inside the closed donor range for every active",
+      "pre-treatment outcome feature"
+    ),
+    static_refinement = paste(
+      "static features with finite treated and donor values enter refinement;",
+      "zero-variance static features are omitted"
+    ),
+    quality_gate = paste(
+      "donor-placebo q95 thresholds for training distance, holdout RMS,",
+      "and holdout maximum absolute standardized gap"
+    ),
     balance_diagnostic = "absolute mean standardized difference <= 0.10",
     balance_threshold = 0.10,
     balance_is_unit_selection_rule = FALSE,

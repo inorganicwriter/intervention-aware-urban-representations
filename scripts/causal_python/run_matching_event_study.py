@@ -19,6 +19,7 @@ def main() -> int:
     parser.add_argument("outcome_family", choices=("housing", "viirs", "poi", "population"))
     parser.add_argument("--min-pre", type=int)
     parser.add_argument("--max-post", type=int)
+    parser.add_argument("--pretrend-window", type=int, default=5)
     parser.add_argument("--output-directory", type=Path)
     parser.add_argument(
         "--donor-scope",
@@ -35,6 +36,7 @@ def main() -> int:
         min_pre=args.min_pre,
         max_post=args.max_post,
         donor_scope=args.donor_scope,
+        pretrend_window=args.pretrend_window,
     )
     print(
         f"Python TWFE event study: {len(result.coefficients)} coefficients, "

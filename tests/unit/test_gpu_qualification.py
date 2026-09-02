@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from urban_intervention.causal.gpu.contracts import (
     GPU_IMPLEMENTATION_VERSION,
@@ -145,7 +146,11 @@ def test_qualification_receipt_rechecks_bound_source_content(tmp_path) -> None:
     receipt = tmp_path / "qualification.json"
     receipt.write_text(json.dumps(report), encoding="utf-8")
     manifest = json.loads(paths[0].read_text(encoding="utf-8"))
-    bound_source = manifest["source_fingerprints"][0]["path"]
+    bound_source = next(
+        record["path"]
+        for record in manifest["source_fingerprints"]
+        if Path(record["path"]).is_relative_to(tmp_path)
+    )
     with open(bound_source, "ab") as handle:
         handle.write(b"changed")
     try:

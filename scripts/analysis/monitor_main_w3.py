@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 TASK_ROOT = ROOT / "outputs" / "causal_labels" / "tasks"
 QUEUE_ROOT = ROOT / "data" / "active" / "causal"
 CUTOFF = datetime(2026, 8, 19, 2, 55).timestamp()
-SAMPLE_FILE = ROOT / "outputs" / "causal_labels" / "representative_sample_400.csv"
+SAMPLE_FILE = ROOT / "outputs" / "causal_labels" / "representative_sample_300.csv"
 SHARD_COUNT = 8
 
 

@@ -47,17 +47,62 @@ def write_matching_event_study_figure(
     matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as plt
 
-    coefficients = result.coefficients.sort_values("event_time")
-    figure, axis = plt.subplots(figsize=(8.0, 4.8))
+    matplotlib.rcParams.update(
+        {
+            "font.family": "sans-serif",
+            "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
+            "font.size": 7,
+            "pdf.fonttype": 42,
+            "svg.fonttype": "none",
+        }
+    )
+    coefficients = result.coefficients.copy()
+    reference = int(result.diagnostics["reference_event_time"])
+    reference_row = pd.DataFrame(
+        {
+            "event_time": [reference],
+            "estimate": [0.0],
+            "confidence_lower_city": [0.0],
+            "confidence_upper_city": [0.0],
+            "n_treated": [int(result.diagnostics.get("reference_treated", 0))],
+            "exposure_status": ["pre"],
+        }
+    )
+    coefficients = (
+        pd.concat([coefficients, reference_row], ignore_index=True)
+        .sort_values("event_time")
+        .reset_index(drop=True)
+    )
+    figure, axis = plt.subplots(figsize=(7.2, 4.3))
+    if reference == -7:
+        axis.axvspan(-6.5, -0.5, color="#D9D9D9", alpha=0.18, linewidth=0)
+    axis.axvspan(-0.5, 0.5, color="#E7B45A", alpha=0.16, linewidth=0)
     axis.axhline(0, color="0.35", linewidth=0.9)
     axis.axvline(0, color="0.35", linewidth=0.9, linestyle="--")
-    axis.fill_between(
+    axis.errorbar(
         coefficients["event_time"],
-        coefficients["confidence_lower_city"],
-        coefficients["confidence_upper_city"],
-        alpha=0.2,
+        coefficients["estimate"],
+        yerr=np.vstack(
+            [
+                coefficients["estimate"] - coefficients["confidence_lower_city"],
+                coefficients["confidence_upper_city"] - coefficients["estimate"],
+            ]
+        ),
+        fmt="o",
+        markersize=3.8,
+        linewidth=1.0,
+        capsize=2.0,
+        color="#2C6E9F",
     )
-    axis.plot(coefficients["event_time"], coefficients["estimate"], marker="o")
+    consecutive = coefficients["event_time"].diff().ne(1).cumsum()
+    for _, part in coefficients.groupby(consecutive, sort=False):
+        if len(part) > 1:
+            axis.plot(
+                part["event_time"],
+                part["estimate"],
+                linewidth=1.2,
+                color="#2C6E9F",
+            )
     finite = np.concatenate(
         [
             coefficients["confidence_lower_city"].to_numpy(dtype=float),
@@ -67,16 +112,29 @@ def write_matching_event_study_figure(
     )
     finite = finite[np.isfinite(finite)]
     if finite.size:
-        lower, upper = np.quantile(finite, [0.01, 0.99])
-        span = max(float(upper - lower), 1e-9)
-        axis.set_ylim(float(lower - 0.12 * span), float(upper + 0.12 * span))
-    axis.set_xlabel("Event time")
+        lower, upper = float(finite.min()), float(finite.max())
+        span = max(upper - lower, 1e-9)
+        axis.set_ylim(lower - 0.08 * span, upper + 0.08 * span)
+    unit = "years" if reference == -1 else "months"
+    axis.set_xlabel(f"Event time ({unit})")
     axis.set_ylabel("TWFE effect")
     axis.set_title(title)
+    city_p = pd.to_numeric(result.city_cluster_pretrend["p_value"], errors="coerce").iloc[0]
+    p_note = f"{city_p:.3f}" if np.isfinite(city_p) else "NA"
+    axis.text(
+        0.01,
+        0.02,
+        f"City-cluster pre-trend p = {p_note}; omitted reference = {reference}",
+        transform=axis.transAxes,
+        fontsize=8,
+        va="bottom",
+    )
     figure.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)
-    figure.savefig(path, dpi=180)
+    figure.savefig(path, dpi=300)
     figure.savefig(path.with_suffix(".pdf"))
+    figure.savefig(path.with_suffix(".svg"))
+    figure.savefig(path.with_suffix(".tiff"), dpi=600)
     plt.close(figure)
 
 
@@ -159,22 +217,49 @@ def _wald_zero(
     positions: np.ndarray,
     cluster_count: int,
 ) -> pd.DataFrame:
-    if positions.size == 0 or cluster_count < 2:
+    restriction_count = int(positions.size)
+    if restriction_count == 0 or cluster_count < 2:
         return pd.DataFrame(
-            [{"statistic": np.nan, "df1": 0, "df2": max(cluster_count - 1, 0), "p_value": np.nan}]
+            [
+                {
+                    "statistic": np.nan,
+                    "df1": restriction_count,
+                    "df2": max(cluster_count - 1, 0),
+                    "covariance_rank": 0,
+                    "p_value": np.nan,
+                }
+            ]
         )
     selected = coefficients[positions]
     selected_covariance = covariance[np.ix_(positions, positions)]
-    statistic = float(selected @ np.linalg.pinv(selected_covariance) @ selected / len(positions))
+    covariance_rank = (
+        int(np.linalg.matrix_rank(selected_covariance))
+        if np.isfinite(selected_covariance).all()
+        else 0
+    )
+    if restriction_count > cluster_count - 1 or covariance_rank < restriction_count:
+        return pd.DataFrame(
+            [
+                {
+                    "statistic": np.nan,
+                    "df1": restriction_count,
+                    "df2": int(cluster_count - 1),
+                    "covariance_rank": covariance_rank,
+                    "p_value": np.nan,
+                }
+            ]
+        )
+    statistic = float(selected @ np.linalg.solve(selected_covariance, selected) / restriction_count)
     from scipy.stats import f
 
-    p_value = float(f.sf(statistic, len(positions), cluster_count - 1))
+    p_value = float(f.sf(statistic, restriction_count, cluster_count - 1))
     return pd.DataFrame(
         [
             {
                 "statistic": statistic,
-                "df1": int(len(positions)),
+                "df1": restriction_count,
                 "df2": int(cluster_count - 1),
+                "covariance_rank": covariance_rank,
                 "p_value": p_value,
             }
         ]
@@ -191,6 +276,8 @@ def fit_twfe_event_study(
     role_column: str = "role",
     grid_cluster_column: str = "grid_cluster",
     city_cluster_column: str = "city_cluster",
+    pretrend_window: int | None = 5,
+    post_observation_window: int = 1,
 ) -> EventStudyResult:
     """Fit one matched-pair TWFE event study and two clustered VCOVs."""
     required = {
@@ -206,12 +293,12 @@ def fit_twfe_event_study(
     missing = required - set(panel.columns)
     if missing:
         raise ValueError(f"event-study panel lacks columns: {sorted(missing)}")
+    if not 1 <= post_observation_window <= 6:
+        raise ValueError("post_observation_window must be between 1 and 6")
     frame = panel.loc[np.isfinite(pd.to_numeric(panel[outcome_column], errors="coerce"))].copy()
     frame[outcome_column] = pd.to_numeric(frame[outcome_column], errors="raise")
     treated = frame[role_column].eq("treated")
-    event_times = sorted(
-        set(frame.loc[treated, "event_time"].astype(int)) - {reference_event_time}
-    )
+    event_times = sorted(set(frame.loc[treated, "event_time"].astype(int)) - {reference_event_time})
     if not event_times:
         raise ValueError("event-study panel has no estimable event-time coefficients")
     design = np.column_stack(
@@ -281,7 +368,19 @@ def fit_twfe_event_study(
             "p_value_city": p_values(city_se, city_clusters),
             "confidence_lower_city": coefficients,
             "confidence_upper_city": coefficients,
+            "n_treated": [
+                int(frame.loc[treated & frame["event_time"].eq(value), "treatment_order"].nunique())
+                for value in active_event_times
+            ],
         }
+    )
+    coefficient_frame["exposure_status"] = np.select(
+        [
+            coefficient_frame["event_time"].lt(0),
+            coefficient_frame["event_time"].eq(0),
+        ],
+        ["pre", "opening_partial"],
+        default="post",
     )
     from scipy.stats import t
 
@@ -291,7 +390,12 @@ def fit_twfe_event_study(
     coefficient_frame["confidence_upper_grid"] += grid_critical * grid_se
     coefficient_frame["confidence_lower_city"] -= city_critical * city_se
     coefficient_frame["confidence_upper_city"] += city_critical * city_se
-    pre_positions = np.flatnonzero(active_event_times < 0)
+    if pretrend_window is not None and pretrend_window < 2:
+        raise ValueError("pretrend_window must include the reference and at least one lead")
+    pre_mask = active_event_times < 0
+    if pretrend_window is not None:
+        pre_mask &= active_event_times >= reference_event_time - (pretrend_window - 1)
+    pre_positions = np.flatnonzero(pre_mask)
     return EventStudyResult(
         coefficients=coefficient_frame,
         grid_cluster_pretrend=_wald_zero(
@@ -311,6 +415,15 @@ def fit_twfe_event_study(
             "city_ssc_parameters": city_ssc_parameters,
             "absorption_iterations": absorption_iterations,
             "reference_event_time": reference_event_time,
+            "reference_treated": int(
+                frame.loc[
+                    treated & frame["event_time"].eq(reference_event_time),
+                    "treatment_order",
+                ].nunique()
+            ),
+            "pretrend_window": pretrend_window if pretrend_window is not None else "all",
+            "pretrend_restrictions": int(pre_positions.size),
+            "post_observation_window": post_observation_window,
             "variance": "CRV1",
         },
     )
@@ -330,10 +443,12 @@ def _monthly_pair_panel(
         opening + pd.DateOffset(months=max_post),
         freq="MS",
     )
+
     def reader(city: str) -> pd.DataFrame:
         if family == "housing":
             return read_monthly_housing(root, city, price_measure)
         return read_monthly_viirs(root, city, periods)
+
     outcome = "housing_log_price" if family == "housing" else "viirs_avg_asinh"
     parts: list[pd.DataFrame] = []
     for role, city_column, grid_column in (
@@ -351,6 +466,35 @@ def _monthly_pair_panel(
         part["source_grid"] = grid
         parts.append(part)
     return pd.concat(parts, ignore_index=True)
+
+
+def _apply_monthly_post_window(frame: pd.DataFrame, window: int) -> pd.DataFrame:
+    """Put Matching post outcomes on the formal moving-window scale.
+
+    Clean leads and the partially exposed opening month (t=0) remain raw.
+    Positive horizons use the same trailing mean as formal GSC/MC labels.
+    """
+    if window == 1 or frame.empty:
+        return frame.copy()
+    result = frame.copy()
+    group_columns = ["role", "source_city", "source_grid"]
+    for _, indices in result.groupby(group_columns, sort=False).groups.items():
+        group = result.loc[indices].copy()
+        event_time = pd.to_numeric(group["event_time"], errors="coerce")
+        outcome = pd.to_numeric(group["outcome"], errors="coerce")
+        by_event = pd.Series(outcome.to_numpy(dtype=float), index=event_time.astype(int))
+        for index in group.index[event_time.gt(0)]:
+            horizon = int(result.at[index, "event_time"])
+            start = max(1, horizon - window + 1)
+            expected = list(range(start, horizon + 1))
+            values = by_event.reindex(expected)
+            result.at[index, "outcome"] = (
+                float(values.mean())
+                if len(values) == min(window, horizon)
+                and np.isfinite(values.to_numpy(dtype=float)).all()
+                else np.nan
+            )
+    return result
 
 
 def _annual_pair_panel(
@@ -387,14 +531,22 @@ def build_matching_event_study_panel(
     donor_scope: str = "same_city",
     min_pre: int | None = None,
     max_post: int | None = None,
+    observation_window: int = 3,
+    treatment_orders: set[int] | None = None,
 ) -> tuple[pd.DataFrame, int]:
-    """Build the matched pair panel without dropping positive event times."""
+    """Build the matched-pair panel on the production outcome-window scale.
+
+    Monthly t=0 is retained as a partial-exposure diagnostic. It is not a
+    clean lead and never enters the formal label gate.
+    """
     annual = outcome_family in {"poi", "population"}
     if outcome_family not in {"housing", "viirs", "poi", "population"}:
         raise ValueError("unsupported event-study family")
     minimum = (-4 if annual else -42) if min_pre is None else min_pre
     maximum = (3 if annual else 24) if max_post is None else max_post
     reference = -1 if annual else -7
+    if not 1 <= observation_window <= 6:
+        raise ValueError("observation_window must be between 1 and 6")
     if donor_scope not in {"same_city", "all_city_standardized"}:
         raise ValueError("unsupported event-study donor scope")
     queue = (
@@ -405,14 +557,15 @@ def build_matching_event_study_panel(
     families = (
         family_queue.copy()
         if isinstance(family_queue, pd.DataFrame)
-        else pd.read_csv(
-            family_queue or (root / OUTCOME_FAMILY_QUEUE.relative_to(PROJECT_ROOT))
-        )
+        else pd.read_csv(family_queue or (root / OUTCOME_FAMILY_QUEUE.relative_to(PROJECT_ROOT)))
     )
     candidates = families.loc[
-        families["outcome_family"].eq(outcome_family)
-        & families["status"].eq("matched_labelled")
+        families["outcome_family"].eq(outcome_family) & families["status"].eq("matched_labelled")
     ]
+    if treatment_orders is not None:
+        candidates = candidates.loc[
+            candidates["treatment_order"].astype(int).isin(treatment_orders)
+        ]
     task_directory = task_root or (root / OUTPUT_CAUSAL_TASKS_DIR.relative_to(PROJECT_ROOT))
     controls = queue.set_index("treatment_order", drop=False)
     accepted: list[dict[str, object]] = []
@@ -432,9 +585,7 @@ def build_matching_event_study_panel(
         except OSError:
             continue
         if (
-            not accepts_legacy_version(
-                payload.get("schema"), CAUSAL_RESPONSE_LABELS_SCHEMA
-            )
+            not accepts_legacy_version(payload.get("schema"), CAUSAL_RESPONSE_LABELS_SCHEMA)
             or payload.get("status") != "matched_labelled"
             or not str(payload.get("method", "")).startswith("frozen_matched_change")
             or payload.get("outcome_family") != outcome_family
@@ -449,9 +600,12 @@ def build_matching_event_study_panel(
             task_labels = pd.read_parquet(labels_path, columns=["estimator_backend"])
         except (OSError, KeyError, ValueError):
             continue
-        python_task = task_labels["estimator_backend"].astype(str).str.contains(
-            "python", case=False, na=False
-        ).any()
+        python_task = (
+            task_labels["estimator_backend"]
+            .astype(str)
+            .str.contains("python", case=False, na=False)
+            .any()
+        )
         if python_task and (
             details.get("formal_qualification_eligible") is not True
             or not str(details.get("formal_qualification_receipt_sha256", ""))
@@ -504,17 +658,18 @@ def build_matching_event_study_panel(
             opening_year = opening_period.year
             opening_month = opening_period.month
             part["event_time"] = (
-                (values.dt.year - opening_year) * 12
-                + values.dt.month
-                - opening_month
+                (values.dt.year - opening_year) * 12 + values.dt.month - opening_month
             )
         part = part.loc[
-            part["event_time"].between(minimum, reference)
-            | part["event_time"].between(1, maximum)
+            part["event_time"].between(minimum, reference) | part["event_time"].between(0, maximum)
         ].copy()
+        if not annual:
+            part = _apply_monthly_post_window(part, observation_window)
         order = int(record["treatment_order"])
         part["treatment_order"] = order
-        part["unit"] = part["role"] + "_" + str(order) + "_" + part["source_city"] + "::" + part["source_grid"]
+        part["unit"] = (
+            part["role"] + "_" + str(order) + "_" + part["source_city"] + "::" + part["source_grid"]
+        )
         part["grid_cluster"] = part["source_city"] + "::" + part["source_grid"]
         part["city_cluster"] = part["source_city"].astype(str)
         parts.append(part)
@@ -534,6 +689,9 @@ def run_matching_event_study(
     donor_scope: str = "same_city",
     min_pre: int | None = None,
     max_post: int | None = None,
+    observation_window: int = 3,
+    pretrend_window: int | None = 5,
+    treatment_orders: set[int] | None = None,
 ) -> EventStudyResult:
     panel, reference = build_matching_event_study_panel(
         outcome_family,
@@ -544,8 +702,17 @@ def run_matching_event_study(
         donor_scope=donor_scope,
         min_pre=min_pre,
         max_post=max_post,
+        observation_window=observation_window,
+        treatment_orders=treatment_orders,
     )
-    result = fit_twfe_event_study(panel, reference_event_time=reference)
+    result = fit_twfe_event_study(
+        panel,
+        reference_event_time=reference,
+        pretrend_window=pretrend_window,
+        post_observation_window=(
+            1 if outcome_family in {"poi", "population"} else observation_window
+        ),
+    )
     output_directory.mkdir(parents=True, exist_ok=True)
     result.coefficients.to_csv(
         output_directory / "event_study_coefficients.csv", index=False, encoding="utf-8-sig"

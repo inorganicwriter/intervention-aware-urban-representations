@@ -5,10 +5,10 @@ Phase 2: Causal labels (one Python/GPU shard per GPU by default)
 Phase 3: Merge shard queues back to master queue
 
 Usage:
-  For the approved 400-grid sample:
+  For the approved 300-grid sample:
 
       python scripts/causal_r/run_parallel_production.py --phase 2 \
-          --orders-file outputs/causal_labels/representative_sample_400.csv
+          --orders-file outputs/causal_labels/representative_sample_300.csv
 
   Or run one phase at a time:
 
@@ -47,6 +47,7 @@ from urban_intervention.data.paths import (  # noqa: E402
     CONTROL_DESIGN_QUEUE,
     COUNTERFACTUAL_QUEUE,
     OUTCOME_FAMILY_QUEUE,
+    OUTPUT_PYTHON_ESTIMATORS_DIR,
     PROJECT_ROOT,
     R_LIB_DIR,
     TREATMENT_UNIT_LIST,
@@ -117,6 +118,25 @@ def shard_queue_path(path: Path, shard_id: int) -> Path:
     return path.with_name(f"{path.stem}_shard_{shard_id:02d}{path.suffix}")
 
 
+def validate_resume_checkpoint(master_family: Path, shard_count: int) -> None:
+    """Require durable, non-empty progress before allowing receipt-only resume."""
+    paths = [shard_queue_path(master_family, shard_id) for shard_id in range(shard_count)]
+    missing = [path for path in paths if not path.is_file()]
+    if missing:
+        raise ValueError(
+            "prevalidated resume requires every existing family shard; missing "
+            + ", ".join(str(path) for path in missing)
+        )
+    statuses = pd.concat(
+        [pd.read_csv(path, usecols=["status"])["status"].astype(str) for path in paths],
+        ignore_index=True,
+    )
+    if statuses.empty or statuses.eq("pending").all():
+        raise ValueError(
+            "prevalidated resume requires a shard checkpoint with prior task progress"
+        )
+
+
 def resource_environment(
     base: dict[str, str], gsc_cv_cores: int, gsc_bootstrap_cores: int, mc_cores: int
 ) -> dict[str, str]:
@@ -183,6 +203,38 @@ def phase1_control_design(
     print(f"Phase 1 completed in {timedelta(seconds=int(elapsed))}")
 
 
+def phase2_round_specs(
+    queue_phase: str,
+    task_scheduling: str,
+    dry_run: bool,
+) -> list[tuple[str, Path, list[str]]]:
+    """Return the ordered Phase 2 worker rounds.
+
+    Dry runs and explicitly selected legacy phases remain single-pass.  A
+    production ``all`` run uses global barriers so cheap same-city work is
+    exhausted before any task starts an expensive cross-city fallback.
+    """
+    round_runner = ROOT / "scripts" / "causal_python" / "run_causal_label_round_queue.py"
+    if task_scheduling != "global_rounds" or queue_phase != "all" or dry_run:
+        return [("task cascade", round_runner, ["--phase", queue_phase])]
+    return [
+        (
+            "same-city Matching",
+            round_runner,
+            ["--global-round", "same_city_matching"],
+        ),
+        ("same-city GSC", round_runner, ["--global-round", "same_city_gsc"]),
+        ("same-city MC", round_runner, ["--global-round", "same_city_mc"]),
+        (
+            "cross-city Matching",
+            round_runner,
+            ["--global-round", "cross_city_matching"],
+        ),
+        ("cross-city GSC", round_runner, ["--global-round", "cross_city_gsc"]),
+        ("cross-city MC", round_runner, ["--global-round", "cross_city_mc"]),
+    ]
+
+
 def phase2_causal_labels(
     dry_run: bool,
     shard_count: int = DEFAULT_SHARD_COUNT,
@@ -199,9 +251,10 @@ def phase2_causal_labels(
     gpu_ids: list[str] | None = None,
     env: dict[str, str] | None = None,
     qualification_receipt: Path | None = None,
-    max_gsc_cross_city_donors: int = 50_000,
+    max_gsc_cross_city_donors: int = 5_000,
     gsc_donor_sampling_seed: int = 20260823,
     transaction_count_threshold: int = 1,
+    task_scheduling: str = "global_rounds",
 ) -> None:
     """Launch shard workers for the selected treatment-order sample."""
     print("=" * 60)
@@ -215,7 +268,11 @@ def phase2_causal_labels(
     selected_orders = (
         {order for order, _ in task_keys}
         if task_keys is not None
-        else (set(read_orders_file(orders_file)) if orders_file is not None else set(cq["treatment_order"].astype(int)))
+        else (
+            set(read_orders_file(orders_file))
+            if orders_file is not None
+            else set(cq["treatment_order"].astype(int))
+        )
     )
     queue_orders = set(cq["treatment_order"].astype(int))
     missing_orders = sorted(selected_orders - queue_orders)
@@ -252,17 +309,16 @@ def phase2_causal_labels(
     master_paths = [master_family, master_control, master_unit]
     shard_paths = []
     for shard_id in range(shard_count):
-        shard_paths.extend(
-            shard_queue_path(master_path, shard_id)
-            for master_path in master_paths
-        )
+        shard_paths.extend(shard_queue_path(master_path, shard_id) for master_path in master_paths)
 
     if reset_shards:
         existing = [path for path in shard_paths if path.exists()]
         if existing:
             archive_dir = (
-                ROOT / "outputs" / "archive" /
-                f"causal_shards_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+                ROOT
+                / "outputs"
+                / "archive"
+                / f"causal_shards_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
             )
             archive_dir.mkdir(parents=True, exist_ok=False)
             for path in existing:
@@ -298,95 +354,103 @@ def phase2_causal_labels(
             copied += 1
     print(f"Shard queues ready: {copied} copied, {resumed} resumed")
 
-    # Launch shard workers
+    # Launch shard workers.  Each global round is a durable barrier: all
+    # shards finish the current method/scope before any shard advances to the
+    # next fallback.  Queue CSVs remain the restart checkpoints between rounds.
     env = env or os.environ.copy()
     env["R_LIBS_USER"] = str(R_LIB)
     if VIIRS_RAW:
         env["MIT_VIIRS_RAW"] = VIIRS_RAW
 
-    processes: list[tuple[int, subprocess.Popen]] = []
     start = time.time()
+    round_specs = phase2_round_specs(queue_phase, task_scheduling, dry_run)
+    print(f"  Task scheduling: {task_scheduling}; worker rounds: {len(round_specs)}")
+    for round_number, (round_label, runner, round_args) in enumerate(round_specs, start=1):
+        print(f"\n  ROUND {round_number}/{len(round_specs)}: {round_label}")
+        round_start = time.time()
+        processes: list[tuple[int, subprocess.Popen[str]]] = []
+        for shard_id in range(shard_count):
+            cmd = [
+                sys.executable,
+                str(runner),
+                "--shard-id",
+                str(shard_id),
+                "--shard-count",
+                str(shard_count),
+                "--max-tasks",
+                "9999",
+                "--price-measure",
+                price_measure,
+                "--window",
+                str(window),
+                "--anticipation-months",
+                str(anticipation_months),
+                "--run-mode",
+                run_mode,
+                "--estimator-backend",
+                estimator_backend,
+                "--max-gsc-cross-city-donors",
+                str(max_gsc_cross_city_donors),
+                "--gsc-donor-sampling-seed",
+                str(gsc_donor_sampling_seed),
+                "--transaction-count-threshold",
+                str(transaction_count_threshold),
+                *round_args,
+            ]
+            if orders_file is not None:
+                cmd.extend(["--orders-file", str(orders_file)])
+            if tasks_file is not None:
+                cmd.extend(["--tasks-file", str(tasks_file)])
+            if retry_matching:
+                cmd.append("--retry-matching")
+            if qualification_receipt is not None:
+                cmd.extend(["--qualification-receipt", str(qualification_receipt)])
+            if dry_run:
+                cmd.append("--dry-run")
 
-    for shard_id in range(shard_count):
-        cmd = [
-            sys.executable,
-            str(ROOT / "scripts" / "causal_python" / "run_causal_label_queue.py"),
-            "--shard-id",
-            str(shard_id),
-            "--shard-count",
-            str(shard_count),
-            "--max-tasks",
-            "9999",
-            "--price-measure",
-            price_measure,
-            "--window",
-            str(window),
-            "--anticipation-months",
-            str(anticipation_months),
-            "--run-mode",
-            run_mode,
-            "--phase",
-            queue_phase,
-            "--estimator-backend",
-            estimator_backend,
-            "--max-gsc-cross-city-donors",
-            str(max_gsc_cross_city_donors),
-            "--gsc-donor-sampling-seed",
-            str(gsc_donor_sampling_seed),
-            "--transaction-count-threshold",
-            str(transaction_count_threshold),
-        ]
-        if orders_file is not None:
-            cmd.extend(["--orders-file", str(orders_file)])
-        if tasks_file is not None:
-            cmd.extend(["--tasks-file", str(tasks_file)])
-        if retry_matching:
-            cmd.append("--retry-matching")
-        if qualification_receipt is not None:
-            cmd.extend(["--qualification-receipt", str(qualification_receipt)])
-        if dry_run:
-            cmd.append("--dry-run")
+            shard_env = env.copy()
+            if estimator_backend == "python_gpu" and gpu_ids:
+                gpu_id = gpu_ids[shard_id % len(gpu_ids)]
+                shard_env["MIT_CAUSAL_DEVICE"] = f"cuda:{gpu_id}"
+                device_note = f", cuda:{gpu_id}"
+            else:
+                device_note = ""
 
-        shard_env = env.copy()
-        if estimator_backend == "python_gpu" and gpu_ids:
-            gpu_id = gpu_ids[shard_id % len(gpu_ids)]
-            shard_env["MIT_CAUSAL_DEVICE"] = f"cuda:{gpu_id}"
-            device_note = f", cuda:{gpu_id}"
-        else:
-            device_note = ""
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(ROOT),
+                env=shard_env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+            processes.append((shard_id, proc))
+            print(f"    Launched shard {shard_id + 1}/{shard_count} (PID {proc.pid}{device_note})")
 
-        proc = subprocess.Popen(
-            cmd,
-            cwd=str(ROOT),
-            env=shard_env,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        )
-        processes.append((shard_id, proc))
+        print(f"    Waiting for {shard_count} shards...")
+        failures = []
+        for shard_id, proc in processes:
+            stdout, _ = proc.communicate()
+            if proc.returncode != 0:
+                failures.append(shard_id)
+                print(f"    SHARD {shard_id + 1} FAILED (rc={proc.returncode})")
+                print(f"    {stdout[-1000:] if stdout else '(no output)'}")
+            else:
+                print(f"    Shard {shard_id + 1}/{shard_count} complete")
+                for line in stdout.splitlines()[-5:] if stdout else []:
+                    print(f"      {line.strip()}")
+        if failures:
+            raise RuntimeError(
+                f"Phase 2 round {round_label!r}: "
+                f"{len(failures)}/{shard_count} shards failed: {failures}"
+            )
+        round_elapsed = time.time() - round_start
         print(
-            f"  Launched shard {shard_id + 1}/{shard_count} "
-            f"(PID {proc.pid}{device_note})"
+            f"  Round {round_number}/{len(round_specs)} completed in "
+            f"{timedelta(seconds=int(round_elapsed))}"
         )
-
-    # Wait for all shards
-    print(f"\n  Waiting for {shard_count} shards to complete...")
-    failures = []
-    for shard_id, proc in processes:
-        stdout, _ = proc.communicate()
-        if proc.returncode != 0:
-            failures.append(shard_id)
-            print(f"  SHARD {shard_id + 1} FAILED (rc={proc.returncode})")
-            print(f"  {stdout[-1000:] if stdout else '(no output)'}")
-        else:
-            print(f"  Shard {shard_id + 1}/{shard_count} complete")
-            # Print summary from stdout's last few lines
-            for line in stdout.splitlines()[-5:] if stdout else []:
-                print(f"    {line.strip()}")
 
     elapsed = time.time() - start
-    if failures:
-        raise RuntimeError(f"{len(failures)}/{shard_count} shards failed: {failures}")
     print(f"Phase 2 completed in {timedelta(seconds=int(elapsed))}")
 
 
@@ -497,9 +561,7 @@ def phase3_merge_shards(
         family_parts.append(fq)
 
         if not shard_unit.exists():
-            raise RuntimeError(
-                f"Missing unit-queue shard file for shard {shard_id}: {shard_unit}"
-            )
+            raise RuntimeError(f"Missing unit-queue shard file for shard {shard_id}: {shard_unit}")
         uq = pd.read_csv(shard_unit)
         uq = uq.loc[uq["treatment_order"].astype(int).isin(shard_orders)]
         unit_parts.append(uq)
@@ -611,10 +673,20 @@ def main() -> int:
         help="Eligible R/Python parity audit receipt required for production Python labels.",
     )
     parser.add_argument(
+        "--resume-prevalidated-qualification",
+        action="store_true",
+        help=(
+            "Resume existing global-round shard checkpoints after this exact receipt "
+            "was fully audited at the original launch. This skips only the mutable "
+            "bound-source re-audit; receipt digest, code, counts, and environment "
+            "remain validated."
+        ),
+    )
+    parser.add_argument(
         "--max-gsc-cross-city-donors",
         type=int,
-        default=50_000,
-        help="Pre-outcome deterministic cap for cross-city GSC donors.",
+        default=5_000,
+        help="Pre-outcome deterministic cap for cross-city Matching, GSC, and MC donors.",
     )
     parser.add_argument(
         "--gsc-donor-sampling-seed",
@@ -672,6 +744,15 @@ def main() -> int:
         choices=("all", "matching", "gsc", "mc"),
         default="all",
         help="Phase passed to each causal-label shard (default: all)",
+    )
+    parser.add_argument(
+        "--task-scheduling",
+        choices=("global_rounds", "task_cascade"),
+        default="global_rounds",
+        help=(
+            "Run all selected tasks through six global method/scope rounds "
+            "(default), or use the legacy one-task-at-a-time cascade."
+        ),
     )
     parser.add_argument(
         "--retry-matching",
@@ -733,6 +814,20 @@ def main() -> int:
     qualification_receipt = args.qualification_receipt
     if qualification_receipt is not None:
         qualification_receipt = qualification_receipt.resolve()
+    qualification_proof: dict[str, object] = {}
+    if args.resume_prevalidated_qualification:
+        if args.reset_queues or args.task_scheduling != "global_rounds":
+            parser.error(
+                "--resume-prevalidated-qualification requires existing global-round "
+                "shards and cannot be combined with --reset-queues"
+            )
+        try:
+            validate_resume_checkpoint(
+                queue_variant_path(OUTCOME_FAMILY_QUEUE, args.run_mode),
+                args.shard_count,
+            )
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
     if (
         args.estimator_backend == "python_gpu"
         and args.run_mode == "production"
@@ -741,7 +836,15 @@ def main() -> int:
     ):
         if qualification_receipt is None:
             parser.error("production Python labels require --qualification-receipt")
-        validate_formal_qualification_receipt(qualification_receipt)
+        qualification_proof = validate_formal_qualification_receipt(
+            qualification_receipt,
+            verify_bound_sources=not args.resume_prevalidated_qualification,
+        )
+    elif args.resume_prevalidated_qualification:
+        parser.error(
+            "--resume-prevalidated-qualification is only valid for a non-dry-run "
+            "production Python Phase 2 run"
+        )
     if args.run_mode == "production" and not args.dry_run:
         try:
             validate_frozen_formal_matching_spec(ROOT)
@@ -753,11 +856,15 @@ def main() -> int:
 
     orders_file = None
     if args.orders_file is not None:
-        orders_file = args.orders_file if args.orders_file.is_absolute() else ROOT / args.orders_file
+        orders_file = (
+            args.orders_file if args.orders_file.is_absolute() else ROOT / args.orders_file
+        )
         orders_file = orders_file.resolve()
         orders = read_orders_file(orders_file)
-        if len(orders) != 400:
-            parser.error(f"--orders-file must contain exactly 400 unique orders; found {len(orders)}")
+        if len(orders) != 300:
+            parser.error(
+                f"--orders-file must contain exactly 300 unique orders; found {len(orders)}"
+            )
         print(f"Selected treatment-order sample: {len(orders)} grids from {orders_file}")
 
     tasks_file = None
@@ -773,6 +880,14 @@ def main() -> int:
         args.gsc_bootstrap_cores,
         args.mc_cores,
     )
+    if qualification_proof:
+        estimator_env["MIT_CAUSAL_QUALIFICATION_PREVALIDATED_SHA256"] = str(
+            qualification_proof["formal_qualification_receipt_sha256"]
+        )
+    if args.estimator_backend == "python_gpu":
+        estimator_env["MIT_CAUSAL_ESTIMATOR_OUTPUT_ROOT"] = str(
+            OUTPUT_PYTHON_ESTIMATORS_DIR
+        )
 
     if not args.phase and not args.run_all:
         parser.error("Specify --phase, --run-all, or both phases separately")
@@ -841,6 +956,7 @@ def main() -> int:
                 max_gsc_cross_city_donors=args.max_gsc_cross_city_donors,
                 gsc_donor_sampling_seed=args.gsc_donor_sampling_seed,
                 transaction_count_threshold=args.transaction_count_threshold,
+                task_scheduling=args.task_scheduling,
             )
         elif phase == 3:
             phase3_merge_shards(

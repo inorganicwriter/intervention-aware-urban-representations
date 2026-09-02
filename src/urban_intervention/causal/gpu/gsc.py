@@ -434,6 +434,17 @@ def _placebo_target_errors(
             )
             draw = (panels[row, :, 0] - counterfactual).detach().cpu().numpy()
             draw[~masks[row, :, 0].detach().cpu().numpy()] = np.nan
+            # On fect's AR path, ``fect_nevertreated`` returns ``eff.tr`` from
+            # the pseudo-treated fit after masking every D == 0 cell.  The
+            # phase-one covariance pool therefore contains treatment-period
+            # placebo effects only.  Retaining pre-treatment residuals creates
+            # pre/post covariance that the phase-two target refit can absorb,
+            # systematically understating the formal GSC standard error.
+            reference_ar = config.bootstrap_mode == "reference_ar" or (
+                config.bootstrap_mode == "auto" and not bool(observed.all())
+            )
+            if reference_ar:
+                draw[:treatment_start] = np.nan
             errors[batch_start + row] = draw
     minimum = max(2, int(np.ceil(config.n_bootstrap * config.minimum_valid_fraction)))
     if np.any(np.sum(np.isfinite(errors), axis=0)[treatment_start:] < minimum):

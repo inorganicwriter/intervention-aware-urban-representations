@@ -32,11 +32,10 @@ from urban_intervention.data.paths import (
     OUTPUT_CAUSAL_TASKS_DIR as TASK_ROOT,
 )
 from urban_intervention.data.paths import (
-    OUTPUT_COMPLETE_STAGING_DIR as STAGING,
-)
-from urban_intervention.data.paths import (
+    OUTPUT_COMPLETE_STAGING_DIR,
     OUTPUT_CONTROL_TASKS_DIR,
     OUTPUT_FIXED_CONTROL_DIR,
+    OUTPUT_PYTHON_ESTIMATORS_DIR,
     PANEL_HOUSING_MONTHLY_DIR,
     POI_DIR,
     POPULATION_DIR,
@@ -51,6 +50,17 @@ R_SCRIPT = os.environ.get("MIT_RSCRIPT", "Rscript")
 R_LIB = Path(os.environ.get("MIT_R_LIB", str(R_LIB_DIR)))
 VIIRS_RAW = os.environ.get("MIT_VIIRS_RAW")
 ROOT = PROJECT_ROOT
+# The parallel Python production launcher sets this explicitly.  Keeping the
+# fallback at the legacy staging root preserves the frozen R-reference queue
+# contract, while production Python outputs are isolated from qualification
+# artifacts before this module is imported.
+STAGING = Path(
+    os.environ.get(
+        "MIT_CAUSAL_ESTIMATOR_OUTPUT_ROOT",
+        str(OUTPUT_COMPLETE_STAGING_DIR),
+    )
+)
+PYTHON_ESTIMATOR_OUTPUT_ROOT = OUTPUT_PYTHON_ESTIMATORS_DIR
 
 OUTCOMES = {
     "housing": ["housing_log_price"],
@@ -82,7 +92,7 @@ class QueueSettings:
     transaction_count_threshold: int = 1
     run_mode: str = "production"
     estimator_backend: str = DEFAULT_ESTIMATOR_BACKEND
-    max_gsc_cross_city_donors: int = 50_000
+    max_gsc_cross_city_donors: int = 5_000
     gsc_donor_sampling_seed: int = 20260823
     qualification_receipt: Path | None = None
     qualification_proof: dict[str, object] = field(default_factory=dict)

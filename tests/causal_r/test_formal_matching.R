@@ -55,6 +55,13 @@ formal_result <- abadie_imbens_nearest(
 
 stopifnot(as.integer(formal_result$selected_ids[[1L]]) == panelmatch_control)
 stopifnot(formal_matching_spec()$matches_per_treated == 1L)
+stopifnot(formal_matching_spec()$matching_candidates == 5L)
+stopifnot(
+  identical(
+    formal_matching_spec()$matching_method,
+    "outcome_mahalanobis_m5_static_refine"
+  )
+)
 stopifnot(!formal_matching_spec()$post_treatment_data_used_for_matching)
 
 cat("PanelMatch/Abadie-Imbens equivalence test passed.\n")

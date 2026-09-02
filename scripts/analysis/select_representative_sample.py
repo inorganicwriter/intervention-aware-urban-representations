@@ -1,14 +1,14 @@
 """Stratified representative sample of treated grids for the sample run.
 
 Strata are city_key x opening_year.  Quotas use Hamilton's largest-remainder
-method on 400 units with a floor of 1 per non-empty stratum; any shortfall
+method on 300 units with a floor of 1 per non-empty stratum; any shortfall
 after the floor is reallocated to the largest strata, so every non-empty
 stratum is represented while large strata keep depth.
 
 Outputs (all under outputs/causal_labels/):
 
-- representative_sample_400.csv: sampled treatment orders with stratum info
-- representative_sample_400_diagnostics.json: coverage and composition report
+- representative_sample_300.csv: sampled treatment orders with stratum info
+- representative_sample_300_diagnostics.json: coverage and composition report
 
 The production sample defaults to the opening-month interval 2017-07 through
 2022-12. With the current processed VIIRS cache (2014-01 through 2024-12),
@@ -16,8 +16,8 @@ this interval provides the full 42-month pre-treatment and 24-month
 post-treatment window used by the monthly GSC specification.
 
 Usage:
-    python scripts/analysis/select_representative_sample.py [--n 400] [--seed 20260814]
-    python scripts/analysis/select_representative_sample.py [--n 400] [--seed 20260814] [--min-opening-month YYYY-MM] [--max-opening-month YYYY-MM]
+    python scripts/analysis/select_representative_sample.py [--n 300] [--seed 20260814]
+    python scripts/analysis/select_representative_sample.py [--n 300] [--seed 20260814] [--min-opening-month YYYY-MM] [--max-opening-month YYYY-MM]
 """
 
 from __future__ import annotations
@@ -130,7 +130,7 @@ def select_sample(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--n", type=int, default=400)
+    parser.add_argument("--n", type=int, default=300)
     parser.add_argument("--seed", type=int, default=20260814)
     parser.add_argument(
         "--min-opening-month",
@@ -198,11 +198,11 @@ def main() -> int:
         "stratum_n",
     ]
     sample[out_columns].to_csv(
-        args.output_dir / "representative_sample_400.csv",
+        args.output_dir / "representative_sample_300.csv",
         index=False,
         encoding="utf-8-sig",
     )
-    (args.output_dir / "representative_sample_400_diagnostics.json").write_text(
+    (args.output_dir / "representative_sample_300_diagnostics.json").write_text(
         json.dumps(diagnostics, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     print(

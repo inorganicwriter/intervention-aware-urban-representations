@@ -62,8 +62,8 @@ if (!is.null(orders_file)) {
     stop("Orders file lacks treatment_order: ", orders_file)
   }
   orders <- as.integer(order_frame$treatment_order)
-  if (anyNA(orders) || anyDuplicated(orders) || length(orders) != 400L) {
-    stop("Orders file must contain exactly 400 unique numeric treatment orders")
+  if (anyNA(orders) || anyDuplicated(orders) || length(orders) != 300L) {
+    stop("Orders file must contain exactly 300 unique numeric treatment orders")
   }
 }
 

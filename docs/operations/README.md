@@ -4,6 +4,8 @@
 
 - [`../PROJECT_GUIDE.md`](../PROJECT_GUIDE.md)：项目总览、文档权威层级和冻结输入边界。
 - [`server_deployment.md`](server_deployment.md)：服务器部署、上传清单、生产运行序列与监控。
+- [`causal_validation_and_deployment.md`](causal_validation_and_deployment.md)：因果代码包覆盖、资格门禁、Phase 1–3、发布、事件研究和论证复核的可复制命令清单。
+- [`server_runtime_profile.md`](server_runtime_profile.md)：生产服务器资源、容器配额、NFS 配置与并发测试基线。
 - [`current_project_status.md`](current_project_status.md)：固定研究资产、生产入口、队列状态和待执行任务。
 - [`station_data.md`](station_data.md)：站点人工决议及三个可追溯产品。
 - [`housing_price_collection.md`](housing_price_collection.md)：房价采集、开放数据导入与验收。

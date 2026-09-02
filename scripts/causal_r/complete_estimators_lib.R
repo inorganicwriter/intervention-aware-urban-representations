@@ -1051,7 +1051,8 @@ apply_post_observation_window <- function(paths, window = 1L) {
 }
 
 attach_single_target_gsc_uncertainty <- function(paths, fit, nboots,
-                                                  effect_scale = 1) {
+                                                  effect_scale = 1,
+                                                  normalization_scale = 1) {
   paths <- copy(as.data.table(paths))
   paths[, `:=`(
     standard_error = NA_real_, confidence_lower = NA_real_,
@@ -1066,6 +1067,11 @@ attach_single_target_gsc_uncertainty <- function(paths, fit, nboots,
   effect_scale <- as.numeric(effect_scale)
   if (length(effect_scale) != 1L || !is.finite(effect_scale) || effect_scale <= 0) {
     stop("GSC uncertainty effect_scale must be one finite positive value")
+  }
+  normalization_scale <- as.numeric(normalization_scale)
+  if (length(normalization_scale) != 1L ||
+      !is.finite(normalization_scale) || normalization_scale <= 0) {
+    stop("GSC uncertainty normalization_scale must be one finite positive value")
   }
   est_att <- as.data.frame(fit$est.att)
   uncertainty <- if ("event_time" %in% names(est_att)) {
@@ -1151,11 +1157,30 @@ attach_single_target_gsc_uncertainty <- function(paths, fit, nboots,
     confidence_upper = NA_real_, p_value = NA_real_
   )]
   present <- !is.na(matched)
+  corrected_standard_error <-
+    as.numeric(uncertainty[["S.E."]][matched[present]]) /
+    normalization_scale * effect_scale
+  corrected_effect <- as.numeric(paths$causal_response_label[present])
+  corrected_confidence_lower <- if (normalization_scale == 1) {
+    as.numeric(uncertainty[["CI.lower"]][matched[present]]) * effect_scale
+  } else {
+    corrected_effect - stats::qnorm(0.975) * corrected_standard_error
+  }
+  corrected_confidence_upper <- if (normalization_scale == 1) {
+    as.numeric(uncertainty[["CI.upper"]][matched[present]]) * effect_scale
+  } else {
+    corrected_effect + stats::qnorm(0.975) * corrected_standard_error
+  }
+  corrected_p_value <- if (normalization_scale == 1) {
+    as.numeric(uncertainty[["p.value"]][matched[present]])
+  } else {
+    2 * stats::pnorm(-abs(corrected_effect / corrected_standard_error))
+  }
   paths[present, `:=`(
-    standard_error = as.numeric(uncertainty[["S.E."]][matched[present]]) * effect_scale,
-    confidence_lower = as.numeric(uncertainty[["CI.lower"]][matched[present]]) * effect_scale,
-    confidence_upper = as.numeric(uncertainty[["CI.upper"]][matched[present]]) * effect_scale,
-    p_value = as.numeric(uncertainty[["p.value"]][matched[present]])
+    standard_error = corrected_standard_error,
+    confidence_lower = corrected_confidence_lower,
+    confidence_upper = corrected_confidence_upper,
+    p_value = corrected_p_value
   )]
   paths[]
 }

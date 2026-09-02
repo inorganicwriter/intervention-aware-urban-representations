@@ -148,6 +148,7 @@ class ArtifactInputs:
     donor_universe: Path | None = None
     target_support: Path | None = None
     treatment_orders: tuple[int, ...] | None = None
+    task_keys: tuple[tuple[int, str], ...] | None = None
     control_task_root: Path | None = None
 
 
@@ -643,7 +644,54 @@ def build_response_frame(
     treatments = pd.read_parquet(inputs.treatments)
     family_queue = pd.read_csv(inputs.family_queue)
     control_queue = pd.read_csv(inputs.control_queue)
-    if inputs.treatment_orders is not None:
+    if inputs.treatment_orders is not None and inputs.task_keys is not None:
+        raise ValueError("Artifact inputs cannot combine treatment_orders and task_keys")
+    selected_task_keys: set[tuple[int, str]] | None = None
+    if inputs.task_keys is not None:
+        selected_task_keys = {
+            (int(order), str(family)) for order, family in inputs.task_keys
+        }
+        if not selected_task_keys or len(selected_task_keys) != len(inputs.task_keys):
+            raise ValueError("Sample release task keys are empty or duplicated")
+        unknown_families = {family for _, family in selected_task_keys} - set(
+            OUTCOME_HORIZONS
+        )
+        if unknown_families:
+            raise ValueError(
+                f"Sample release contains unknown families: {sorted(unknown_families)}"
+            )
+        selected_orders = {order for order, _ in selected_task_keys}
+        treatment_orders = set(treatments["treatment_order"].astype(int))
+        missing_orders = selected_orders - treatment_orders
+        if missing_orders:
+            raise ValueError(
+                "Sample task orders are absent from the treatment list: "
+                f"{sorted(missing_orders)[:10]}"
+            )
+        treatments = treatments.loc[
+            treatments["treatment_order"].astype(int).isin(selected_orders)
+        ].copy()
+        family_keys = pd.MultiIndex.from_arrays(
+            [
+                family_queue["treatment_order"].astype(int),
+                family_queue["outcome_family"].astype(str),
+            ]
+        )
+        family_queue = family_queue.loc[family_keys.isin(selected_task_keys)].copy()
+        actual_keys = set(
+            zip(
+                family_queue["treatment_order"].astype(int),
+                family_queue["outcome_family"].astype(str),
+                strict=False,
+            )
+        )
+        if actual_keys != selected_task_keys:
+            missing = sorted(selected_task_keys - actual_keys)
+            raise ValueError(f"Sample task keys are absent from the family queue: {missing[:10]}")
+        control_queue = control_queue.loc[
+            control_queue["treatment_order"].astype(int).isin(selected_orders)
+        ].copy()
+    elif inputs.treatment_orders is not None:
         selected_orders = {int(order) for order in inputs.treatment_orders}
         if not selected_orders:
             raise ValueError("Sample release requires at least one treatment order")
@@ -699,6 +747,14 @@ def build_response_frame(
         )
 
     skeleton = expected_label_skeleton(treatments, specification_id)
+    if selected_task_keys is not None:
+        skeleton_keys = pd.MultiIndex.from_arrays(
+            [
+                skeleton["treatment_order"].astype(int),
+                skeleton["outcome_family"].astype(str),
+            ]
+        )
+        skeleton = skeleton.loc[skeleton_keys.isin(selected_task_keys)].copy()
     labels, task_metadata, task_paths = collect_task_products(
         family_queue,
         treatments,
@@ -966,11 +1022,26 @@ def publish_response_artifact(
             "created_utc": datetime.now(UTC).isoformat(),
             "strict_production": strict_production,
             "treatment_scope": {
-                "kind": "subset" if inputs.treatment_orders is not None else "full",
+                "kind": (
+                    "task_subset"
+                    if inputs.task_keys is not None
+                    else "subset"
+                    if inputs.treatment_orders is not None
+                    else "full"
+                ),
                 "count": int(len(artifact["treatment_order"].unique())),
                 "orders": sorted(int(v) for v in artifact["treatment_order"].unique())
-                if inputs.treatment_orders is not None
+                if inputs.treatment_orders is not None or inputs.task_keys is not None
                 else None,
+                "task_count": len(inputs.task_keys) if inputs.task_keys is not None else None,
+                "tasks": (
+                    [
+                        {"treatment_order": int(order), "outcome_family": str(family)}
+                        for order, family in sorted(inputs.task_keys)
+                    ]
+                    if inputs.task_keys is not None
+                    else None
+                ),
             },
             "specification_id": specification_id,
             "primary_key": KEY_COLUMNS,

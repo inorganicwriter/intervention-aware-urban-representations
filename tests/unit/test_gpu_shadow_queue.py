@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -75,7 +76,16 @@ def test_completed_manifest_must_match_code_config_and_source_age(tmp_path) -> N
     changed.dtype = "float32"
     assert not MODULE._already_passed(output, changed)
 
+    recorded_mtime_ns = next(
+        record["mtime_ns"]
+        for record in manifest["source_fingerprints"]
+        if record["path"] == str(panel.resolve())
+    )
     panel.write_bytes(b"other")
+    os.utime(
+        panel,
+        ns=(panel.stat().st_atime_ns, int(recorded_mtime_ns)),
+    )
     assert not MODULE._already_passed(output, _args())
 
     panel.write_bytes(b"panel")
@@ -143,6 +153,61 @@ def test_formal_reference_rejects_legacy_windowed_inference(tmp_path) -> None:
         assert "observation_window=1" in str(error)
     else:  # pragma: no cover - explicit fail-closed assertion
         raise AssertionError("windowed R inference was accepted for qualification")
+
+
+def test_formal_discovery_skips_windowed_reference_and_keeps_raw_reference(
+    tmp_path: Path,
+) -> None:
+    import pandas as pd
+
+    staging = tmp_path / "staging"
+    windowed = staging / "xu_gsc" / "task-0-windowed"
+    raw = staging / "xu_gsc" / "task-1-raw"
+    for task in (windowed, raw):
+        task.mkdir(parents=True)
+        pd.DataFrame({"x": [1]}).to_parquet(
+            task / "estimation_panel.parquet", index=False
+        )
+    pd.DataFrame(
+        {
+            "minimum_window_n": [1, 3],
+            "uncertainty_source": ["gsc", "gsc_window3"],
+        }
+    ).to_parquet(windowed / "causal_response_labels.parquet", index=False)
+    pd.DataFrame(
+        {
+            "minimum_window_n": [1, 1],
+            "uncertainty_source": ["gsc", "gsc"],
+        }
+    ).to_parquet(raw / "causal_response_labels.parquet", index=False)
+    args = argparse.Namespace(
+        estimators="gsc",
+        staging_root=staging,
+        matching_input_root=tmp_path / "matching",
+        output_root=tmp_path / "output",
+        tuning="reference",
+        formal_qualification=True,
+        retry=True,
+        dtype="float64",
+        chunk_size=65_536,
+        memory_fraction=0.85,
+        max_iter=5000,
+        tol=1e-5,
+        contract_backend="any",
+        gsc_bootstrap_mode="none",
+        gsc_n_bootstrap=0,
+        mc_inference="none",
+        inference_batch_size=16,
+        gsc_inference_relative_rmse_tolerance=0.35,
+        mc_inference_relative_rmse_tolerance=0.02,
+        minimum_ci_zero_agreement=0.9,
+        max_tasks=None,
+        max_tasks_per_estimator=3,
+    )
+
+    tasks = MODULE.discover_tasks(args)
+
+    assert [task.task_id for task in tasks] == ["gsc:task-1-raw"]
 
 
 def test_task_limit_is_stratified_by_estimator(tmp_path) -> None:

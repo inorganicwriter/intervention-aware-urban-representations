@@ -9,6 +9,7 @@ import pytest
 
 import urban_intervention.causal.event_study as event_study
 from urban_intervention.causal.event_study import (
+    _wald_zero,
     fit_twfe_event_study,
     write_matching_event_study_figure,
 )
@@ -16,7 +17,7 @@ from urban_intervention.causal.event_study import (
 
 def _staggered_panel() -> pd.DataFrame:
     rows: list[dict[str, object]] = []
-    event_times = [-3, -2, -1, 1, 2]
+    event_times = [-3, -2, -1, 0, 1, 2]
     for pair in range(24):
         cohort = 2010 + pair % 6
         for role in ("treated", "control"):
@@ -26,9 +27,7 @@ def _staggered_panel() -> pd.DataFrame:
                 period = cohort + event_time
                 time_effect = (period - 2000) * 0.03
                 treatment_effect = (
-                    {1: 1.25, 2: 2.0}.get(event_time, 0.0)
-                    if role == "treated"
-                    else 0.0
+                    {0: 0.5, 1: 1.25, 2: 2.0}.get(event_time, 0.0) if role == "treated" else 0.0
                 )
                 noise = ((pair * 7 + event_time * 3 + (role == "treated")) % 11 - 5) * 0.001
                 rows.append(
@@ -49,7 +48,8 @@ def _staggered_panel() -> pd.DataFrame:
 def test_twfe_event_study_keeps_post_periods_and_clusters() -> None:
     result = fit_twfe_event_study(_staggered_panel(), reference_event_time=-1)
     coefficients = result.coefficients.set_index("event_time")
-    assert {1, 2}.issubset(coefficients.index)
+    assert {0, 1, 2}.issubset(coefficients.index)
+    assert abs(coefficients.loc[0, "estimate"] - 0.5) < 0.02
     assert abs(coefficients.loc[1, "estimate"] - 1.25) < 0.02
     assert abs(coefficients.loc[2, "estimate"] - 2.0) < 0.02
     assert np.isfinite(coefficients["standard_error_grid"]).all()
@@ -62,6 +62,26 @@ def test_twfe_event_study_keeps_post_periods_and_clusters() -> None:
     assert result.diagnostics["treated_events"] == 24
     assert result.diagnostics["grid_ssc_parameters"] > result.diagnostics["parameters"]
     assert result.diagnostics["city_ssc_parameters"] > result.diagnostics["parameters"]
+    assert result.diagnostics["pretrend_restrictions"] == 2
+
+
+def test_monthly_post_window_preserves_t0_and_matches_formal_trailing_mean() -> None:
+    frame = pd.DataFrame(
+        {
+            "event_time": [-1, 0, 1, 2, 3, 4],
+            "outcome": [-1.0, 10.0, 1.0, 2.0, 3.0, 4.0],
+            "role": ["treated"] * 6,
+            "source_city": ["alpha"] * 6,
+            "source_grid": ["g1"] * 6,
+        }
+    )
+    result = event_study._apply_monthly_post_window(frame, 3).set_index("event_time")
+    assert result.loc[-1, "outcome"] == -1.0
+    assert result.loc[0, "outcome"] == 10.0
+    assert result.loc[1, "outcome"] == 1.0
+    assert result.loc[2, "outcome"] == 1.5
+    assert result.loc[3, "outcome"] == 2.0
+    assert result.loc[4, "outcome"] == 3.0
 
 
 def test_matching_event_study_figure_is_written(tmp_path: Path) -> None:
@@ -70,6 +90,18 @@ def test_matching_event_study_figure_is_written(tmp_path: Path) -> None:
     write_matching_event_study_figure(result, output, title="Synthetic")
     assert output.is_file()
     assert output.with_suffix(".pdf").is_file()
+
+
+def test_wald_refuses_more_restrictions_than_cluster_degrees_of_freedom() -> None:
+    result = _wald_zero(
+        np.ones(3),
+        np.eye(3),
+        np.arange(3),
+        cluster_count=3,
+    ).iloc[0]
+    assert np.isnan(result["p_value"])
+    assert result["df1"] == 3
+    assert result["df2"] == 2
 
 
 def test_event_study_builder_requires_accepted_task_manifest(
@@ -112,11 +144,11 @@ def test_event_study_builder_requires_accepted_task_manifest(
     def fake_pair(row, _family, _root, _minimum, _maximum):
         return pd.DataFrame(
             {
-                "period": [2019, 2021, 2019, 2021],
-                "outcome": [1.0, 2.0, 1.0, 1.5],
-                "role": ["treated", "treated", "control", "control"],
-                "source_city": ["alpha"] * 4,
-                "source_grid": ["t1", "t1", "c1", "c1"],
+                "period": [2019, 2020, 2021, 2019, 2020, 2021],
+                "outcome": [1.0, 1.5, 2.0, 1.0, 1.25, 1.5],
+                "role": ["treated", "treated", "treated", "control", "control", "control"],
+                "source_city": ["alpha"] * 6,
+                "source_grid": ["t1", "t1", "t1", "c1", "c1", "c1"],
             }
         )
 
@@ -131,3 +163,4 @@ def test_event_study_builder_requires_accepted_task_manifest(
         max_post=1,
     )
     assert set(panel["treatment_order"]) == {1}
+    assert 0 in set(panel["event_time"])

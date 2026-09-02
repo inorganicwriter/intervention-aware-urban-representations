@@ -66,4 +66,6 @@ def test_formal_entrypoint_separates_transaction_sensitivity_outputs() -> None:
     default = module.output_directory(metadata, "gsc", "preview", 1)
     sensitivity = module.output_directory(metadata, "gsc", "preview", 3)
     assert default != sensitivity
+    assert "python_production" in default.parts
+    assert "staging" not in default.parts
     assert sensitivity.name.endswith("_tx3")

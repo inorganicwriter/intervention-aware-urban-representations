@@ -287,25 +287,26 @@ MC 允许 `min.T0=1` 的覆盖优先边界。此时估计主要依赖跨单元�
                                                             读取结果并生成标签
 ```
 
-月度结果族的处理前特征分为三个 12 月块：
+月度结果族保留 36 个清洁处理前月份，但 housing 与 VIIRS 按数据支持采用不同特征：
 
-| 特征块 | 内容 | 用途 |
+| 结果族 | 特征 | 用途 |
 |---|---|---|
-| `lag3` | 最早 12 个清洁处理前月 | 训练 |
-| `lag2` | 中间 12 个月 | 训练 |
-| `lag1` | 最近 12 个清洁处理前月 | holdout |
+| housing | 三个 12 月块均值 | 最早两个块训练，最近一个块 holdout |
+| VIIRS | 36 个逐月 asinh(avg_rad) 值 | 最早 24 个月训练，最近 12 个月 holdout |
 
 年度结果族使用开通年前第 3 年、第 2 年和第 1 年，前两年参与训练，前一年作为 holdout。
 
 ### 4.2 处理前特征向量
 
-对结果变量或结果族 `m`，月度块均值为：
+对 housing 结果变量或结果族 m，月度块均值为：
 
 ```text
 X_im,b = mean(Y_im,t : t belongs to block b and Y_im,t is finite)
 ```
 
-房价允许月份稀疏，但每个要求的块需要至少一个有效观测。VIIRS 需要更完整的月度支持。零方差特征从实际距离矩阵中移除，移除信息写入来源记录。
+房价允许月份稀疏，但每个要求的块需要至少一个有效观测。VIIRS
+要求 36 个清洁处理前月完整，并保留逐月轨迹，避免把季节性或短期趋势压缩为三个年均值。
+零方差特征从实际距离矩阵中移除，移除信息写入来源记录。
 
 静态特征包括区位和处理前轨道可达性，例如：
 
@@ -649,11 +650,11 @@ Y_it = α_i + γ_t + Σ_(h∈H, h≠h0) β_h [Treated_i * 1(event_time=h)] + ε_
 
 ### 7.3 平行趋势联合 Wald 检验
 
-令 \(\widehat\beta_{pre}\) 为所有清洁处理前 lead 的系数向量，\(\widehat V\) 为相应聚类协方差矩阵。检验：
+主检验取最近 5 个清洁处理前期。最后一期作为参考期，\(\widehat\beta_{pre}\) 最多包含其余 4 个 lead。\(\widehat V\) 为相应聚类协方差矩阵。检验：
 
 ```text
-H0: β_h = 0 for every h < 0 and h != h0
-H1: at least one clean pre coefficient differs from zero
+H0: β_h = 0 for every h in the prespecified recent clean-pre window
+H1: at least one coefficient in that window differs from zero
 ```
 
 联合统计量为：
@@ -662,7 +663,7 @@ H1: at least one clean pre coefficient differs from zero
 F = (β_hat_pre' V_hat_pre^(-1) β_hat_pre) / q
 ```
 
-其中 `q` 是清洁处理前系数数量。Python 实现使用 `F(q, G-1)` 参考分布，`G` 是聚类数量；R `fixest::wald` 输出独立的参考结果。
+其中 `q` 是主窗口内参与检验的清洁处理前系数数量。Python 实现使用 `F(q, G-1)` 参考分布，`G` 是聚类数量。代码要求 `q <= G-1` 且协方差子矩阵满秩。条件不满足时 p 值写为缺失。完整清洁处理前路径继续进入系数表和图形。R `fixest::wald` 输出独立的参考结果。
 
 单期系数和联合检验回答不同问题：
 
@@ -812,7 +813,7 @@ p = 2 * P(T_(G-1) >= |t|)
 事件研究通常包含多个 lead 和 lag。单期 5% 显著性会产生多重检验问题。项目报告使用以下层次：
 
 1. 动态系数图和 95% 置信区间；
-2. 所有 clean pre lead 的联合检验；
+2. 最近 5 个 clean pre periods 的低维联合检验；
 3. 关键处理后期的单期结果；
 4. Sun-Abraham、空间半径和 anticipation 敏感性；
 5. 方法和结果族分开汇总。

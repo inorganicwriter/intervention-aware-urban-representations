@@ -101,7 +101,13 @@ def _already_passed(output: Path, args: argparse.Namespace) -> bool:
             "qualification_passed"
         ) is not True:
             return False
-        if not fingerprints_match(payload.get("source_fingerprints")):
+        # NAS filesystems can preserve a coarse mtime when a same-sized file is
+        # overwritten.  A completed shadow result is content-addressed, so
+        # cache reuse must verify the recorded digests rather than trusting
+        # size and timestamp metadata alone.
+        if not fingerprints_match(
+            payload.get("source_fingerprints"), verify_content=True
+        ):
             return False
         parity = payload["parity"]
         return parity.get("passed") is True or parity.get("available") is False
@@ -142,6 +148,15 @@ def _assert_raw_qualification_reference(labels: Path) -> None:
             )
 
 
+def _is_unwindowed_qualification_reference(labels: Path) -> bool:
+    """Return whether one R artifact is eligible for formal inference parity."""
+    try:
+        _assert_raw_qualification_reference(labels)
+    except ValueError:
+        return False
+    return True
+
+
 def discover_tasks(args: argparse.Namespace) -> list[GpuTask]:
     selected = set(args.estimators.split(","))
     unknown = selected - {"matching", "gsc", "mc"}
@@ -158,8 +173,10 @@ def discover_tasks(args: argparse.Namespace) -> list[GpuTask]:
             labels = panel.with_name("causal_response_labels.parquet")
             if (args.tuning == "reference" or args.formal_qualification) and not labels.is_file():
                 continue
-            if args.formal_qualification:
-                _assert_raw_qualification_reference(labels)
+            if args.formal_qualification and not _is_unwindowed_qualification_reference(
+                labels
+            ):
+                continue
             if args.tuning == "gpu" and any(
                 not path.is_file()
                 for path in cv_contract_artifact_paths(panel.parent, estimator)
@@ -249,12 +266,14 @@ def prepare_python_contracts(args: argparse.Namespace) -> int:
             continue
         root = args.staging_root / directory
         if root.exists():
-            candidates.extend(
-                (estimator, panel)
-                for panel in sorted(root.rglob("estimation_panel.parquet"))
-                if not args.formal_qualification
-                or panel.with_name("causal_response_labels.parquet").is_file()
-            )
+            for panel in sorted(root.rglob("estimation_panel.parquet")):
+                labels = panel.with_name("causal_response_labels.parquet")
+                if args.formal_qualification and (
+                    not labels.is_file()
+                    or not _is_unwindowed_qualification_reference(labels)
+                ):
+                    continue
+                candidates.append((estimator, panel))
     per_estimator = getattr(args, "max_tasks_per_estimator", None)
     if per_estimator is not None:
         limited: list[tuple[str, Path]] = []

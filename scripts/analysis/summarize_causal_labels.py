@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import textwrap
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -28,8 +29,9 @@ import matplotlib
 matplotlib.use("Agg")
 matplotlib.rcParams.update(
     {
-        "font.family": ["Times New Roman", "Times", "DejaVu Serif"],
-        "font.serif": ["Times New Roman", "Times", "DejaVu Serif"],
+        "font.family": "sans-serif",
+        "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
+        "font.size": 7,
         "pdf.fonttype": 42,
         "ps.fonttype": 42,
         "svg.fonttype": "none",
@@ -43,6 +45,19 @@ ROOT = Path(__file__).resolve().parents[2]
 OUTPUT_ROOT = ROOT / "outputs" / "causal_labels"
 
 FAMILIES = ["housing", "viirs", "poi", "population"]
+PRIMARY_OUTCOMES = {
+    "housing": "housing_log_price",
+    "viirs": "viirs_avg_asinh",
+    "poi": "poi_count_log",
+    "population": "population_log",
+}
+FAMILY_TITLES = {
+    "housing": "Housing price",
+    "viirs": "Night-time light",
+    "poi": "POI count",
+    "population": "Population",
+}
+GENERATION_STATES = ("complete", "partial", "failed")
 
 FAILURE_CLASSES: dict[str, str] = {
     "preonly_placebo_quality_gate_failed": "research",
@@ -74,12 +89,14 @@ def classify_failure(reason: object) -> str:
 
 
 def scope_of(row: pd.Series) -> str:
-    donor_scope = str(row.get("donor_scope", "") or "")
+    donor_scope_value = row.get("donor_scope", "")
+    donor_scope = "" if pd.isna(donor_scope_value) else str(donor_scope_value)
     if donor_scope == "all_city_standardized":
         return "cross_city"
     if donor_scope == "same_city":
         return "same_city"
-    method = str(row.get("method", "") or "")
+    method_value = row.get("method", "")
+    method = "" if pd.isna(method_value) else str(method_value)
     if "all_city" in method:
         return "cross_city"
     return "same_city" if "same_city" in method else "unknown"
@@ -94,6 +111,152 @@ def as_bool(values: pd.Series) -> pd.Series:
     )
 
 
+def primary_label_rows(artifact: pd.DataFrame) -> pd.DataFrame:
+    """Keep the four primary outcomes without mixing auxiliary POI scales."""
+    selected = [
+        artifact.loc[
+            artifact["outcome_family"].eq(family)
+            & artifact["outcome"].eq(PRIMARY_OUTCOMES[family])
+        ]
+        for family in FAMILIES
+    ]
+    return pd.concat(selected, ignore_index=True) if selected else artifact.iloc[0:0].copy()
+
+
+def analysis_label_mask(frame: pd.DataFrame) -> pd.Series:
+    """Select released labels eligible for quantitative summaries."""
+    available = as_bool(frame["label_available"])
+    if "production_eligible" in frame.columns:
+        available &= as_bool(frame["production_eligible"])
+    return available
+
+
+def _clean_reason(values: pd.Series) -> str | None:
+    cleaned = (
+        values.astype("string")
+        .str.strip()
+        .replace({"": pd.NA, "nan": pd.NA, "none": pd.NA, "<NA>": pd.NA})
+    )
+    cleaned = cleaned.loc[cleaned.notna()]
+    if cleaned.empty:
+        return None
+    return str(cleaned.value_counts().index[0])
+
+
+def build_generation_tables(
+    primary: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Summarize one generation outcome per treated-grid and family task."""
+    task_rows: list[dict[str, object]] = []
+    for (order, family), part in primary.groupby(
+        ["treatment_order", "outcome_family"], sort=True, dropna=False
+    ):
+        available = analysis_label_mask(part)
+        expected = len(part)
+        obtained = int(available.sum())
+        state = "complete" if obtained == expected and expected else "partial" if obtained else "failed"
+        reason = None
+        for column in ("task_failure_reason", "failure_reason"):
+            if column in part.columns:
+                reason = _clean_reason(part.loc[~available, column])
+                if reason:
+                    break
+        if reason is None and state == "partial":
+            reason = "partial_target_path_missing_periods"
+        if reason is None and state == "failed":
+            reason = "no_primary_outcome_label"
+        task_rows.append(
+            {
+                "treatment_order": int(order),
+                "outcome_family": str(family),
+                "expected_label_cells": expected,
+                "available_label_cells": obtained,
+                "generation_state": state,
+                "failure_reason": reason,
+            }
+        )
+    tasks = pd.DataFrame(task_rows)
+    if tasks.empty:
+        generation = pd.DataFrame(
+            columns=["outcome_family", "generation_state", "treated_grids", "total_grids", "share"]
+        )
+        failures = pd.DataFrame(columns=["outcome_family", "failure_reason", "treated_grids"])
+        return tasks, generation, failures
+    generation = (
+        tasks.groupby(["outcome_family", "generation_state"], sort=True)
+        .size()
+        .rename("treated_grids")
+        .reset_index()
+    )
+    complete_index = pd.MultiIndex.from_product(
+        [FAMILIES, GENERATION_STATES], names=["outcome_family", "generation_state"]
+    )
+    generation = (
+        generation.set_index(["outcome_family", "generation_state"])
+        .reindex(complete_index, fill_value=0)
+        .reset_index()
+    )
+    totals = tasks.groupby("outcome_family").size().rename("total_grids")
+    generation = generation.merge(totals, on="outcome_family", how="left")
+    generation["total_grids"] = generation["total_grids"].fillna(0).astype(int)
+    generation["share"] = np.divide(
+        generation["treated_grids"],
+        generation["total_grids"],
+        out=np.zeros(len(generation), dtype=float),
+        where=generation["total_grids"].to_numpy() > 0,
+    )
+    failures = (
+        tasks.loc[tasks["generation_state"].ne("complete")]
+        .groupby(["outcome_family", "failure_reason"], dropna=False, sort=True)
+        .size()
+        .rename("treated_grids")
+        .reset_index()
+        .sort_values(["treated_grids", "failure_reason"], ascending=[False, True])
+    )
+    return tasks, generation, failures
+
+
+def build_distribution_table(primary: pd.DataFrame) -> pd.DataFrame:
+    """Compute native-scale distribution diagnostics for the four primary labels."""
+    rows: list[dict[str, object]] = []
+    selected = primary.loc[analysis_label_mask(primary)].copy()
+    selected["causal_response_label"] = pd.to_numeric(
+        selected["causal_response_label"], errors="coerce"
+    )
+    selected = selected.loc[np.isfinite(selected["causal_response_label"])]
+    for family in FAMILIES:
+        part = selected.loc[selected["outcome_family"].eq(family)]
+        values = part["causal_response_label"]
+        if values.empty:
+            rows.append({"outcome_family": family, "outcome": PRIMARY_OUTCOMES[family], "n": 0})
+            continue
+        q25, median, q75 = (float(value) for value in values.quantile([0.25, 0.5, 0.75]))
+        iqr = q75 - q25
+        lower_fence, upper_fence = q25 - 1.5 * iqr, q75 + 1.5 * iqr
+        outliers = (values < lower_fence) | (values > upper_fence)
+        rows.append(
+            {
+                "outcome_family": family,
+                "outcome": PRIMARY_OUTCOMES[family],
+                "n": int(len(values)),
+                "treated_grids": int(part["treatment_order"].nunique()),
+                "mean": float(values.mean()),
+                "sd": float(values.std(ddof=1)) if len(values) > 1 else np.nan,
+                "min": float(values.min()),
+                "q25": q25,
+                "median": median,
+                "q75": q75,
+                "max": float(values.max()),
+                "iqr": iqr,
+                "lower_tukey_fence": lower_fence,
+                "upper_tukey_fence": upper_fence,
+                "tukey_outliers": int(outliers.sum()),
+                "tukey_outlier_share": float(outliers.mean()),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def summarize_family(
     frame: pd.DataFrame,
 ) -> dict[str, object]:
@@ -106,7 +269,8 @@ def summarize_family(
     iqr = float(q[0.75] - q[0.25])
     lo, hi = float(q[0.25]) - 1.5 * iqr, float(q[0.75]) + 1.5 * iqr
     return {
-        "tasks": int(len(frame)),
+        "tasks": int(frame[["treatment_order", "outcome_family"]].drop_duplicates().shape[0]),
+        "label_cells": int(len(frame)),
         "grids_with_any_label": int(available["treatment_order"].nunique()),
         "grids_without_any_label": int(
             frame["treatment_order"].nunique() - available["treatment_order"].nunique()
@@ -158,11 +322,12 @@ def summarize_family(
 
 def _save_figure_bundle(fig: plt.Figure, base_path: Path) -> list[str]:
     """Save publication-friendly raster and vector versions of one figure."""
-    paths = [base_path.with_suffix(ext) for ext in (".png", ".pdf", ".svg")]
+    paths = [base_path.with_suffix(ext) for ext in (".png", ".pdf", ".svg", ".tiff")]
     for path in paths:
+        dpi = 600 if path.suffix == ".tiff" else 300
         fig.savefig(
             path,
-            dpi=300,
+            dpi=dpi,
             bbox_inches="tight",
             facecolor="white",
         )
@@ -172,30 +337,77 @@ def _save_figure_bundle(fig: plt.Figure, base_path: Path) -> list[str]:
 
 def render_summary_figures(
     artifact: pd.DataFrame,
-    family_summary: dict[str, dict[str, object]],
+    generation_summary: pd.DataFrame,
+    failure_summary: pd.DataFrame,
+    distribution_summary: pd.DataFrame,
     out_dir: Path,
 ) -> list[str]:
-    """Render the two hand-off figures for label coverage and distributions."""
+    """Render generation, failure-reason and primary-label distribution figures."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    available_mask = as_bool(artifact["label_available"])
+    primary = primary_label_rows(artifact)
+    available_mask = analysis_label_mask(primary)
     written: list[str] = []
 
-    # Four native-scale boxplots make outliers and the median/IQR immediately
-    # visible without forcing incomparable outcome families onto one axis.
-    fig, axes = plt.subplots(2, 2, figsize=(11, 8), squeeze=False)
-    rng = np.random.default_rng(20260819)
+    # One task-level state per treated grid and family prevents missing horizons
+    # from being counted repeatedly as separate failed treatments.
+    coverage = (
+        generation_summary.pivot(
+            index="outcome_family", columns="generation_state", values="treated_grids"
+        )
+        .reindex(index=FAMILIES, columns=GENERATION_STATES, fill_value=0)
+        .fillna(0)
+    )
+    fig, axis = plt.subplots(figsize=(7.2, 4.4))
+    bottom = np.zeros(len(coverage), dtype=float)
+    state_colors = {"complete": "#4E8098", "partial": "#E1A65A", "failed": "#B75D69"}
+    for state in GENERATION_STATES:
+        values = coverage[state].to_numpy(dtype=float)
+        bars = axis.bar(
+            np.arange(len(coverage)),
+            values,
+            bottom=bottom,
+            color=state_colors[state],
+            edgecolor="white",
+            linewidth=0.6,
+            label=state.capitalize(),
+        )
+        for bar, count, base in zip(bars, values, bottom, strict=True):
+            if count > 0:
+                axis.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    base + count / 2,
+                    f"{int(count):,}",
+                    ha="center",
+                    va="center",
+                    fontsize=8,
+                    color="white" if state != "partial" else "#333333",
+                )
+        bottom += values
+    axis.set_xticks(np.arange(len(coverage)), [FAMILY_TITLES[value] for value in coverage.index])
+    axis.set_ylabel("Treated grids")
+    axis.set_title("Causal-label generation by primary outcome")
+    axis.legend(ncol=3, loc="upper center", bbox_to_anchor=(0.5, -0.12))
+    axis.grid(axis="y", color="#E3E3E3", linewidth=0.55)
+    axis.spines[["top", "right"]].set_visible(False)
+    fig.tight_layout()
+    written.extend(_save_figure_bundle(fig, out_dir / "causal_label_generation"))
+
+    # Four native-scale boxplots keep transformed outcomes on separate axes.
+    fig, axes = plt.subplots(2, 2, figsize=(7.2, 5.7), squeeze=False)
     for index, family in enumerate(FAMILIES):
         axis = axes.flat[index]
         values = pd.to_numeric(
-            artifact.loc[available_mask & artifact["outcome_family"].eq(family),
-                         "causal_response_label"],
+            primary.loc[
+                available_mask & primary["outcome_family"].eq(family),
+                "causal_response_label",
+            ],
             errors="coerce",
         )
         values = values[np.isfinite(values)]
         if len(values):
             axis.boxplot(
                 values.to_numpy(),
-                vert=True,
+                orientation="horizontal",
                 patch_artist=True,
                 showfliers=True,
                 widths=0.42,
@@ -212,43 +424,73 @@ def render_summary_figures(
             if len(plot_values) > 3000:
                 plot_values = plot_values[np.linspace(0, len(plot_values) - 1, 3000).astype(int)]
             axis.scatter(
-                rng.normal(1.0, 0.035, len(plot_values)),
                 plot_values,
+                1.0 + 0.035 * np.sin(np.arange(len(plot_values)) * 2.399963),
                 s=5,
                 color="#1F78B4",
                 alpha=0.18,
                 linewidths=0,
                 zorder=1,
             )
-            outliers = family_summary.get(family, {}).get("tukey_outliers", 0)
-            axis.set_title(f"{family} (n={len(values):,}; Tukey outliers={outliers})")
-            axis.set_xticks([])
-            axis.axhline(0, color="#666666", linestyle="--", linewidth=0.8)
-            axis.grid(axis="y", color="#D9D9D9", linewidth=0.6, alpha=0.8)
+            stats = distribution_summary.loc[
+                distribution_summary["outcome_family"].eq(family)
+            ].iloc[0]
+            axis.scatter(
+                [stats["mean"]],
+                [1.0],
+                marker="D",
+                s=30,
+                color="#C47A45",
+                zorder=4,
+                label="Mean",
+            )
+            axis.axvline(0, color="#666666", linestyle="--", linewidth=0.8)
+            axis.set_title(
+                f"{FAMILY_TITLES[family]}  "
+                f"(n={len(values):,}; outliers={int(stats['tukey_outliers']):,})"
+            )
+            axis.text(
+                0.01,
+                0.04,
+                f"Q1={stats['q25']:.3g}   median={stats['median']:.3g}   "
+                f"Q3={stats['q75']:.3g}   mean={stats['mean']:.3g}",
+                transform=axis.transAxes,
+                fontsize=8,
+            )
+            axis.set_yticks([])
+            axis.grid(axis="x", color="#D9D9D9", linewidth=0.6, alpha=0.8)
+            axis.legend(loc="upper right", fontsize=7)
         else:
             axis.text(0.5, 0.5, "No available labels", ha="center", va="center")
-            axis.set_title(family)
-            axis.set_xticks([])
-        axis.set_ylabel("Causal response label")
-    fig.suptitle("Causal label distributions by outcome family", fontsize=14, y=0.995)
+            axis.set_title(FAMILY_TITLES[family])
+            axis.set_yticks([])
+        axis.set_xlabel("Causal response label (native transformed scale)")
+        axis.spines[["top", "right", "left"]].set_visible(False)
+    fig.suptitle("Primary causal-label distributions", fontsize=14, y=0.995)
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     written.extend(_save_figure_bundle(fig, out_dir / "causal_label_distributions"))
 
-    # Failure reasons are shown as exact top reasons, stacked by family. This
-    # preserves the distinction between a research-quality gate and a data
-    # truncation issue while keeping rare reasons from producing an unreadable
-    # wall of bars.
-    failure = artifact.loc[~available_mask].copy()
-    if len(failure):
-        reasons = failure["failure_reason"].astype("string").fillna("unknown")
-        reasons = reasons.str.strip().replace({"": "unknown", "nan": "unknown"})
-        reasons = reasons.str.slice(0, 80)
-        failure["_failure_reason"] = reasons
-        counts = failure["_failure_reason"].value_counts().head(12)
-        table = pd.crosstab(failure["_failure_reason"], failure["outcome_family"])
-        table = table.reindex(counts.index).fillna(0)
-        table = table.reindex(columns=FAMILIES, fill_value=0)
-        fig, axis = plt.subplots(figsize=(12, max(5, 0.42 * len(table) + 2)))
+    # Failure reasons are counted once per treated-grid/family task.
+    if len(failure_summary):
+        top_reasons = (
+            failure_summary.groupby("failure_reason")["treated_grids"]
+            .sum()
+            .nlargest(12)
+            .index
+        )
+        selected = failure_summary.loc[failure_summary["failure_reason"].isin(top_reasons)]
+        table = (
+            selected.pivot_table(
+                index="failure_reason",
+                columns="outcome_family",
+                values="treated_grids",
+                aggfunc="sum",
+                fill_value=0,
+            )
+            .reindex(index=top_reasons, columns=FAMILIES, fill_value=0)
+        )
+        table.index = [textwrap.fill(str(value).replace("_", " "), width=42) for value in table.index]
+        fig, axis = plt.subplots(figsize=(7.2, max(4.5, 0.42 * len(table) + 1.7)))
         table.iloc[::-1].plot(
             kind="barh",
             stacked=True,
@@ -258,12 +500,17 @@ def render_summary_figures(
             linewidth=0.4,
         )
         axis.set_title("Top causal-label failure reasons")
-        axis.set_xlabel("Failed label cells")
+        axis.set_xlabel("Affected treated-grid × outcome-family tasks")
         axis.set_ylabel("Failure reason")
         axis.legend(title="Outcome family", loc="lower right", frameon=False)
         axis.grid(axis="x", color="#D9D9D9", linewidth=0.6, alpha=0.8)
-        fig.tight_layout()
-        written.extend(_save_figure_bundle(fig, out_dir / "causal_label_failure_reasons"))
+    else:
+        fig, axis = plt.subplots(figsize=(7.2, 3.8))
+        axis.text(0.5, 0.5, "No failed or partial primary-label tasks", ha="center", va="center")
+        axis.set_axis_off()
+        axis.set_title("Causal-label failure reasons")
+    fig.tight_layout()
+    written.extend(_save_figure_bundle(fig, out_dir / "causal_label_failure_reasons"))
     return written
 
 
@@ -276,7 +523,17 @@ def main() -> int:
         type=Path,
         help="Optional CSV with treatment_order values; restricts the report to those grids.",
     )
+    parser.add_argument(
+        "--tasks-file",
+        type=Path,
+        help=(
+            "Optional CSV with treatment_order and outcome_family; restricts the "
+            "report to those exact independently sampled tasks."
+        ),
+    )
     args = parser.parse_args()
+    if args.orders_file is not None and args.tasks_file is not None:
+        parser.error("--orders-file and --tasks-file are mutually exclusive")
 
     artifact_path = args.response_release / "response_artifact.parquet"
     if not artifact_path.exists():
@@ -291,6 +548,26 @@ def main() -> int:
             raise ValueError("Orders file must contain unique integer treatment_order values")
         order_set = set(int(value) for value in orders)
         artifact = artifact.loc[artifact["treatment_order"].astype(int).isin(order_set)].copy()
+    elif args.tasks_file is not None:
+        tasks = pd.read_csv(args.tasks_file)
+        required = {"treatment_order", "outcome_family"}
+        missing = required - set(tasks.columns)
+        if missing:
+            raise ValueError(f"Tasks file lacks columns: {sorted(missing)}")
+        orders = pd.to_numeric(tasks["treatment_order"], errors="coerce")
+        families = tasks["outcome_family"].astype(str)
+        keys = pd.MultiIndex.from_arrays([orders, families])
+        if orders.isna().any() or keys.duplicated().any() or len(keys) == 0:
+            raise ValueError(
+                "Tasks file must contain unique treatment_order/outcome_family keys"
+            )
+        artifact_keys = pd.MultiIndex.from_arrays(
+            [
+                artifact["treatment_order"].astype(int),
+                artifact["outcome_family"].astype(str),
+            ]
+        )
+        artifact = artifact.loc[artifact_keys.isin(keys)].copy()
 
     if "main_spec" not in artifact.columns and "donor_scope" in artifact.columns:
         artifact["main_spec"] = artifact["donor_scope"].eq("same_city").astype(int)
@@ -299,13 +576,16 @@ def main() -> int:
     out_dir = args.output_root / f"summary_{release_id}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    primary = primary_label_rows(artifact)
     family_summary: dict[str, dict[str, object]] = {}
     for family in FAMILIES:
-        sub = artifact.loc[artifact["outcome_family"].eq(family)]
+        sub = primary.loc[primary["outcome_family"].eq(family)]
         if sub.empty:
             family_summary[family] = {"tasks": 0}
             continue
         family_summary[family] = summarize_family(sub)
+    generation_tasks, generation_summary, failure_summary = build_generation_tables(primary)
+    distribution_summary = build_distribution_table(primary)
 
     scope_rows: list[dict[str, object]] = []
     for family in FAMILIES:
@@ -363,8 +643,17 @@ def main() -> int:
             "grids_without_any_label": int((~grid_available["_label_available"]).sum()),
             "failure_reasons_on_failed_grids": grid_failure_reasons,
         },
+        "primary_outcomes": PRIMARY_OUTCOMES,
+        "primary_generation": generation_summary.to_dict(orient="records"),
+        "primary_distributions": distribution_summary.to_dict(orient="records"),
     }
-    figure_paths = render_summary_figures(artifact, family_summary, out_dir / "figures")
+    figure_paths = render_summary_figures(
+        artifact,
+        generation_summary,
+        failure_summary,
+        distribution_summary,
+        out_dir / "figures",
+    )
     report["figures"] = figure_paths
     (out_dir / "summary.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2, default=str) + "\n",
@@ -376,6 +665,18 @@ def main() -> int:
         orient="index",
     )
     family_table.to_csv(out_dir / "family_summary.csv", index=False, encoding="utf-8-sig")
+    generation_tasks.to_csv(
+        out_dir / "label_generation_by_task.csv", index=False, encoding="utf-8-sig"
+    )
+    generation_summary.to_csv(
+        out_dir / "label_generation_by_family.csv", index=False, encoding="utf-8-sig"
+    )
+    failure_summary.to_csv(
+        out_dir / "failure_reasons_by_family.csv", index=False, encoding="utf-8-sig"
+    )
+    distribution_summary.to_csv(
+        out_dir / "label_distribution_by_family.csv", index=False, encoding="utf-8-sig"
+    )
     print(f"Wrote summary to {out_dir}")
     print(scope_table.to_string(index=False))
     return 0

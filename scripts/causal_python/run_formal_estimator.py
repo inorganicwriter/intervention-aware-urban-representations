@@ -52,8 +52,18 @@ from urban_intervention.causal.gpu.tuning_cache import (  # noqa: E402
     tuning_cache_path,
     write_tuning_cache,
 )
-from urban_intervention.data.paths import OUTPUT_COMPLETE_STAGING_DIR  # noqa: E402
+from urban_intervention.data.paths import (  # noqa: E402
+    OUTPUT_COMPLETE_STAGING_DIR,
+    OUTPUT_PYTHON_ESTIMATORS_DIR,
+)
 from urban_intervention.utils import atomic_write_csv  # noqa: E402
+
+OUTPUT_ESTIMATOR_ROOT = Path(
+    os.environ.get(
+        "MIT_CAUSAL_ESTIMATOR_OUTPUT_ROOT",
+        str(OUTPUT_PYTHON_ESTIMATORS_DIR),
+    )
+)
 
 
 def output_directory(
@@ -89,7 +99,7 @@ def output_directory(
     ):
         signature = f"{signature}_tx{transaction_count_threshold}"
     return (
-        OUTPUT_COMPLETE_STAGING_DIR
+        OUTPUT_ESTIMATOR_ROOT
         / method_dir
         / str(metadata["city_key"])
         / cohort
@@ -119,7 +129,7 @@ def family_status_directory(
     ):
         signature = f"{signature}_tx{transaction_count_threshold}"
     return (
-        OUTPUT_COMPLETE_STAGING_DIR
+        OUTPUT_ESTIMATOR_ROOT
         / "matrix_completion_runs"
         / str(metadata["city_key"])
         / cohort
@@ -267,7 +277,7 @@ def main() -> int:
         default=1,
         help="Minimum transactions for each housing grid-month admitted to the panel.",
     )
-    parser.add_argument("--max-gsc-cross-city-donors", type=int, default=50_000)
+    parser.add_argument("--max-gsc-cross-city-donors", type=int, default=5_000)
     parser.add_argument("--gsc-donor-sampling-seed", type=int, default=20260823)
     parser.add_argument("--run-mode", choices=("production", "preview"), default="production")
     parser.add_argument("--device", default="auto")

@@ -7,10 +7,10 @@ design <- build_annual_estimator_panel(
 )
 treated <- design$panel[role == "treated"]
 stopifnot(
-  identical(sort(unique(design$panel$year)), c(2016L, 2017L, 2018L, 2020L, 2021L, 2022L)),
-  !2019L %in% design$panel$year,
-  identical(treated[D == 1L, year], 2020:2022),
-  identical(treated[D == 1L, time_id], 4:6)
+  identical(sort(unique(design$panel$year)), 2016:2022),
+  identical(treated[D == 1L, year], 2019:2022),
+  identical(treated[D == 1L, time_id], 4:7),
+  identical(design$leads, 0:3)
 )
 
 # Every requested horizon must map to an actually present post period.
@@ -20,4 +20,4 @@ for (horizon in 1:3) {
   stopifnot(nrow(outcome) == nrow(frame$frame))
 }
 
-cat("Annual opening-year exclusion and event horizons 1-3 passed.\n")
+cat("Annual opening-year t=0 inclusion and event horizons 0-3 passed.\n")

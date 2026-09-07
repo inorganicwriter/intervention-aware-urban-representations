@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
 import pytest
 
+import urban_intervention.causal.gpu.formal_runner as formal_runner
 from urban_intervention.causal.gpu.formal_runner import (
     FormalRunRequest,
     _apply_observation_window,
@@ -54,12 +56,23 @@ def _long_outcomes() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def test_monthly_calendar_excludes_anticipation_and_opening_month() -> None:
+def test_monthly_calendar_keeps_true_opening_period_on_treated_path() -> None:
     calendar = monthly_event_calendar("2020-07", anticipation_months=6)
     assert calendar["pre"][0] == pd.Timestamp("2017-01-01")
     assert calendar["pre"][-1] == pd.Timestamp("2019-12-01")
     assert calendar["post"][0] == pd.Timestamp("2020-08-01")
     assert list(calendar["excluded"]) == list(pd.date_range("2020-01-01", "2020-07-01", freq="MS"))
+    assert calendar["treated"][0] == pd.Timestamp("2020-01-01")
+    assert pd.Timestamp("2020-07-01") in calendar["treated"]
+    assert calendar["first_treated_month"] == pd.Timestamp("2020-01-01")
+    assert pd.Timestamp("2020-07-01") not in calendar["times"]
+
+
+def test_main_monthly_calendar_uses_minus_one_reference_and_true_t0() -> None:
+    calendar = monthly_event_calendar("2020-07")
+    assert calendar["pre"][-1] == pd.Timestamp("2020-06-01")
+    assert calendar["treated"][0] == pd.Timestamp("2020-07-01")
+    assert calendar["times"][-24] == pd.Timestamp("2020-08-01")
 
 
 def test_cross_city_gsc_donor_sample_is_deterministic_and_outcome_free() -> None:
@@ -112,6 +125,49 @@ def test_window_inference_uses_joint_gsc_draw_paths() -> None:
     np.testing.assert_allclose(aggregated[:, 1], [-1.0, 0.0, 1.0])
 
 
+def test_observation_window_keeps_formal_impact_period_zero() -> None:
+    raw = pd.DataFrame(
+        {
+            "period": ["2020-07", "2020-08", "2020-09", "2020-10"],
+            "event_time": [-1, 0, 1, 2],
+            "observed": [1.0, 2.0, 3.0, 4.0],
+            "counterfactual": [1.0, 1.0, 1.0, 1.0],
+            "causal_response_label": [0.0, 1.0, 2.0, 3.0],
+            "label_available": [True, True, True, True],
+            "standard_error": [0.1, 0.2, 0.3, 0.4],
+            "confidence_lower": [-0.2, 0.6, 1.4, 2.2],
+            "confidence_upper": [0.2, 1.4, 2.6, 3.8],
+            "p_value": [1.0, 0.1, 0.01, 0.001],
+            "valid_inference_repetitions": [3, 3, 3, 3],
+            "uncertainty_source": ["gsc_parametric_reference_ar"] * 4,
+        }
+    )
+    windowed = _apply_observation_window(raw, 2)
+    assert windowed["event_time"].tolist() == [-1, 0, 1, 2]
+    opening = windowed.loc[windowed["event_time"].eq(0)].iloc[0]
+    assert opening["causal_response_label"] == 1.0
+    assert bool(opening["label_available"])
+
+    draws = np.asarray(
+        [
+            [-1.0, 0.0, 1.0, 2.0],
+            [0.0, 1.0, 2.0, 3.0],
+            [1.0, 2.0, 3.0, 4.0],
+        ]
+    )
+    result, _ = _apply_window_replicate_inference(
+        windowed,
+        raw_event_time=np.asarray([-1, 0, 1, 2]),
+        replicate_estimates=draws,
+        estimator="gsc",
+        window=2,
+        requested_repetitions=3,
+    )
+    impact = result.loc[result["event_time"].eq(0)].iloc[0]
+    assert impact["valid_inference_repetitions"] == 3
+    assert impact["standard_error"] == 1.0
+
+
 def test_window_inference_rebuilds_mc_jackknife_pseudo_values() -> None:
     raw = pd.DataFrame(
         {
@@ -141,6 +197,39 @@ def test_window_inference_rebuilds_mc_jackknife_pseudo_values() -> None:
     )
     # With two valid refits, pseudo-values are 1.5 and 0.5.
     assert result.loc[result["event_time"].eq(2), "standard_error"].iloc[0] == 0.5
+
+
+def test_explicit_zero_seed_is_preserved_for_gsc_and_mc(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_gsc_fit(panel: pd.DataFrame, config: object, runtime: object) -> object:
+        captured["gsc_config"] = config
+        return SimpleNamespace(cv_mean_mspe={})
+
+    def fake_mc_fit(panel: pd.DataFrame, config: object, runtime: object) -> object:
+        captured["mc_config"] = config
+        return SimpleNamespace(cv_mean_mspe={})
+
+    monkeypatch.setattr(formal_runner, "fit_gsc", fake_gsc_fit)
+    monkeypatch.setattr(formal_runner, "fit_matrix_completion", fake_mc_fit)
+    loaded = SimpleNamespace(panel=pd.DataFrame())
+
+    for estimator, key in (("gsc", "gsc_config"), ("mc", "mc_config")):
+        request = FormalRunRequest(
+            estimator=estimator,
+            output_directory=Path("."),
+            treatment_order=1,
+            city_key="a",
+            grid_id="g1",
+            opening_month="2020-01",
+            outcome_family="population",
+            outcome="population_log",
+            donor_scope="same_city",
+            run_mode="preview",
+            seed=0,
+        )
+        formal_runner._fit(loaded, request, None, None, None)
+        assert captured[key].seed == 0
 
 
 def test_formal_gate_ignores_unavailable_partial_post_periods() -> None:
@@ -301,7 +390,7 @@ def test_housing_panel_masks_low_transaction_observations_before_fitting() -> No
 
 
 def test_formal_preview_runner_publishes_complete_python_contract(tmp_path: Path) -> None:
-    periods = np.asarray([2015, 2016, 2017, 2018, 2019, 2021, 2022, 2023])
+    periods = np.asarray([2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023])
     controls = np.stack(
         [
             1.0 + 0.2 * np.arange(len(periods)),
@@ -353,7 +442,7 @@ def test_formal_preview_runner_publishes_complete_python_contract(tmp_path: Path
             "frequency": "annual",
             "opening_period_excluded": 2020,
             "clean_pre_periods": 5,
-            "post_periods": 3,
+            "post_periods": 4,
             "donors_used": 3,
             "target_effect_scale_to_original_units": 1.0,
             "target_center_to_original_units": 0.0,
@@ -369,7 +458,12 @@ def test_formal_preview_runner_publishes_complete_python_contract(tmp_path: Path
     assert set(result.labels["code_fingerprint"]) == {
         estimator_code_fingerprint("gsc")
     }
-    assert result.labels["event_time"].tolist() == [-5, -4, -3, -2, -1, 1, 2, 3]
+    assert result.labels["event_time"].tolist() == [-5, -4, -3, -2, -1, 0, 1, 2, 3]
+    assert set(result.labels["reference_event_time"]) == {-1}
+    assert result.manifest["reference_event_time"] == -1
+    assert result.labels.loc[
+        result.labels["event_time"].eq(0), "label_available"
+    ].all()
     json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
 
 

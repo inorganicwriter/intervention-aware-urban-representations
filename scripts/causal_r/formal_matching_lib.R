@@ -2,8 +2,8 @@ formal_matching_spec <- function() {
   list(
     schema = "formal_counterfactual_design_v1",
     treatment_time = paste(
-      "opening month/year excluded as partial exposure; first full month/year",
-      "after opening is event_time 1"
+      "opening month/year is the formal event_time 0 impact period;",
+      "event_time -1 is the common omitted event-study reference"
     ),
     treatment_history_lag_years = 3L,
     pre_year_lags = 1:3,

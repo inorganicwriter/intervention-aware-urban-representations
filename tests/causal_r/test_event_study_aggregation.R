@@ -36,7 +36,7 @@ write_task <- function(root, tag, labels, production = TRUE) {
     estimator = "gsynth", run_mode = if (production) "production" else "smoke",
     production_eligible = if (production) "TRUE" else "FALSE",
     frequency = if (family_name %in% c("housing", "viirs")) "monthly" else "annual",
-    specification_fingerprint = "main_a6_r1km__a6__w3__price_main"
+    specification_fingerprint = "main_a6_r1km__a0__w1__price_median"
   ))
 }
 
@@ -47,7 +47,7 @@ staging <- tempfile("event_study_staging_")
 dir.create(staging, recursive = TRUE)
 
 pre_times <- -3:-1
-post_times <- 1:3
+post_times <- 0:3
 for (order in 1001:1002) {
   city <- sprintf("city_%d", order)
   pre_values <- rnorm(length(pre_times), mean = 0, sd = 0.02)
@@ -67,8 +67,8 @@ write_task(staging, "outcome_t9000",
 staging2 <- tempfile("event_study_staging_trend_")
 dir.create(staging2, recursive = TRUE)
 trend_sets <- list(
-  c(-0.20, -0.10, 0.00, 0.20, 0.25, 0.30),
-  c(-0.21, -0.11, -0.01, 0.22, 0.27, 0.32)
+  c(-0.20, -0.10, 0.00, 0.15, 0.20, 0.25, 0.30),
+  c(-0.21, -0.11, -0.01, 0.17, 0.22, 0.27, 0.32)
 )
 for (i in seq_along(trend_sets)) {
   order <- 2000L + i
@@ -84,12 +84,14 @@ result <- run_event_study_aggregation(staging, output)
 series <- fread(file.path(output, "event_study_series.csv"))
 stopifnot(
   "population" %in% series$outcome_family,
-  nrow(series) == 6L,
-  setequal(series$event_time, c(-3L, -2L, -1L, 1L, 2L, 3L)),
+  nrow(series) == 7L,
+  setequal(series$event_time, c(-3L, -2L, -1L, 0L, 1L, 2L, 3L)),
+  all(series[event_time == -1L, mean_label] == 0),
   all(series$n_units == 2L),           # smoke task excluded
-  all(series$ci_lower <= series$mean_label),
-  all(series$mean_label <= series$ci_upper),
-  all(series$se_label >= 0)
+  all(is.finite(series[event_time == -1L, se_label])),
+  all(is.na(series[event_time != -1L, se_label])),
+  all(is.na(series[event_time != -1L, ci_lower])),
+  all(is.na(series[event_time != -1L, ci_upper]))
 )
 
 # --- Joint test: flat pre-period labels must NOT reject ---
@@ -97,7 +99,7 @@ joint <- fread(file.path(output, "event_study_joint_tests.csv"))
 stopifnot(nrow(joint) == 1L)
 stopifnot(
   joint$n_grids == 2L,
-  joint$n_pre_observations == 6L,
+  joint$n_pre_observations == 4L,
   abs(joint$mean_grid_mean) < 0.05,
   isTRUE(joint$p_value > 0.05),
   isFALSE(joint$reject_5pct)

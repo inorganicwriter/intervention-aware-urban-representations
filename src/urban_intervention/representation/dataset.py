@@ -200,6 +200,20 @@ class RepresentationDataset(torch.utils.data.Dataset[GridSample]):
         missing = required - set(self.sample_index.columns)
         if missing:
             raise ValueError(f"sample_index lacks columns: {sorted(missing)}")
+        response_required = {
+            "treatment_order",
+            "outcome_family",
+            "outcome",
+            "event_time",
+            "causal_response_label",
+            "final_training_mask",
+        }
+        response_missing = response_required - set(self.response_targets.columns)
+        if response_missing:
+            raise ValueError(
+                "response_targets lacks per-label training eligibility columns: "
+                f"{sorted(response_missing)}"
+            )
 
     def _build_feature_columns(self) -> None:
         skip_prefixes = (
@@ -267,12 +281,20 @@ class RepresentationDataset(torch.utils.data.Dataset[GridSample]):
                     col_name = f"{outcome}__t{horizon}"
                     if col_name in cols:
                         idx = cols.index(col_name) + start
-                        response[idx] = pd.to_numeric(
-                            task_row.get("causal_response_label", np.nan), errors="coerce"
-                        )
-                        response_se[idx] = pd.to_numeric(
-                            task_row.get("standard_error", np.nan), errors="coerce"
-                        )
+                        # The sample-level mask says whether this grid can be
+                        # used at all; it must not promote every response
+                        # dimension.  A release may contain a valid label for
+                        # one outcome and an ineligible/held-out label for
+                        # another outcome on the same grid.
+                        label_eligible = task_row.get("final_training_mask", False)
+                        label_eligible = bool(label_eligible) if pd.notna(label_eligible) else False
+                        if label_eligible:
+                            response[idx] = pd.to_numeric(
+                                task_row.get("causal_response_label", np.nan), errors="coerce"
+                            )
+                            response_se[idx] = pd.to_numeric(
+                                task_row.get("standard_error", np.nan), errors="coerce"
+                            )
                     else:
                         logger.warning(
                             "Skipping unknown outcome/horizon: %s in family %s",
@@ -355,7 +377,7 @@ class RepresentationDataset(torch.utils.data.Dataset[GridSample]):
 
         rec = self._records.loc[order]
         response = rec["response"]
-        response_mask = ~np.isnan(response)
+        response_mask = np.isfinite(response)
         response_se = rec["response_se"]
 
         return GridSample(

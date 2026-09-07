@@ -44,14 +44,14 @@ complete_estimator_spec <- function() {
   list(
     schema = "complete_published_estimators_v3_explicit_deterministic_contracts",
     timing = list(
-      opening_month_is_partial = TRUE,
-      first_treated_month_offset = 1L,
-      main_anticipation_months = 6L,
-      sensitivity_anticipation_months = c(0L, 12L),
-      annual_first_treated_year_offset = 1L,
+      opening_month_is_partial = FALSE,
+      first_treated_month_offset = 0L,
+      main_anticipation_months = 0L,
+      sensitivity_anticipation_months = c(6L, 12L),
+      annual_first_treated_year_offset = 0L,
       annual_anticipation_years = 0L
     ),
-    annual = list(lag = 3L, leads = 1:3),
+    annual = list(lag = 3L, leads = 0:3),
     monthly = list(lag = 36L, covariate_lags = c(13L, 25L, 37L), leads = 1:24),
     # Kept as an alias for old read-only callers. New code uses $monthly.
     monthly_housing = list(lag = 36L, covariate_lags = c(13L, 25L, 37L), leads = 1:24),
@@ -154,17 +154,19 @@ monthly_event_calendar <- function(opening_month, lag = 36L, leads = 1:24,
     as.integer(leads), function(lead) as.character(shift_month(opening_month, lead)),
     character(1L)
   )
-  post_months <- as.IDate(post_months)
+  post_months <- sort(unique(as.IDate(post_months)))
   excluded_months <- seq(
     shift_month(clean_pre_end, 1L), opening_month, by = "1 month"
   )
+  treated_months <- sort(unique(c(as.IDate(excluded_months), post_months)))
   list(
     opening_month = opening_month,
     clean_pre_end = clean_pre_end,
     first_treated_month = first_treated_month,
     pre_months = pre_months,
     post_months = post_months,
-    model_months = c(pre_months, post_months),
+    treated_months = treated_months,
+    model_months = sort(unique(c(pre_months, treated_months))),
     excluded_months = as.IDate(excluded_months),
     anticipation_months = anticipation_months
   )
@@ -278,8 +280,14 @@ read_city_annual_features <- function(city_key, families, root = project_root())
 }
 
 read_city_monthly_housing <- function(city_key, root = project_root(),
-                                      price_measure = "median") {
+                                      price_measure = "median",
+                                      transaction_count_threshold = 1L) {
   assert_choice(price_measure, c("median", "hedonic"), "price_measure")
+  transaction_count_threshold <- as.integer(transaction_count_threshold)
+  if (length(transaction_count_threshold) != 1L ||
+      is.na(transaction_count_threshold) || transaction_count_threshold < 1L) {
+    stop("transaction_count_threshold must be a positive integer")
+  }
   if (price_measure == "hedonic") {
     # Hedonic quality-adjusted panel (Lianjia 22 cities), built by
     # scripts/labels/build_housing_hedonic.py into the rebuildable outputs
@@ -296,24 +304,36 @@ read_city_monthly_housing <- function(city_key, root = project_root(),
       )
     }
     x <- as.data.table(read_parquet(path, col_select = c(
-      "city_key", "grid_id", "observed_month", "adjusted_price_median"
+      "city_key", "grid_id", "observed_month", "adjusted_price_median",
+      "n_transactions"
     )))
     x[, month := as.IDate(format(as.IDate(observed_month), "%Y-%m-01"))]
     x[is.finite(adjusted_price_median) & adjusted_price_median > 0,
       housing_log_price := log(adjusted_price_median)]
-    return(x[!is.na(housing_log_price), .(
-      housing_log_price = median(housing_log_price, na.rm = TRUE)
-    ), by = .(city_key, grid_id, month)])
+    result <- x[!is.na(housing_log_price), .(
+      housing_log_price = median(housing_log_price, na.rm = TRUE),
+      transaction_count = if (any(is.finite(n_transactions))) {
+        sum(n_transactions, na.rm = TRUE)
+      } else NA_real_
+    ), by = .(city_key, grid_id, month)]
+    return(result[is.finite(transaction_count) &
+                    transaction_count >= transaction_count_threshold])
   }
   .dir <- .resolve_path("PANEL_HOUSING_MONTHLY_DIR", root, "data", "active", "panels", "housing_grid_month")
   path <- file.path(.dir, paste0(city_key, ".parquet"))
   x <- as.data.table(read_parquet(path, col_select = c(
-    "city_key", "grid_id", "observed_month", "log_price_raw_median"
+    "city_key", "grid_id", "observed_month", "log_price_raw_median",
+    "n_transaction"
   )))
   x[, month := as.IDate(format(as.IDate(observed_month), "%Y-%m-01"))]
-  x[is.finite(log_price_raw_median), .(
-    housing_log_price = median(log_price_raw_median)
+  result <- x[is.finite(log_price_raw_median), .(
+    housing_log_price = median(log_price_raw_median),
+    transaction_count = if (any(is.finite(n_transaction))) {
+      sum(n_transaction, na.rm = TRUE)
+    } else NA_real_
   ), by = .(city_key, grid_id, month)]
+  result[is.finite(transaction_count) &
+           transaction_count >= transaction_count_threshold]
 }
 
 read_city_monthly_viirs <- function(city_key, months, root = project_root(),
@@ -367,10 +387,14 @@ read_city_monthly_viirs <- function(city_key, months, root = project_root(),
 read_city_monthly_outcome <- function(city_key, family, months,
                                       root = project_root(),
                                       price_measure = "median",
-                                      strict = TRUE) {
+                                      strict = TRUE,
+                                      transaction_count_threshold = 1L) {
   assert_choice(family, c("housing", "viirs"), "monthly family")
   if (family == "housing") {
-    return(read_city_monthly_housing(city_key, root, price_measure)[month %in% months])
+    return(read_city_monthly_housing(
+      city_key, root, price_measure,
+      transaction_count_threshold = transaction_count_threshold
+    )[month %in% months])
   }
   read_city_monthly_viirs(city_key, months, root, strict = strict)
 }
@@ -447,7 +471,7 @@ build_annual_estimator_panel <- function(
     as.integer(cohort) - spec$annual$lag,
     as.integer(cohort) - 1L - spec$timing$annual_anticipation_years
   )
-  post_years <- as.integer(cohort) + as.integer(leads)
+  post_years <- as.integer(cohort) + sort(unique(c(0L, as.integer(leads))))
   years <- c(pre_years, post_years)
   panel <- CJ(unit_id = unit_map$unit_id, year = years, sorted = TRUE)
   panel <- merge(panel, unit_map[, .(unit_id, city_key, grid_id, role, unit_key)], by = "unit_id")
@@ -465,7 +489,8 @@ build_annual_estimator_panel <- function(
     panel = panel, unit_map = unit_map, treated = treated, donors = donors,
     signature = signature, covariates = signature_variables(signature),
     outcomes = spec$families[[outcome_family]], lag = spec$annual$lag,
-    covariate_lags = 1:spec$annual$lag, leads = as.integer(leads),
+    covariate_lags = 1:spec$annual$lag,
+    leads = sort(unique(c(0L, as.integer(leads)))),
     frequency = "annual", cohort = as.integer(cohort), city_key = city_key,
     outcome_family = outcome_family,
     annual_anticipation_years = spec$timing$annual_anticipation_years
@@ -514,29 +539,33 @@ build_monthly_estimator_panel <- function(
     cohort_month, lag = spec$monthly$lag, leads = leads,
     anticipation_months = anticipation_months
   )
-  months <- calendar$model_months
+  # Include the clean pre-periods, any declared anticipation months, the
+  # opening month, and all requested post-treatment months in the panel.
+  model_months <- c(calendar$pre_months, calendar$treated_months)
   outcomes <- read_city_monthly_outcome(
-    city_key, outcome_family, months, root,
+    city_key, outcome_family, model_months, root,
     price_measure = if (outcome_family == "housing") price_measure else "median"
   )
-  panel <- CJ(unit_id = unit_map$unit_id, month = as.IDate(months), sorted = TRUE)
+  panel <- CJ(unit_id = unit_map$unit_id, month = as.IDate(model_months), sorted = TRUE)
   panel <- merge(panel, unit_map[, .(unit_id, city_key, grid_id, role, unit_key)], by = "unit_id")
   panel <- merge(panel, outcomes, by = c("city_key", "grid_id", "month"), all.x = TRUE)
   panel[, year := as.integer(format(month, "%Y"))]
   if (!is.null(annual)) {
     panel <- merge(panel, annual, by = c("city_key", "grid_id", "year"), all.x = TRUE)
   }
-  # The partial opening month and anticipation window are absent from model time.
-  # The first treated observation is the first full calendar month after opening.
-  panel[, time_id := match(month, calendar$model_months)]
-  panel[, D := as.integer(role == "treated" & time_id > spec$monthly$lag)]
+  # The opening month is the first treated period (event_time = 0). Keep it
+  # in the model calendar so PanelMatch lead 0 identifies the same shock
+  # period as the formal GSC/MC builders.
+  panel[, time_id := match(month, as.IDate(model_months))]
+  panel[, D := as.integer(role == "treated" & month >= calendar$first_treated_month)]
   setorder(panel, unit_id, time_id)
   list(
     panel = panel, unit_map = unit_map, treated = treated, donors = donors,
     signature = signature, covariates = signature_variables(signature),
     outcomes = spec$families[[outcome_family]], lag = spec$monthly$lag,
     covariate_lags = spec$monthly$covariate_lags,
-    leads = as.integer(leads), frequency = "monthly", cohort = as.character(cohort_month),
+    leads = sort(unique(c(0L, as.integer(leads)))),
+    frequency = "monthly", cohort = as.character(cohort_month),
     city_key = city_key, outcome_family = outcome_family, event_calendar = calendar
   )
 }
@@ -598,7 +627,14 @@ make_preonly_matching_frame <- function(design) {
 
 attach_prepost_outcome <- function(preonly_frame, design, outcome, horizon) {
   baseline_time <- design$lag
-  post_time <- design$lag + as.integer(horizon)
+  first_treated_time <- if (identical(design$frequency, "annual") ||
+                             identical(design$frequency, "monthly")) {
+    design$lag + 1L
+  } else {
+    # Minimal hand-built test fixtures may use the historical pre/post layout.
+    design$lag
+  }
+  post_time <- first_treated_time + as.integer(horizon)
   if (horizon < 1L || post_time > max(design$panel$time_id)) {
     stop("horizon must identify an available post-treatment period")
   }
@@ -987,6 +1023,7 @@ apply_post_observation_window <- function(paths, window = 1L) {
   }
   paths <- as.data.table(paths)
   pre <- paths[event_time < 0L]
+  opening <- paths[event_time == 0L]
   post <- paths[event_time > 0L]
   horizons <- sort(unique(as.integer(post$event_time)))
   windowed <- rbindlist(lapply(horizons, function(horizon) {
@@ -1047,12 +1084,14 @@ apply_post_observation_window <- function(paths, window = 1L) {
     result
   }), use.names = TRUE, fill = TRUE)
   setorder(windowed, event_time)
-  rbindlist(list(pre, windowed), use.names = TRUE, fill = TRUE)
+  rbindlist(list(pre, opening, windowed), use.names = TRUE, fill = TRUE)
 }
 
 attach_single_target_gsc_uncertainty <- function(paths, fit, nboots,
                                                   effect_scale = 1,
-                                                  normalization_scale = 1) {
+                                                  normalization_scale = 1,
+                                                  first_treated_event_time = 0L,
+                                                  estimator_first_treated_event_time = 0L) {
   paths <- copy(as.data.table(paths))
   paths[, `:=`(
     standard_error = NA_real_, confidence_lower = NA_real_,
@@ -1099,58 +1138,36 @@ attach_single_target_gsc_uncertainty <- function(paths, fit, nboots,
   if (anyNA(uncertainty$event_time)) {
     stop("gsynth uncertainty output lacks usable event-time identifiers")
   }
-  # gsynth/fect report the treatment/opening period as event_time == 0.  The
-  # project specification excludes that partial month/year.  Positive
-  # horizons are aligned by their formal event_time.  Negative estimator
-  # event_time values are model-index offsets, however, and therefore cannot
-  # be compared directly with the calendar offsets used in the normalized
-  # monthly path (e.g. -35:-1 versus -42:-7).  Align negative rows by their
-  # ordered pre-treatment paths and retain the earliest path row as NA when
-  # the estimator omits it.
-  uncertainty <- uncertainty[event_time != 0L]
+  first_treated_event_time <- as.integer(first_treated_event_time)
+  if (length(first_treated_event_time) != 1L || is.na(first_treated_event_time) ||
+      first_treated_event_time > 0L) {
+    stop("first_treated_event_time must be one non-positive integer")
+  }
+  estimator_first_treated_event_time <- as.integer(
+    estimator_first_treated_event_time
+  )
+  if (length(estimator_first_treated_event_time) != 1L ||
+      is.na(estimator_first_treated_event_time) ||
+      estimator_first_treated_event_time < 0L) {
+    stop("estimator_first_treated_event_time must be one non-negative integer")
+  }
+  # Convert the estimator's treatment-time origin to the project's
+  # opening-relative event time before matching. gsynth uses zero for its
+  # first D=1 model period; fect's MC est.att uses one. The distinction is
+  # essential when the project's opening month/year is event_time = 0.
   if (anyDuplicated(uncertainty$event_time)) {
     stop("Estimator uncertainty output has duplicated event-time identifiers")
   }
+  uncertainty[, project_event_time :=
+    event_time - estimator_first_treated_event_time + first_treated_event_time]
   path_event_time <- as.integer(paths$event_time)
   if (anyNA(path_event_time) || anyDuplicated(path_event_time)) {
     stop("Normalized target path has invalid or duplicated event-time identifiers")
   }
-  post_event_time <- path_event_time[path_event_time > 0L]
-  missing_post <- setdiff(post_event_time, uncertainty$event_time)
-  if (length(missing_post)) {
-    stop(
-      "Estimator uncertainty output lacks formal post-treatment event times: ",
-      paste(sort(missing_post), collapse = ", ")
-    )
-  }
-  matched <- rep(NA_integer_, length(path_event_time))
-  post_index <- which(path_event_time > 0L)
-  matched[post_index] <- match(
-    path_event_time[post_index], uncertainty$event_time
-  )
-  pre_index <- which(path_event_time < 0L)
-  uncertainty_pre_index <- which(uncertainty$event_time < 0L)
-  if (length(pre_index) && length(uncertainty_pre_index)) {
-    direct_pre <- match(
-      path_event_time[pre_index], uncertainty$event_time
-    )
-    if (all(!is.na(direct_pre))) {
-      matched[pre_index] <- direct_pre
-    } else {
-      ordered_uncertainty_pre <- uncertainty_pre_index[
-        order(uncertainty$event_time[uncertainty_pre_index])
-      ]
-      if (length(ordered_uncertainty_pre) == length(pre_index) - 1L) {
-        matched[pre_index[-1L]] <- ordered_uncertainty_pre
-      } else if (length(ordered_uncertainty_pre) == length(pre_index)) {
-        matched[pre_index] <- ordered_uncertainty_pre
-      } else {
-        stop(
-          "Estimator pre-treatment uncertainty cannot be aligned to the ",
-          "normalized target path"
-        )
-      }
-    }
+  matched <- match(path_event_time, uncertainty$project_event_time)
+  treated_index <- which(path_event_time >= first_treated_event_time)
+  if (length(treated_index) && anyNA(matched[treated_index])) {
+    stop("Estimator treated uncertainty cannot be aligned to the normalized target path")
   }
   paths[, `:=`(
     standard_error = NA_real_, confidence_lower = NA_real_,

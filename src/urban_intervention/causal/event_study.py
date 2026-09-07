@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -42,6 +43,7 @@ def write_matching_event_study_figure(
     path: Path,
     *,
     title: str,
+    frequency: str | None = None,
 ) -> None:
     """Render the city-clustered TWFE coefficients with robust y-axis limits."""
     import matplotlib
@@ -81,6 +83,7 @@ def write_matching_event_study_figure(
     axis.axvspan(-0.5, 0.5, color="#E7B45A", alpha=0.16, linewidth=0)
     axis.axhline(0, color="0.35", linewidth=0.9)
     axis.axvline(0, color="0.35", linewidth=0.9, linestyle="--")
+    axis.axvline(reference, color="0.55", linewidth=0.8, linestyle=":")
     axis.errorbar(
         coefficients["event_time"],
         coefficients["estimate"],
@@ -117,7 +120,9 @@ def write_matching_event_study_figure(
         lower, upper = float(finite.min()), float(finite.max())
         span = max(upper - lower, 1e-9)
         axis.set_ylim(lower - 0.08 * span, upper + 0.08 * span)
-    unit = "years" if reference == -1 else "months"
+    unit = {"annual": "years", "monthly": "months"}.get(
+        str(frequency), "periods"
+    )
     axis.set_xlabel(f"Event time ({unit})")
     axis.set_ylabel("TWFE effect")
     axis.set_title(title)
@@ -382,7 +387,7 @@ def fit_twfe_event_study(
             coefficient_frame["event_time"].lt(0),
             coefficient_frame["event_time"].eq(0),
         ],
-        ["pre", "opening_partial"],
+        ["pre", "opening_period"],
         default="post",
     )
     from scipy.stats import t
@@ -393,15 +398,17 @@ def fit_twfe_event_study(
     coefficient_frame["confidence_upper_grid"] += grid_critical * grid_se
     coefficient_frame["confidence_lower_city"] -= city_critical * city_se
     coefficient_frame["confidence_upper_city"] += city_critical * city_se
-    if pretrend_window is not None and pretrend_window < 2:
-        raise ValueError("pretrend_window must include the reference and at least one lead")
+    if pretrend_window is not None and pretrend_window < 1:
+        raise ValueError("pretrend_window must include at least one clean lead")
     pre_mask = active_event_times < 0
     if pretrend_max_event_time is not None:
         if pretrend_max_event_time >= 0:
             raise ValueError("pretrend_max_event_time must be negative")
         pre_mask &= active_event_times <= pretrend_max_event_time
     if pretrend_window is not None:
-        pre_mask &= active_event_times >= reference_event_time - (pretrend_window - 1)
+        # The omitted reference is not an estimated coefficient.  A request
+        # for N clean leads therefore spans reference-N through reference-1.
+        pre_mask &= active_event_times >= reference_event_time - pretrend_window
     pre_positions = np.flatnonzero(pre_mask)
     return EventStudyResult(
         coefficients=coefficient_frame,
@@ -464,6 +471,7 @@ def _monthly_pair_panel(
     min_pre: int | None,
     max_post: int | None,
     price_measure: str,
+    transaction_count_threshold: int = 1,
 ) -> pd.DataFrame:
     opening = pd.Timestamp(str(row["opening_month"]) + "-01")
     periods = (
@@ -495,9 +503,25 @@ def _monthly_pair_panel(
         city = str(row[city_column])
         grid = str(row[grid_column])
         part = reader(city)
-        part = part.loc[part["grid_id"].eq(grid), ["period", outcome]].rename(
+        selected_columns = ["period", outcome]
+        if family == "housing":
+            if "transaction_count" not in part.columns:
+                raise ValueError("housing event-study outcomes lack transaction_count")
+            selected_columns.append("transaction_count")
+        part = part.loc[part["grid_id"].eq(grid), selected_columns].rename(
             columns={outcome: "outcome"}
         )
+        if family == "housing":
+            part["transaction_count"] = pd.to_numeric(
+                part["transaction_count"], errors="coerce"
+            )
+            supported = part["transaction_count"].ge(transaction_count_threshold)
+            # This is the same observation-support rule used by formal
+            # Matching/GSC/MC labels.  Unsupported months remain in the raw
+            # panel for auditability but cannot enter TWFE because their
+            # outcome is masked.
+            part["transaction_count_supported"] = supported.fillna(False)
+            part.loc[~part["transaction_count_supported"], "outcome"] = np.nan
         part["role"] = role
         part["source_city"] = city
         part["source_grid"] = grid
@@ -508,7 +532,7 @@ def _monthly_pair_panel(
 def _apply_monthly_post_window(frame: pd.DataFrame, window: int) -> pd.DataFrame:
     """Put Matching post outcomes on the formal moving-window scale.
 
-    Clean leads and the partially exposed opening month (t=0) remain raw.
+    Clean leads and the formal opening month (t=0) remain raw.
     Positive horizons use the same trailing mean as formal GSC/MC labels.
     """
     if window == 1 or frame.empty:
@@ -575,20 +599,29 @@ def build_matching_event_study_panel(
     donor_scope: str = "same_city",
     min_pre: int | None = None,
     max_post: int | None = None,
-    observation_window: int = 3,
+    observation_window: int = 1,
     treatment_orders: set[int] | None = None,
+    reference_event_time: int = -1,
+    transaction_count_threshold: int = 1,
+    specification_fingerprint: str | None = None,
 ) -> tuple[pd.DataFrame, int]:
     """Build the matched-pair panel on the production outcome-window scale.
 
-    Monthly t=0 is retained as a partial-exposure diagnostic. It is not a
-    clean lead and never enters the formal label gate.
+    Monthly t=0 is retained as the first formal impact period. It is not a
+    clean lead and therefore never enters the pre-trend test.
     """
     annual = outcome_family in {"poi", "population"}
     if outcome_family not in {"housing", "viirs", "poi", "population"}:
         raise ValueError("unsupported event-study family")
     minimum = min_pre
     maximum = max_post
-    reference = -1 if annual else -7
+    reference = int(reference_event_time)
+    if reference >= 0:
+        raise ValueError("reference_event_time must be negative")
+    if transaction_count_threshold < 1:
+        raise ValueError("transaction_count_threshold must be positive")
+    if outcome_family == "viirs":
+        observation_window = 1
     if not 1 <= observation_window <= 6:
         raise ValueError("observation_window must be between 1 and 6")
     if donor_scope not in {"same_city", "all_city_standardized"}:
@@ -624,6 +657,23 @@ def build_matching_event_study_panel(
         except (OSError, json.JSONDecodeError):
             continue
         details = payload.get("details")
+        manifest_specification = str(payload.get("specification_fingerprint") or "")
+        if not manifest_specification:
+            # Event-study admission must retain an auditable specification
+            # contract; an identity/hash-valid artifact without one could be
+            # from an incompatible historical run.
+            continue
+        if specification_fingerprint is not None:
+            try:
+                specification_matches = re.fullmatch(
+                    specification_fingerprint, manifest_specification
+                ) is not None
+            except re.error as error:
+                raise ValueError(
+                    f"invalid specification_fingerprint regex: {specification_fingerprint!r}"
+                ) from error
+            if not specification_matches:
+                continue
         try:
             valid_hash = payload.get("labels_sha256") == file_sha256(labels_path)
         except OSError:
@@ -673,6 +723,7 @@ def build_matching_event_study_panel(
         candidate["control_city_key"] = control_city
         candidate["control_grid_id"] = control_grid
         candidate["price_measure"] = str(payload.get("price_measure", "median"))
+        candidate["specification_fingerprint"] = manifest_specification
         accepted.append(candidate)
     matched = pd.DataFrame(accepted)
     parts: list[pd.DataFrame] = []
@@ -688,6 +739,7 @@ def build_matching_event_study_panel(
                 minimum,
                 maximum,
                 str(record.get("price_measure", "median")),
+                transaction_count_threshold,
             )
         )
         if part.empty:
@@ -736,9 +788,12 @@ def run_matching_event_study(
     donor_scope: str = "same_city",
     min_pre: int | None = None,
     max_post: int | None = None,
-    observation_window: int = 3,
+    observation_window: int = 1,
     pretrend_window: int | None = 5,
     treatment_orders: set[int] | None = None,
+    reference_event_time: int = -1,
+    transaction_count_threshold: int = 1,
+    specification_fingerprint: str | None = None,
 ) -> EventStudyResult:
     panel, reference = build_matching_event_study_panel(
         outcome_family,
@@ -751,6 +806,9 @@ def run_matching_event_study(
         max_post=max_post,
         observation_window=observation_window,
         treatment_orders=treatment_orders,
+        reference_event_time=reference_event_time,
+        transaction_count_threshold=transaction_count_threshold,
+        specification_fingerprint=specification_fingerprint,
     )
     result = fit_twfe_event_study(
         panel,
@@ -758,7 +816,7 @@ def run_matching_event_study(
         pretrend_window=pretrend_window,
         pretrend_max_event_time=reference,
         post_observation_window=(
-            1 if outcome_family in {"poi", "population"} else observation_window
+            1 if outcome_family in {"poi", "population", "viirs"} else observation_window
         ),
     )
     output_directory.mkdir(parents=True, exist_ok=True)
@@ -801,5 +859,6 @@ def run_matching_event_study(
         result,
         output_directory / "event_study_matching_python.png",
         title=f"Matching event study: {outcome_family} / {donor_scope}",
+        frequency=("monthly" if outcome_family in {"housing", "viirs"} else "annual"),
     )
     return result

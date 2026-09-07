@@ -52,7 +52,7 @@ class PanelBuildRequest:
     outcome: str
     estimator: Estimator
     donor_scope: DonorScope = "same_city"
-    anticipation_months: int = 6
+    anticipation_months: int = 0
     price_measure: Literal["median", "hedonic"] = "median"
     max_mc_donors: int = 2000
     max_gsc_cross_city_donors: int = 5_000
@@ -124,6 +124,7 @@ class MonthlyEventCalendar(TypedDict):
     first_treated_month: pd.Timestamp
     pre: pd.DatetimeIndex
     post: pd.DatetimeIndex
+    treated: pd.DatetimeIndex
     times: pd.DatetimeIndex
     excluded: pd.DatetimeIndex
     anticipation_months: int
@@ -141,9 +142,16 @@ def monthly_event_calendar(
     *,
     lag: int = 36,
     leads: tuple[int, ...] = tuple(range(1, 25)),
-    anticipation_months: int = 6,
+    anticipation_months: int = 0,
 ) -> MonthlyEventCalendar:
-    """Return the exact calendar used by the frozen R specification."""
+    """Return an opening-relative monthly event-study calendar.
+
+    ``pre`` ends at the omitted reference period ``-(anticipation + 1)``.
+    ``treated`` starts immediately after that reference, always includes the
+    real opening month (event time zero), and then includes every requested
+    positive horizon.  ``post`` is retained as the strictly positive subset
+    used by the causal-label publication layer.
+    """
     if lag < 1 or not leads or min(leads) < 1 or anticipation_months < 0:
         raise ValueError("invalid monthly event calendar arguments")
     opening = _month(opening_month)
@@ -151,12 +159,16 @@ def monthly_event_calendar(
     pre = pd.date_range(end=clean_pre_end, periods=lag, freq="MS")
     post = pd.DatetimeIndex([opening + pd.DateOffset(months=value) for value in leads])
     excluded = pd.date_range(clean_pre_end + pd.DateOffset(months=1), opening, freq="MS")
+    treated = excluded.append(post)
     return {
         "opening_month": opening,
         "clean_pre_end": clean_pre_end,
-        "first_treated_month": opening + pd.DateOffset(months=1),
+        "first_treated_month": treated[0],
         "pre": pre,
         "post": post,
+        "treated": treated,
+        # Legacy callers use ``times`` for positive-horizon support checks.
+        # Formal estimator construction opts into ``treated`` explicitly.
         "times": pre.append(post),
         "excluded": excluded,
         "anticipation_months": anticipation_months,
@@ -682,27 +694,27 @@ def build_estimation_panel(request: PanelBuildRequest) -> BuiltPanel:
         pre = calendar["pre"]
         if request.outcome_family == "viirs":
             pre = pre[pre >= pd.Timestamp("2012-01-01")]
-        post = calendar["post"]
-        times = pre.append(post)
+        treated = calendar["treated"]
+        times = pre.append(treated)
         outcomes = read_outcomes_for_request(
             request, cities, times, units=requested_units
         )
         available = pd.DatetimeIndex(sorted(pd.to_datetime(outcomes["period"].unique())))
         if not pd.Index(pre).isin(available).all():
             raise ValueError("insufficient clean pre-treatment monthly periods")
-        if not pd.Index(post).isin(available).all():
-            raise ValueError("insufficient post-treatment monthly periods")
+        if not pd.Index(treated).isin(available).all():
+            raise ValueError("insufficient treated monthly event-study periods")
         opening = calendar["opening_month"]
     else:
         outcomes = read_outcomes_for_request(request, cities, units=requested_units)
         available = np.sort(pd.to_numeric(outcomes["period"], errors="raise").unique())
         cohort = int(str(target["opening_month"])[:4])
         pre = pd.Index(available[available < cohort])
-        post = pd.Index(available[(available > cohort) & (available <= cohort + 3)])
+        post = pd.Index(available[(available >= cohort) & (available <= cohort + 3)])
         if len(pre) < (5 if request.estimator == "gsc" else 1):
             raise ValueError("insufficient clean pre-treatment annual periods")
-        if len(post) < 3:
-            raise ValueError("insufficient clean post-treatment annual periods")
+        if len(post) < 4:
+            raise ValueError("insufficient annual event-study treatment periods")
         opening = cohort
     return build_estimation_panel_from_frames(
         target=target,
@@ -710,7 +722,7 @@ def build_estimation_panel(request: PanelBuildRequest) -> BuiltPanel:
         outcomes=outcomes,
         request=request,
         pre=pd.Index(pre),
-        post=pd.Index(post),
+        post=pd.Index(treated if request.outcome_family in {"housing", "viirs"} else post),
         opening_period_excluded=opening,
     )
 

@@ -5,7 +5,7 @@
 #   Rscript run_event_study_aggregation.R [STAGING_ROOT] [OUTPUT_DIR]
 #       [STRATUM_ATTRIBUTE] [STRATUM_VALUES]
 #       [--orders-file FILE] [--specification-fingerprint REGEX]
-#       [--frequency annual|monthly]
+#       [--frequency annual|monthly] [--reference-event-time -1|-7]
 #
 # Defaults: staging root = outputs/complete_estimators/staging,
 # output dir = outputs/event_study. Only outputs with production manifests
@@ -45,6 +45,11 @@ if (length(positional) >= 4L && nzchar(positional[[4L]])) {
 orders_file <- option_value("--orders-file")
 specification_fingerprint <- option_value("--specification-fingerprint")
 frequency <- option_value("--frequency")
+reference_event_time <- option_value("--reference-event-time")
+reference_event_time <- if (is.null(reference_event_time)) -1L else as.integer(reference_event_time)
+if (is.na(reference_event_time) || reference_event_time >= 0L) {
+  stop("--reference-event-time must be one finite negative integer")
+}
 if (!is.null(frequency) && !frequency %in% c("annual", "monthly")) {
   stop("--frequency must be annual or monthly when supplied")
 }
@@ -52,7 +57,7 @@ if (!is.null(frequency) && !frequency %in% c("annual", "monthly")) {
 # main specification.  The option is a regex so a caller can still select one
 # exact fingerprint when needed.
 if (is.null(specification_fingerprint)) {
-  specification_fingerprint <- "^main_a6_r1km__a6__w3__price_main$"
+  specification_fingerprint <- "^main_a6_r1km__a0__w1__price_(median|hedonic)(__.*)?$"
 }
 orders <- NULL
 if (!is.null(orders_file)) {
@@ -77,7 +82,8 @@ result <- run_event_study_aggregation(
   stratum_values = stratum_values,
   orders = orders,
   specification_fingerprint = specification_fingerprint,
-  frequency = frequency
+  frequency = frequency,
+  reference_event_time = reference_event_time
 )
 cat("Event-study aggregation complete at", output_dir, "\n")
 cat("- Admitted production tasks:", uniqueN(result$labels$treatment_order),

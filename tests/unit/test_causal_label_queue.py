@@ -110,6 +110,69 @@ def test_atomic_resume_finalizes_completed_task(tmp_path: Path, monkeypatch) -> 
     assert restored.loc[0, "selected_method"] == "matched_change"
 
 
+def test_direct_queue_invalidates_stale_qualification_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(MODULE, "_ESTIMATOR_BACKEND", "python_gpu")
+    monkeypatch.setattr(MODULE, "_RUN_MODE", "production")
+    monkeypatch.setattr(
+        MODULE,
+        "_QUALIFICATION_PROOF",
+        {"formal_qualification_receipt_sha256": "new-receipt"},
+    )
+    monkeypatch.setattr(MODULE, "TASK_ROOT", tmp_path / "tasks")
+    monkeypatch.setattr(MODULE, "FAMILY_QUEUE", tmp_path / "family.csv")
+    queue = pd.DataFrame(
+        {
+            "treatment_order": [7],
+            "outcome_family": ["population"],
+            "city_key": ["alpha"],
+            "grid_id": ["g7"],
+            "station_event_id": ["s7"],
+            "opening_month": ["2020-01"],
+            "status": ["matching_running"],
+            "selected_method": [pd.NA],
+            "failure_reason": [pd.NA],
+        }
+    )
+    directory = MODULE.task_directory(7, "population")
+    directory.mkdir(parents=True)
+    labels_path = directory / "labels.parquet"
+    row = queue.iloc[0]
+    pd.DataFrame({"placeholder": [1]}).to_parquet(labels_path)
+    fingerprint = MODULE.specification_fingerprint(row)
+    (directory / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema": "causal_response_labels_v1",
+                "status": "matched_labelled",
+                "method": "matched_change",
+                "treatment_order": 7,
+                "outcome_family": "population",
+                "city_key": "alpha",
+                "grid_id": "g7",
+                "opening_month": "2020-01",
+                "station_event_id": "s7",
+                "label_rows": 1,
+                "labels_sha256": MODULE.file_sha256(labels_path),
+                "production_eligible": True,
+                "run_mode": "production",
+                "specification_fingerprint": fingerprint,
+                "details": {
+                    "run_id": "old-run",
+                    "formal_qualification_receipt_sha256": "old-receipt",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert MODULE.recover_completed_task(queue, 0) is False
+    assert queue.loc[0, "status"] == "matching_running"
+    assert not labels_path.exists()
+    assert not (directory / "manifest.json").exists()
+
+
 def test_empty_reason_columns_are_loaded_as_writable_strings(tmp_path: Path) -> None:
     path = tmp_path / "queue.csv"
     pd.DataFrame(
@@ -201,6 +264,95 @@ def test_cross_city_match_does_not_overwrite_same_city_control_queue(
     assert record["control_unit_key"] == "beta::g2"
     assert details["donor_scope"] == "all_city_standardized"
     pd.testing.assert_frame_equal(controls, before)
+
+
+def test_cross_city_completed_task_recovers_with_gsc_pending_source_queue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(MODULE, "ROOT", tmp_path)
+    monkeypatch.setattr(MODULE, "TASK_ROOT", tmp_path / "tasks")
+    monkeypatch.setattr(MODULE, "FAMILY_QUEUE", tmp_path / "family.csv")
+    monkeypatch.setattr(MODULE, "_RUN_MODE", "production")
+    monkeypatch.setattr(MODULE, "_ESTIMATOR_BACKEND", "r_reference")
+    queue = pd.DataFrame(
+        {
+            "treatment_order": [7],
+            "outcome_family": ["population"],
+            "city_key": ["alpha"],
+            "grid_id": ["g7"],
+            "station_event_id": ["station-7"],
+            "opening_month": ["2020-01"],
+            "status": ["cross_gsc_running"],
+            "selected_method": [pd.NA],
+            "failure_reason": [pd.NA],
+        }
+    )
+    MODULE.atomic_csv(queue, MODULE.FAMILY_QUEUE)
+    control_record = tmp_path / "control_tasks" / "00007" / "cross_city" / "control_record.csv"
+    control_record.parent.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "treatment_order": 7,
+                "status": "matched",
+                "control_unit_key": "beta::g2",
+                "donor_scope": "all_city_standardized",
+            }
+        ]
+    ).to_csv(control_record, index=False)
+    task = MODULE.task_directory(7, "population")
+    task.mkdir(parents=True)
+    labels_path = task / "labels.parquet"
+    row = queue.iloc[0]
+    fingerprint = MODULE.specification_fingerprint(row)
+    pd.DataFrame(
+        {
+            "treatment_order": [7] * 3,
+            "city_key": ["alpha"] * 3,
+            "grid_id": ["g7"] * 3,
+            "opening_month": ["2020-01"] * 3,
+            "outcome_family": ["population"] * 3,
+            "outcome": ["population_log"] * 3,
+            "event_time": [1, 2, 3],
+            "specification_id": ["main_a6_r1km"] * 3,
+            "specification_fingerprint": [fingerprint] * 3,
+        }
+    ).to_parquet(labels_path)
+    payload = {
+        "schema": "causal_response_labels_v1",
+        "status": "matched_labelled",
+        "method": "matched_change",
+        "treatment_order": 7,
+        "outcome_family": "population",
+        "city_key": "alpha",
+        "grid_id": "g7",
+        "opening_month": "2020-01",
+        "station_event_id": "station-7",
+        "label_rows": 3,
+        "labels_sha256": MODULE.file_sha256(labels_path),
+        "production_eligible": True,
+        "run_mode": "production",
+        "specification_fingerprint": fingerprint,
+        "details": {
+            "run_id": "cross-city-resume",
+            "donor_scope": "all_city_standardized",
+            "control_unit_key": "beta::g2",
+            "control_record": str(control_record),
+            "control_record_sha256": MODULE.file_sha256(control_record),
+        },
+    }
+    (task / "manifest.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    assert MODULE.recover_completed_task(
+        queue, 0, control_queue=pd.DataFrame(
+            {
+                "treatment_order": [7],
+                "status": ["gsc_pending"],
+                "control_unit_key": [pd.NA],
+            }
+        )
+    )
+    assert queue.loc[0, "status"] == "matched_labelled"
 
 
 def test_unit_queue_aggregates_only_after_four_terminal_families(tmp_path: Path) -> None:

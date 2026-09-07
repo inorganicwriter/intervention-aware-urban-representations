@@ -43,8 +43,7 @@ def _segments(frame: pd.DataFrame) -> list[pd.DataFrame]:
     if ordered.empty:
         return []
     difference = ordered["event_time"].diff()
-    bridges_omitted_t0 = ordered["event_time"].eq(1) & ordered["event_time"].shift().eq(-1)
-    breaks = difference.ne(1) & ~bridges_omitted_t0
+    breaks = difference.ne(1)
     return [part for _, part in ordered.groupby(breaks.cumsum())]
 
 
@@ -53,13 +52,20 @@ def _format_p(value: object) -> str:
     return f"{number:.3f}" if np.isfinite(number) else "NA"
 
 
-def _style_axis(axis: Any, *, family: str) -> None:
+def _style_axis(axis: Any, *, family: str, reference_event_time: int) -> None:
     monthly = family in {"housing", "viirs"}
-    if monthly:
-        axis.axvspan(-6.5, -0.5, color="#D9D9D9", alpha=0.18, linewidth=0)
+    if monthly and reference_event_time < -1:
+        axis.axvspan(
+            reference_event_time + 0.5,
+            -0.5,
+            color="#D9D9D9",
+            alpha=0.18,
+            linewidth=0,
+        )
     axis.axvspan(-0.5, 0.5, color="#E7B45A", alpha=0.16, linewidth=0)
     axis.axhline(0, color="#666666", linewidth=0.8, linestyle="--")
     axis.axvline(0, color="#333333", linewidth=0.9)
+    axis.axvline(reference_event_time, color="#888888", linewidth=0.7, linestyle=":")
     axis.grid(axis="y", color="#E3E3E3", linewidth=0.55)
     axis.spines[["top", "right"]].set_visible(False)
     axis.set_xlabel(f"Event time ({'months' if monthly else 'years'})")
@@ -392,6 +398,19 @@ def write_pooled_outcome_event_studies(
     support_table = event_study_support_table(
         matching_results, pooled, donor_scope=donor_scope
     )
+    reference_candidates = {
+        int(result.diagnostics["reference_event_time"])
+        for result in matching_results.values()
+    }
+    if pooled is not None and not pooled.paths.empty:
+        reference_candidates.update(
+            pd.to_numeric(
+                pooled.paths["reference_event_time"], errors="raise"
+            ).astype(int)
+        )
+    if len(reference_candidates) > 1:
+        raise ValueError("pooled comparison mixes different event-study references")
+    reference_event_time = next(iter(reference_candidates), -1)
     for family in FAMILIES:
         outcome = PRIMARY_OUTCOMES[family]
         family_support = support_table.loc[support_table["outcome_family"].eq(family)]
@@ -412,7 +431,9 @@ def write_pooled_outcome_event_studies(
         limits: list[tuple[float, float]] = []
         matching = matching_results.get(family)
         axis = axes[0]
-        _style_axis(axis, family=family)
+        _style_axis(
+            axis, family=family, reference_event_time=reference_event_time
+        )
         axis.set_title(METHOD_TITLES["matching"])
         if matching is None:
             axis.text(
@@ -446,7 +467,9 @@ def write_pooled_outcome_event_studies(
 
         for panel_index, method_family in enumerate(("gsc", "mc"), start=1):
             axis = axes[panel_index]
-            _style_axis(axis, family=family)
+            _style_axis(
+                axis, family=family, reference_event_time=reference_event_time
+            )
             axis.set_title(METHOD_TITLES[method_family])
             if pooled is None or pooled.series.empty:
                 axis.text(
@@ -521,7 +544,8 @@ def write_pooled_outcome_event_studies(
         figure.text(
             0.5,
             0.035,
-            "For monthly outcomes, gray marks excluded anticipation months; amber marks "
+            "For monthly robustness results, gray marks anticipation months when present; "
+            "amber marks "
             "the opening period (t=0, shown but excluded from the pre-trend test).\n"
             "Each outcome uses its longest overlap across available methods; anticipation is "
             "shown but excluded from the clean-lead test. Error bars are 95% city-cluster "

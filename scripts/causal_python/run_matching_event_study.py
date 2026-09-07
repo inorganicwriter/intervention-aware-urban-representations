@@ -20,6 +20,11 @@ def main() -> int:
     parser.add_argument("--min-pre", type=int)
     parser.add_argument("--max-post", type=int)
     parser.add_argument("--pretrend-window", type=int, default=5)
+    parser.add_argument("--transaction-count-threshold", type=int, default=1)
+    parser.add_argument(
+        "--specification-fingerprint",
+        help="Exact fingerprint or full-match regex used to admit production task manifests.",
+    )
     parser.add_argument("--output-directory", type=Path)
     parser.add_argument(
         "--donor-scope",
@@ -37,6 +42,8 @@ def main() -> int:
         max_post=args.max_post,
         donor_scope=args.donor_scope,
         pretrend_window=args.pretrend_window,
+        transaction_count_threshold=args.transaction_count_threshold,
+        specification_fingerprint=args.specification_fingerprint,
     )
     print(
         f"Python TWFE event study: {len(result.coefficients)} coefficients, "

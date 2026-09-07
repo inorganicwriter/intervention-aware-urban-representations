@@ -69,7 +69,7 @@ def python_estimator_command(
         "--price-measure",
         effective_price_measure(row),
         "--observation-window",
-        str(settings.label_window if str(row.outcome_family) in {"housing", "viirs"} else 1),
+        str(settings.label_window if str(row.outcome_family) == "housing" else 1),
         "--transaction-count-threshold",
         str(settings.transaction_count_threshold),
         "--max-gsc-cross-city-donors",
@@ -150,7 +150,7 @@ def validate_python_estimator_manifest(
         and len(values.get("input_panel_signature", "")) == 64
         and values.get("price_measure") == effective_price_measure(row)
         and values.get("observation_window")
-        == str(settings.label_window if str(row.outcome_family) in {"housing", "viirs"} else 1)
+        == str(settings.label_window if str(row.outcome_family) == "housing" else 1)
         and values.get("transaction_count_threshold") == str(settings.transaction_count_threshold)
         and expected_inference
         and math.isfinite(selected)

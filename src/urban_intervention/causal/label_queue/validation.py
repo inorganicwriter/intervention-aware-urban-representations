@@ -15,6 +15,7 @@ from urban_intervention.utils import sha256_file as file_sha256
 from .runtime import (
     HORIZONS,
     OUTCOMES,
+    ROOT,
     settings,
 )
 from .state import (
@@ -25,6 +26,55 @@ from .state import (
 )
 
 atomic_json = partial(atomic_write_json, default=str)
+
+
+def _validate_control_provenance(
+    row: pd.Series,
+    payload: dict[str, object],
+    control_queue: pd.DataFrame,
+) -> None:
+    """Validate the control record actually used by a completed label."""
+    details = payload.get("details")
+    if not isinstance(details, dict):
+        raise ValueError("Completed matched task lacks control provenance details")
+    scope = str(details.get("donor_scope") or "")
+    if scope not in {"same_city", "all_city_standardized"}:
+        raise ValueError("Completed matched task has an unknown donor scope")
+    control_key = str(details.get("control_unit_key") or "")
+    if not control_key:
+        raise ValueError("Completed matched task lacks control_unit_key provenance")
+    record_value = str(details.get("control_record") or "")
+    record_hash = str(details.get("control_record_sha256") or "")
+    if not control_key or not record_value or len(record_hash) != 64:
+        raise ValueError("Completed matched task lacks hashed control-record provenance")
+    record_path = Path(record_value)
+    if not record_path.is_absolute():
+        record_path = ROOT / record_path
+    if not record_path.is_file() or file_sha256(record_path) != record_hash:
+        raise ValueError("Completed matched task control record is missing or has changed")
+    record = pd.read_csv(record_path)
+    if len(record) != 1:
+        raise ValueError("Completed matched task control record is not unique")
+    record_row = record.iloc[0]
+    if int(record_row.get("treatment_order", -1)) != int(row.treatment_order):
+        raise ValueError("Completed matched task control record has the wrong treatment order")
+    if str(record_row.get("status", "")) != "matched":
+        raise ValueError("Completed matched task control record is not matched")
+    if str(record_row.get("control_unit_key", "")) != control_key:
+        raise ValueError("Completed matched task control_unit_key disagrees with record")
+    if str(record_row.get("donor_scope", scope)) not in {scope, "", "nan"}:
+        raise ValueError("Completed matched task donor scope disagrees with record")
+    queue_row = control_for_order(int(row.treatment_order), control_queue)
+    if scope == "same_city":
+        if str(queue_row.get("status", "")) != "matched":
+            raise ValueError(
+                f"Recovery refused: same-city control design for treatment "
+                f"{int(row.treatment_order)} is {queue_row.get('status')}, not matched"
+            )
+        if str(queue_row.get("control_unit_key", "")) != control_key:
+            raise ValueError("Completed matched task control differs from same-city queue")
+    elif str(queue_row.get("status", "")) not in {"gsc_pending", "matched"}:
+        raise ValueError("Completed cross-city task has an invalid source queue status")
 
 
 def validate_task_labels(row: pd.Series, labels: pd.DataFrame) -> None:
@@ -180,24 +230,29 @@ def recover_completed_task(
             # changing the monthly window or housing price measure.
             if payload.get("specification_fingerprint") != specification_fingerprint(row):
                 return False
-            validate_task_manifest(row, payload, labels)
-            if payload.get("status") == "matched_labelled" and control_queue is not None:
-                control = control_for_order(int(row.treatment_order), control_queue)
-                if str(control.status) != "matched":
-                    raise ValueError(
-                        f"Recovery refused: control design for treatment "
-                        f"{int(row.treatment_order)} is {control.status}, not matched"
+            try:
+                validate_task_manifest(row, payload, labels)
+            except ValueError as exc:
+                expected_receipt = str(
+                    settings.qualification_proof.get(
+                        "formal_qualification_receipt_sha256", ""
                     )
-                manifest_control = str(payload.get("details", {}).get("control_unit_key", ""))
+                )
                 if (
-                    manifest_control
-                    and str(control.get("control_unit_key", "")) != manifest_control
+                    str(exc)
+                    != "Completed Python task lacks the current formal qualification receipt"
+                    or not expected_receipt
                 ):
-                    raise ValueError(
-                        f"Recovery refused: control_unit_key in manifest "
-                        f"({manifest_control}) disagrees with control queue "
-                        f"({control.get('control_unit_key', '')})"
-                    )
+                    raise
+                manifest.unlink(missing_ok=True)
+                labels.unlink(missing_ok=True)
+                print(
+                    "Invalidated completed task bound to a stale qualification receipt: "
+                    f"{int(row.treatment_order)}/{row.outcome_family}"
+                )
+                return False
+            if payload.get("status") == "matched_labelled" and control_queue is not None:
+                _validate_control_provenance(row, payload, control_queue)
             stored_labels = pd.read_parquet(labels)
             validate_task_labels(row, stored_labels)
             if int(payload.get("label_rows", -1)) != len(stored_labels):
@@ -229,9 +284,24 @@ def invalidate_stale_terminal_tasks(queue: pd.DataFrame, orders: set[int]) -> in
                 payload = json.loads(manifest.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 payload = None
-        if isinstance(payload, dict) and payload.get(
-            "specification_fingerprint"
-        ) == specification_fingerprint(row):
+        expected_receipt = ""
+        if settings.estimator_backend == "python_gpu" and settings.run_mode == "production":
+            expected_receipt = str(
+                settings.qualification_proof.get(
+                    "formal_qualification_receipt_sha256", ""
+                )
+            )
+        receipt_is_stale = bool(expected_receipt) and (
+            not isinstance(payload, dict)
+            or not isinstance(payload.get("details"), dict)
+            or payload["details"].get("formal_qualification_receipt_sha256")
+            != expected_receipt
+        )
+        if (
+            isinstance(payload, dict)
+            and payload.get("specification_fingerprint") == specification_fingerprint(row)
+            and not receipt_is_stale
+        ):
             continue
         queue.loc[index, ["status", "selected_method", "failure_reason"]] = [
             "pending",

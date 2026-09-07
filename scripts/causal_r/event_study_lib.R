@@ -1,8 +1,8 @@
 # event_study_lib.R — cross-grid event-study aggregation and parallel-trends tests.
 #
 # The GSC and MC runners write per-task causal_response_labels.parquet files
-# whose event_time spans negative (pre-period counterfactual gaps) and positive
-# (post-treatment horizons). Those pre-period rows are the event-study
+# whose event_time spans negative (pre-period counterfactual gaps), zero (the
+# opening shock), and positive (post-treatment horizons). Those pre-period rows are the event-study
 # coefficients: they are the direct, pre-registered evidence for the
 # parallel-trends assumption. The label queue publishes only post horizons,
 # so this library re-reads the estimator staging outputs and aggregates:
@@ -37,7 +37,8 @@ empty_event_study_labels <- function() {
     label_available = logical(0), method = character(0),
     donor_scope = character(0), run_id = character(0),
     specification_fingerprint = character(0), price_measure = character(0),
-    observation_window = character(0), standard_error = numeric(0)
+    observation_window = character(0), standard_error = numeric(0),
+    reference_event_time = integer(0)
   )
 }
 
@@ -85,8 +86,21 @@ collect_production_label_files <- function(staging_root,
         !identical(manifest_frequency, as.character(frequency))) next
     if (!is.null(specification_fingerprint)) {
       manifest_spec <- estimator_manifest_value(manifest, "specification_fingerprint")
-      if (is.na(manifest_spec) ||
-          !grepl(specification_fingerprint, manifest_spec)) next
+      if (is.na(manifest_spec) || !nzchar(manifest_spec)) next
+      matches <- tryCatch(
+        grepl(
+          paste0("^(?:", specification_fingerprint, ")$"),
+          manifest_spec, perl = TRUE
+        ),
+        error = function(e) stop(
+          "Invalid specification_fingerprint regex: ", specification_fingerprint,
+          call. = FALSE
+        )
+      )
+      if (!isTRUE(matches)) next
+    } else {
+      manifest_spec <- estimator_manifest_value(manifest, "specification_fingerprint")
+      if (is.na(manifest_spec) || !nzchar(manifest_spec)) next
     }
     admitted <- c(admitted, path)
   }
@@ -104,7 +118,13 @@ read_event_study_labels <- function(staging_root,
                                     stratum_values = NULL,
                                     orders = NULL,
                                     specification_fingerprint = NULL,
-                                    frequency = NULL) {
+                                    frequency = NULL,
+                                    reference_event_time = -1L) {
+  reference_event_time <- as.integer(reference_event_time)
+  if (length(reference_event_time) != 1L || is.na(reference_event_time) ||
+      reference_event_time >= 0L) {
+    stop("reference_event_time must be one finite negative integer")
+  }
   files <- collect_production_label_files(
     staging_root,
     specification_fingerprint = specification_fingerprint,
@@ -184,25 +204,60 @@ read_event_study_labels <- function(staging_root,
     }
     labels[, (stratum_attribute) := NULL]
   }
+  # GSC/MC files contain raw observed-minus-counterfactual gaps. Event-study
+  # coefficients must be expressed relative to one omitted reference period,
+  # just like Matching. Drop a path when its reference is not finite; never
+  # manufacture or interpolate the missing coefficient.
+  reference_group <- c(
+    "treatment_order", "frequency", "outcome_family", "outcome", "method",
+    "donor_scope", "run_id", "specification_fingerprint"
+  )
+  references <- labels[
+    event_time == reference_event_time & label_available == TRUE &
+      is.finite(causal_response_label),
+    .(reference_rows = .N, reference_value = first(causal_response_label)),
+    by = reference_group
+  ][reference_rows == 1L]
+  if (!nrow(references)) return(empty_event_study_labels())
+  labels <- merge(
+    labels,
+    references[, c(reference_group, "reference_value"), with = FALSE],
+    by = reference_group,
+    all = FALSE,
+    sort = FALSE
+  )
+  labels[, causal_response_label := fifelse(
+    label_available == TRUE & is.finite(causal_response_label),
+    causal_response_label - reference_value,
+    NA_real_
+  )]
+  # Marginal task SEs do not identify Var(gap_h-gap_ref) without joint draws.
+  labels[, standard_error := NA_real_]
+  labels[event_time == reference_event_time, standard_error := 0]
+  labels[, reference_event_time := reference_event_time]
+  labels[, reference_value := NULL]
   labels
 }
 
 # Aggregate the event-time series per family/outcome over available labels.
 # When per-task estimator standard errors are available (GSC/MC paths), the
 # aggregated SE combines within-task estimator variance and between-grid
-# variance (random-effects style).  For tasks without SE (matched path), a
-# naive sd/sqrt(n) is used as a fallback.
+# variance (random-effects style).  If task-level uncertainty is absent or
+# incomplete, keep the descriptive SD but leave SE/CI missing: grid-to-grid
+# dispersion is not a substitute for estimator uncertainty.
 aggregate_event_study_series <- function(labels) {
   observed <- labels[label_available == TRUE & is.finite(causal_response_label)]
   if (nrow(observed) == 0L) {
     return(data.table(
       frequency = character(0), outcome_family = character(0), outcome = character(0),
+      reference_event_time = integer(0),
       event_time = integer(0), n_units = integer(0),
       mean_label = numeric(0), sd_label = numeric(0), se_label = numeric(0),
       ci_lower = numeric(0), ci_upper = numeric(0), methods = character(0),
       donor_scopes = character(0), specifications = character(0),
       mean_se2 = numeric(0), se_available = integer(0), n_grids = integer(0),
-      between_var = numeric(0), within_var = numeric(0)
+      between_var = numeric(0), within_var = numeric(0),
+      uncertainty_status = character(0)
     ))
   }
   observed[, event_time := as.integer(event_time)]
@@ -233,39 +288,48 @@ aggregate_event_study_series <- function(labels) {
     n_units = .N,
     mean_label = mean(causal_response_label),
     sd_label = sd(causal_response_label),
-    mean_se2 = if (any(is.finite(standard_error))) {
-      mean(standard_error[is.finite(standard_error)]^2)
+    mean_se2 = if (all(is.finite(standard_error))) {
+      mean(standard_error^2)
     } else NA_real_,
     se_available = sum(is.finite(standard_error)),
     methods = paste(sort(unique(method)), collapse = "|"),
     donor_scopes = paste(sort(unique(na.omit(donor_scope))), collapse = "|"),
     specifications = paste(sort(unique(na.omit(specification_fingerprint))), collapse = "|")
-  ), by = .(frequency, outcome_family, outcome, event_time)]
+  ), by = .(frequency, outcome_family, outcome, reference_event_time, event_time)]
   series[is.na(sd_label), sd_label := 0]
   # Between-grid variance of grid means
   grid_means <- observed[, .(grid_mean = mean(causal_response_label)),
-                         by = .(frequency, outcome_family, outcome, event_time, treatment_order)]
+                         by = .(frequency, outcome_family, outcome, reference_event_time,
+                                event_time, treatment_order)]
   between <- grid_means[, .(n_grids = .N, between_var = var(grid_mean)),
-                        by = .(frequency, outcome_family, outcome, event_time)]
+                        by = .(frequency, outcome_family, outcome,
+                               reference_event_time, event_time)]
   series <- merge(
     series, between,
-    by = c("frequency", "outcome_family", "outcome", "event_time"),
+    by = c("frequency", "outcome_family", "outcome", "reference_event_time",
+           "event_time"),
     all.x = TRUE
   )
   series[is.na(between_var), between_var := 0]
-  # Within variance from bootstrap SEs: mean(SE^2) / n_units.  Squaring the
-  # mean SE would understate variance when task-level SEs are heterogeneous.
-  series[, within_var := ifelse(se_available > 0L,
+  # Within variance from bootstrap SEs: mean(SE^2) / n_units.  It is valid
+  # only when every task contributing to the event-time mean has an SE.
+  series[, within_var := ifelse(se_available == n_units,
                                 mean_se2 / n_units, NA_real_)]
   series[, se_label := sqrt(ifelse(
-    is.finite(within_var) & within_var > 0,
+    se_available == n_units & is.finite(within_var),
     within_var + between_var / n_units,
-    sd_label^2 / n_units
+    NA_real_
   ))]
-  series[!is.finite(se_label) | se_label <= 0, se_label := sd_label / sqrt(n_units)]
+  series[, uncertainty_status := fifelse(
+    se_available == n_units,
+    "available",
+    fifelse(se_available == 0L,
+            "missing_task_standard_errors",
+            "partially_missing_task_standard_errors")
+  )]
   series[, ci_lower := mean_label - 1.96 * se_label]
   series[, ci_upper := mean_label + 1.96 * se_label]
-  series[order(frequency, outcome_family, outcome, event_time)]
+  series[order(frequency, outcome_family, outcome, reference_event_time, event_time)]
 }
 
 # Select the latest clean pre-periods for the joint test.  When event_time is
@@ -274,11 +338,13 @@ aggregate_event_study_series <- function(labels) {
 select_pretrend_rows <- function(labels, min_pre_event_time = NULL,
                                   latest_n = 5L) {
   pre <- labels[
-    label_available == TRUE & is.finite(causal_response_label) & event_time < 0L
+    label_available == TRUE & is.finite(causal_response_label) &
+      event_time < reference_event_time
   ]
   if (is.null(min_pre_event_time)) {
     pre[, .pre_rank := frank(-event_time, ties.method = "dense"),
-        by = .(frequency, outcome_family, outcome, treatment_order)]
+        by = .(frequency, outcome_family, outcome, reference_event_time,
+               treatment_order)]
     pre <- pre[.pre_rank <= as.integer(latest_n)]
     pre[, .pre_rank := NULL]
   } else {
@@ -411,6 +477,10 @@ draw_event_study_plot <- function(part, title, test_row = NULL, show_legend = TR
        col = "#EAF2F8", border = NA)
   abline(h = 0, lty = 2, lwd = 1, col = "#666666")
   abline(v = 0, lty = 1, lwd = 1.2, col = "#222222")
+  reference <- unique(part$reference_event_time)
+  if (length(reference) == 1L && is.finite(reference)) {
+    abline(v = reference, lty = 3, lwd = 1, col = "#888888")
+  }
   x_ticks <- if (length(x_points) <= 13L) {
     x_points
   } else {
@@ -614,8 +684,9 @@ run_event_study_aggregation <- function(staging_root, output_dir,
                                         stratum_values = NULL,
                                         orders = NULL,
                                         specification_fingerprint =
-                                          "^main_a6_r1km__a6__w3__price_main$",
-                                        frequency = NULL) {
+                                          "^main_a6_r1km__a0__w1__price_(median|hedonic)(__.*)?$",
+                                        frequency = NULL,
+                                        reference_event_time = -1L) {
   if (!is.null(min_pre_event_time) &&
       (!is.finite(min_pre_event_time) || min_pre_event_time >= 0L)) {
     stop("min_pre_event_time must be a finite negative integer")
@@ -629,7 +700,8 @@ run_event_study_aggregation <- function(staging_root, output_dir,
     stratum_values = stratum_values,
     orders = orders,
     specification_fingerprint = specification_fingerprint,
-    frequency = frequency
+    frequency = frequency,
+    reference_event_time = reference_event_time
   )
   series <- aggregate_event_study_series(labels)
   grid_summary <- joint_pretrend_tests(labels, min_pre_event_time)
@@ -665,7 +737,9 @@ render_event_study_report <- function(labels, series, joint_tests, figures,
     " grids, ", nrow(labels), " label rows (pre+post)"
   ))
   lines <- c(lines, paste0(
-    "- Pre-period rows (event_time < 0): ", nrow(labels[event_time < 0L]),
+    "- Clean pre-period rows (event_time < reference): ",
+    nrow(labels[event_time < reference_event_time]),
+    "; reference rows: ", nrow(labels[event_time == reference_event_time]),
     "; treatment/post rows (event_time >= 0): ", nrow(labels[event_time >= 0L]), ""
   ))
   if ("specification_fingerprint" %in% names(labels)) {

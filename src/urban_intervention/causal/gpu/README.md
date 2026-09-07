@@ -15,8 +15,8 @@ R estimator processes.
 | GSC | rolling rank CV, two-way interactive fixed effects, deterministic GPU SVD/EM, same-city and standardized all-city donors | 200-repetition two-stage parametric bootstrap (`auto`: empirical or AR errors) |
 | MC | rolling lambda CV, two-way fixed effects and nuclear-norm completion | unit jackknife matching `fect::jackknifed` pseudo-values |
 
-The Python panel builder also freezes the clean-pre, anticipation, excluded
-opening-period and post-period calendars. Housing transaction support,
+The Python panel builder also freezes the clean-pre, anticipation, opening-impact
+and post-period calendars. Housing transaction support,
 cross-city donor scope, convergence, tuning, inference counts and backend
 version are carried into every label and manifest.
 
@@ -27,7 +27,7 @@ version are carried into every label and manifest.
   pre-treatment information sets; treated post-period outcomes are masked.
 - All-city GSC must pass a pre-only masked target-versus-20-donor placebo gate.
 - The 3.77-million-unit all-city universe is reduced before any outcome is
-  read by a fixed-seed stable-hash sample (default 50,000 donors). The cap and
+  read by a fixed-seed stable-hash sample (default 5,000 donors). The cap and
   seed are part of the specification fingerprint; post-treatment outcomes
 -  cannot affect selection. Report cap sensitivity for cross-city extensions.
 - Production stops when fitting or formal inference is incomplete.
@@ -104,6 +104,20 @@ The R reference labels used for qualification use
 marginal errors without their covariance and are deliberately rejected as an
 inference reference. Production Python windows are rebuilt from the complete
 joint bootstrap/jackknife paths.
+
+The production monthly main specification uses `observation_window=1` for both
+housing and VIIRS, so every event-study point is on the same raw monthly scale.
+All monthly formal paths retain `event_time=0`; housing moving-window results
+such as `observation_window=3` are separate sensitivity specifications and are
+never mixed into the primary event-study path.
+
+The primary event study omits `event_time=-1` for all four outcome families and
+sets monthly `anticipation_months=0`. The opening month/year (`event_time=0`) is
+the first formal impact period. Housing and VIIRS additionally support a
+separately fitted robustness specification with `anticipation_months=6` and
+reference `event_time=-7`; its `-6:-1` coefficients are interpreted as possible
+anticipation and are excluded from the clean-pre joint test. GSC/MC reference
+contrasts use joint bootstrap/jackknife draws, not marginal-SE arithmetic.
 
 MC follows the full `fect` lambda grid, including the unregularized `lambda=0`
 endpoint. Production requires a finite non-negative selected lambda and records

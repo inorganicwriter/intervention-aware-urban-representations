@@ -446,7 +446,7 @@ PanelMatch、Abadie-Imbens 和 Xu GSC 均假设 SUTVA（稳定单元处理值假
 
 Xu (2017) 和 `gsynth` 包均不约束 donor 数量下限。项目在跨城 placebo 路径需要至少 20
 个 donor（抽样需求），同城路径无额外下限。Python/GPU 跨城 GSC 默认在读取结果前按固定
-seed 做稳定哈希抽样，最多保留 50,000 个 donor；该上限和 seed 写入 specification
+seed 做稳定哈希抽样，最多保留 5,000 个 donor；该上限和 seed 写入 specification
 fingerprint。`min.T0 = 5` 已间接保证最低数据质量。
 
 ### 9.4 MC 内存限制

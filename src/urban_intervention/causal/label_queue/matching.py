@@ -168,13 +168,16 @@ def run_cross_city_matching(
         "control_unit_key": str(record.get("control_unit_key")),
         "donor_scope": "all_city_standardized",
         "control_record": str(record_path.relative_to(ROOT)),
+        "control_record_sha256": file_sha256(record_path),
     }
     settings.cross_city_design_cache[order] = (record.copy(), details.copy())
     return True, record, details
 
 
 def run_frozen_control(
-    row: pd.Series, control: pd.Series
+    row: pd.Series,
+    control: pd.Series,
+    control_provenance: dict[str, object] | None = None,
 ) -> tuple[bool, list[pd.DataFrame], dict[str, object]]:
     family = str(row.outcome_family)
     if str(control.status) != "matched":
@@ -200,6 +203,26 @@ def run_frozen_control(
                 )
     output = fixed_control_output(row)
     run_id = new_run_id()
+    default_control_record = (
+        OUTPUT_CONTROL_TASKS_DIR / f"{int(row.treatment_order):05d}" / "control_record.csv"
+    )
+    provenance = control_provenance or {}
+    control_record_value = provenance.get("control_record") or str(
+        default_control_record.relative_to(ROOT)
+        if default_control_record.is_relative_to(ROOT)
+        else default_control_record
+    )
+    control_record = Path(str(control_record_value))
+    if not control_record.is_absolute():
+        control_record = ROOT / control_record
+    control_record_hash = provenance.get("control_record_sha256")
+    if control_record_hash is None and control_record.exists():
+        control_record_hash = file_sha256(control_record)
+    control_record_reference = (
+        str(control_record.relative_to(ROOT))
+        if control_record.is_relative_to(ROOT)
+        else str(control_record)
+    )
     if settings.estimator_backend == "python_gpu":
         try:
             raw = fixed_control_labels(
@@ -208,7 +231,7 @@ def run_frozen_control(
                 str(control.control_grid_id),
                 family,
                 root=ROOT,
-                window=settings.label_window,
+                window=settings.label_window if family == "housing" else 1,
                 price_measure=effective_price_measure(row),
                 transaction_count_threshold=settings.transaction_count_threshold,
             )
@@ -229,9 +252,15 @@ def run_frozen_control(
                 "outcome_family": family,
                 "control_city_key": str(control.control_city_key),
                 "control_grid_id": str(control.control_grid_id),
+                "donor_scope": str(
+                    (control_provenance or {}).get("donor_scope")
+                    or control.get("donor_scope", "")
+                ),
+                "control_record": control_record_reference,
+                "control_record_sha256": control_record_hash,
                 "run_mode": settings.run_mode,
                 "production_eligible": settings.run_mode == "production",
-                "window": settings.label_window,
+                "window": settings.label_window if family == "housing" else 1,
                 "price_measure": effective_price_measure(row),
                 "transaction_count_threshold": settings.transaction_count_threshold,
                 "labels_sha256": file_sha256(labels_path),
@@ -262,7 +291,7 @@ def run_frozen_control(
                 str(control.control_grid_id),
                 family,
                 str(output),
-                str(settings.label_window),
+                str(settings.label_window if family == "housing" else 1),
                 effective_price_measure(row),
             ],
             {
@@ -332,9 +361,6 @@ def run_frozen_control(
                 "log": completed_log,
             },
         )
-    control_record = (
-        OUTPUT_CONTROL_TASKS_DIR / f"{int(row.treatment_order):05d}" / "control_record.csv"
-    )
     return (
         True,
         [raw],
@@ -346,12 +372,8 @@ def run_frozen_control(
             "fixed_control_labels_sha256": file_sha256(labels_path),
             "fixed_control_manifest_sha256": file_sha256(estimator_manifest),
             "run_id": run_id,
-            "control_record": str(control_record.relative_to(ROOT))
-            if control_record.exists()
-            else None,
-            "control_record_sha256": file_sha256(control_record)
-            if control_record.exists()
-            else None,
+            "control_record": control_record_reference if control_record.exists() else None,
+            "control_record_sha256": control_record_hash,
             "log": completed_log,
         },
     )

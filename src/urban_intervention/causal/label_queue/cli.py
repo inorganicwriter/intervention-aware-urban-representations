@@ -122,8 +122,8 @@ def main() -> int:
     parser.add_argument(
         "--anticipation-months",
         type=int,
-        default=6,
-        help="Anticipation window in months (main=6; sensitivity 0/12)",
+        default=0,
+        help="Anticipation window in months (main=0; monthly t=-7 robustness=6)",
     )
     parser.add_argument(
         "--price-measure",
@@ -137,7 +137,7 @@ def main() -> int:
         type=int,
         default=1,
         help="Observation-window width in months for monthly labels "
-        "(main housing specification uses 3; 1/6 are sensitivity views)",
+        "(main specification uses 1; wider windows are sensitivity views)",
     )
     parser.add_argument("--retry-matching", action="store_true")
     parser.add_argument(
@@ -178,7 +178,7 @@ def main() -> int:
     parser.add_argument(
         "--max-gsc-cross-city-donors",
         type=int,
-        default=50_000,
+        default=5_000,
         help="Pre-outcome deterministic donor cap for cross-city GSC.",
     )
     parser.add_argument(
@@ -371,9 +371,14 @@ def main() -> int:
             if not orders_set:
                 print(f"Shard {args.shard_id + 1}/{args.shard_count}: no selected sample orders")
                 return 0
-        invalidated = invalidate_stale_terminal_tasks(queue, orders_set)
-        if invalidated:
-            print(f"Invalidated {invalidated} terminal tasks from a different specification")
+    selected_orders_for_invalidation = (
+        orders_set
+        if orders_set is not None
+        else set(queue["treatment_order"].astype(int))
+    )
+    invalidated = invalidate_stale_terminal_tasks(queue, selected_orders_for_invalidation)
+    if invalidated:
+        print(f"Invalidated {invalidated} terminal tasks from a different specification")
     eligible = eligible_indices(
         queue,
         args.start_order,

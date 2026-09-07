@@ -18,7 +18,7 @@ from urban_intervention.causal.label_queue import orchestrator as modular_orches
 ROOT = Path(__file__).resolve().parents[2]
 ORIGINAL_PATH = ROOT / "scripts" / "causal_python" / "run_causal_label_queue.py"
 MODULAR_PATH = ROOT / "scripts" / "causal_python" / "run_causal_label_queue_modular.py"
-ORIGINAL_NORMALIZED_SHA256 = "b3f0886a75bd0ad8e27a72610d47ff2b6ba2debcecfd704765af72978624e355"
+ORIGINAL_NORMALIZED_SHA256 = "6baec07857d17f44b4c6df9aff1d96cb49dcf4cc71e821a6aa88c9cabbabe4ee"
 
 SPEC = importlib.util.spec_from_file_location("frozen_causal_label_queue", ORIGINAL_PATH)
 assert SPEC is not None and SPEC.loader is not None
@@ -80,7 +80,7 @@ def test_all_original_functions_have_ast_equivalent_modular_implementations() ->
     original_functions = {
         node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)
     }
-    assert len(original_functions) == 49
+    assert len(original_functions) == 50
 
     for name, original_node in original_functions.items():
         modular_function = getattr(modular, name)
@@ -148,6 +148,15 @@ def test_specs_paths_commands_and_selection_match(monkeypatch) -> None:
     assert ORIGINAL.python_estimator_command(
         row, "gsc", "same_city", "run-7"
     ) == modular.python_estimator_command(row, "gsc", "same_city", "run-7")
+
+    viirs_row = row.copy()
+    viirs_row["outcome_family"] = "viirs"
+    assert "__w1__" in ORIGINAL.specification_fingerprint(viirs_row)
+    assert "--observation-window" in ORIGINAL.python_estimator_command(
+        viirs_row, "gsc", "same_city", "run-viirs"
+    )[0]
+    command = ORIGINAL.python_estimator_command(viirs_row, "gsc", "same_city", "run-viirs")[0]
+    assert command[command.index("--observation-window") + 1] == "1"
 
     queue = pd.DataFrame(
         {

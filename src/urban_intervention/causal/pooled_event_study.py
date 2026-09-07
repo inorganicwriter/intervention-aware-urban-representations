@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -11,9 +12,14 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from urban_intervention.causal.gpu.inference import jackknife_standard_error
 from urban_intervention.causal.gpu.provenance import file_sha256
 
 LOGGER = logging.getLogger(__name__)
+
+DEFAULT_MAIN_SPECIFICATION_FINGERPRINT = (
+    r"^main_a6_r1km__a0__w1__price_(median|hedonic)(__.*)?$"
+)
 
 GROUP_COLUMNS = [
     "frequency",
@@ -22,6 +28,7 @@ GROUP_COLUMNS = [
     "method",
     "donor_scope",
     "observation_window",
+    "reference_event_time",
 ]
 PATH_COLUMNS = [
     "treatment_order",
@@ -31,6 +38,7 @@ PATH_COLUMNS = [
     "causal_response_label",
     "label_available",
     "standard_error",
+    "contrast_inference_source",
     "specification_fingerprint",
     "run_id",
 ]
@@ -52,14 +60,101 @@ def _read_manifest(path: Path) -> dict[str, str]:
     return dict(zip(frame["field"], frame["value"], strict=False))
 
 
+def _manifest_anticipation_months(manifest: Mapping[str, object]) -> int | None:
+    """Read anticipation from structured metadata, then the full fingerprint."""
+    raw = manifest.get("anticipation_months")
+    try:
+        if raw not in (None, ""):
+            value = int(str(raw))
+            if value >= 0:
+                return value
+    except (TypeError, ValueError):
+        pass
+    match = re.search(r"__a(\d+)(?:__|$)", str(manifest.get("specification_fingerprint", "")))
+    return int(match.group(1)) if match else None
+
+
+def _canonical_reference_event_time(
+    frequency: str, anticipation_months: int | None
+) -> int | None:
+    """Return the reference implied by a manifest's data frequency.
+
+    Annual outcomes use the prior calendar year regardless of the monthly
+    anticipation setting embedded in a shared queue fingerprint.  Monthly
+    outcomes use the month immediately before the anticipation buffer.
+    """
+    if frequency == "annual":
+        return -1
+    if frequency == "monthly" and anticipation_months is not None:
+        return -(anticipation_months + 1)
+    return None
+
+
+def _reference_contrast_standard_errors(
+    part: pd.DataFrame,
+    draws: np.ndarray,
+    *,
+    estimator: str,
+    reference_event_time: int,
+) -> np.ndarray:
+    """Compute uncertainty for effect(t) - effect(reference) from joint draws."""
+    result = np.full(len(part), np.nan, dtype=np.float64)
+    point = pd.to_numeric(part["causal_response_label"], errors="coerce").to_numpy(
+        dtype=np.float64
+    )
+    grouped = part.groupby(["treatment_order", "outcome"], sort=False).indices
+    for positions in grouped.values():
+        local_positions = np.asarray(positions, dtype=np.int64)
+        local_event_time = part.iloc[local_positions]["event_time"].to_numpy(dtype=int)
+        reference_positions = np.flatnonzero(local_event_time == reference_event_time)
+        if reference_positions.size != 1:
+            continue
+        local_reference = int(reference_positions[0])
+        local_draws = draws[:, local_positions]
+        contrast_draws = local_draws - local_draws[:, [local_reference]]
+        contrast_point = point[local_positions] - point[local_positions[local_reference]]
+        if estimator == "mc":
+            standard_error, _ = jackknife_standard_error(
+                contrast_point, contrast_draws
+            )
+        else:
+            standard_error = np.full(local_positions.size, np.nan, dtype=np.float64)
+            valid = np.sum(np.isfinite(contrast_draws), axis=0)
+            for column in np.flatnonzero(valid >= 2):
+                standard_error[column] = float(
+                    np.nanstd(contrast_draws[:, column], ddof=1)
+                )
+        result[local_positions] = standard_error
+    return result
+
+
 def read_production_effect_paths(
     staging_root: Path,
     *,
     specification_fingerprint: str | None = None,
     frequency: str | None = None,
     monthly_observation_window: int | None = None,
+    monthly_observation_windows: Mapping[str, int] | None = None,
+    reference_event_time: int = -1,
 ) -> pd.DataFrame:
     """Read production GSC/MC paths whose manifests prove the exact labels."""
+    if reference_event_time >= 0:
+        raise ValueError("reference_event_time must be negative")
+    specification_pattern = None
+    if specification_fingerprint is not None:
+        try:
+            specification_pattern = re.compile(specification_fingerprint)
+        except re.error as error:
+            raise ValueError(
+                f"invalid specification_fingerprint regex: {specification_fingerprint!r}"
+            ) from error
+    if monthly_observation_windows is not None:
+        monthly_observation_windows = {
+            str(family): int(window)
+            for family, window in monthly_observation_windows.items()
+        }
+        if any(window < 1 or window > 6 for window in monthly_observation_windows.values()):
+            raise ValueError("monthly observation windows must be in 1..6")
     parts: list[pd.DataFrame] = []
     rejection_reasons = (
         "missing_manifest",
@@ -72,10 +167,16 @@ def read_production_effect_paths(
         "observation_window_filter_mismatch",
         "frequency_filter_mismatch",
         "specification_filter_mismatch",
+        "missing_specification_fingerprint",
         "labels_hash_mismatch",
         "labels_unreadable",
         "missing_required_columns",
         "invalid_event_time",
+        "inference_draws_hash_mismatch",
+        "inference_draws_unreadable",
+        "inference_draws_misaligned",
+        "reference_specification_mismatch",
+        "reference_period_missing",
     )
     admission = {
         key: 0
@@ -128,17 +229,36 @@ def read_production_effect_paths(
         if (
             manifest_frequency == "monthly"
             and monthly_observation_window is not None
+            and monthly_observation_windows is None
             and observation_window != monthly_observation_window
         ):
             admission["observation_window_filter_mismatch"] += 1
             continue
         manifest_specification = manifest.get("specification_fingerprint", "")
+        if not manifest_specification:
+            admission["missing_specification_fingerprint"] += 1
+            continue
         if (
-            specification_fingerprint is not None
-            and specification_fingerprint not in manifest_specification
+            specification_pattern is not None
+            and specification_pattern.fullmatch(manifest_specification) is None
         ):
             admission["specification_filter_mismatch"] += 1
             continue
+        anticipation_months = _manifest_anticipation_months(manifest)
+        canonical_reference = _canonical_reference_event_time(
+            manifest_frequency, anticipation_months
+        )
+        if canonical_reference is None or canonical_reference != int(reference_event_time):
+            admission["reference_specification_mismatch"] += 1
+            continue
+        manifest_reference = manifest.get("reference_event_time", "")
+        if manifest_reference:
+            try:
+                if int(manifest_reference) != canonical_reference:
+                    raise ValueError
+            except (TypeError, ValueError):
+                admission["reference_specification_mismatch"] += 1
+                continue
         expected_hash = manifest.get("labels_sha256", "")
         if not expected_hash or file_sha256(labels_path) != expected_hash:
             admission["labels_hash_mismatch"] += 1
@@ -164,8 +284,17 @@ def read_production_effect_paths(
         if event_time.isna().any() or not np.equal(event_time, np.floor(event_time)).all():
             admission["invalid_event_time"] += 1
             continue
-        part = labels.copy()
+        part = labels.copy().reset_index(drop=True)
         part["event_time"] = event_time.astype(int)
+        if manifest_frequency == "monthly" and monthly_observation_windows is not None:
+            family_values = set(part["outcome_family"].astype(str))
+            family = next(iter(family_values), None)
+            expected_window = (
+                monthly_observation_windows.get(family) if family is not None else None
+            )
+            if expected_window != observation_window:
+                admission["observation_window_filter_mismatch"] += 1
+                continue
         part["frequency"] = manifest_frequency
         part["observation_window"] = observation_window
         part["method"] = (
@@ -182,6 +311,77 @@ def read_production_effect_paths(
             part.get("standard_error", pd.Series(np.nan, index=part.index)),
             errors="coerce",
         )
+        contrast_standard_error: np.ndarray | None = None
+        contrast_inference_source = "unavailable_missing_joint_draws"
+        expected_draws_hash = manifest.get("inference_draws_sha256", "")
+        if expected_draws_hash:
+            draws_path = labels_path.with_name("inference_draws.parquet")
+            if not draws_path.is_file() or file_sha256(draws_path) != expected_draws_hash:
+                admission["inference_draws_hash_mismatch"] += 1
+                continue
+            try:
+                draw_frame = pd.read_parquet(draws_path)
+            except (OSError, ValueError):
+                admission["inference_draws_unreadable"] += 1
+                continue
+            expected_columns = [str(value) for value in part["period"]]
+            draw_columns = [str(value) for value in draw_frame.columns if value != "replicate"]
+            if draw_columns != expected_columns:
+                admission["inference_draws_misaligned"] += 1
+                continue
+            draws = draw_frame.drop(columns=["replicate"], errors="ignore").to_numpy(
+                dtype=np.float64
+            )
+            contrast_standard_error = _reference_contrast_standard_errors(
+                part,
+                draws,
+                estimator=estimator,
+                reference_event_time=reference_event_time,
+            )
+            contrast_inference_source = (
+                "joint_jackknife_reference_contrast"
+                if estimator == "mc"
+                else "joint_bootstrap_reference_contrast"
+            )
+        reference_rows = part.loc[
+            part["event_time"].eq(reference_event_time)
+            & part["label_available"].fillna(False)
+            & np.isfinite(
+                pd.to_numeric(part["causal_response_label"], errors="coerce")
+            )
+        ]
+        reference_key = ["treatment_order", "outcome"]
+        expected_groups = part[reference_key].drop_duplicates()
+        if (
+            reference_rows.duplicated(reference_key).any()
+            or len(reference_rows) != len(expected_groups)
+        ):
+            admission["reference_period_missing"] += 1
+            continue
+        reference_values = reference_rows.set_index(reference_key)[
+            "causal_response_label"
+        ]
+        row_keys = pd.MultiIndex.from_frame(part[reference_key])
+        reference_value = pd.to_numeric(
+            reference_values.reindex(row_keys).reset_index(drop=True), errors="coerce"
+        )
+        available = part["label_available"].fillna(False)
+        part["causal_response_label"] = (
+            pd.to_numeric(part["causal_response_label"], errors="coerce")
+            - reference_value.to_numpy(dtype=float)
+        )
+        part.loc[~available, "causal_response_label"] = np.nan
+        # Marginal standard errors do not identify Var(effect_h-effect_ref).
+        # Use joint replicate paths when available; historical artifacts that
+        # predate draw hashing remain usable for point estimates but expose NA.
+        part["standard_error"] = (
+            contrast_standard_error
+            if contrast_standard_error is not None
+            else np.full(len(part), np.nan, dtype=np.float64)
+        )
+        part.loc[part["event_time"].eq(reference_event_time), "standard_error"] = 0.0
+        part["contrast_inference_source"] = contrast_inference_source
+        part["reference_event_time"] = int(reference_event_time)
         part["specification_fingerprint"] = manifest_specification
         part["run_id"] = manifest.get("run_id", "")
         parts.append(part[PATH_COLUMNS])
@@ -255,6 +455,7 @@ def aggregate_effect_paths(paths: pd.DataFrame) -> pd.DataFrame:
                 "within_var",
                 "between_var",
                 "se_available",
+                "uncertainty_status",
                 "specifications",
             ]
         )
@@ -277,14 +478,31 @@ def aggregate_effect_paths(paths: pd.DataFrame) -> pd.DataFrame:
         n = len(values)
         between_var = float(np.var(values, ddof=1)) if n > 1 else 0.0
         finite_se = task_se[np.isfinite(task_se)]
-        within_var = float(np.mean(np.square(finite_se)) / n) if finite_se.size else np.nan
-        pooled_variance = (
-            within_var + between_var / n
-            if np.isfinite(within_var) and within_var > 0
-            else between_var / n
+        all_task_se_available = finite_se.size == n
+        within_var = (
+            float(np.mean(np.square(finite_se)) / n)
+            if all_task_se_available
+            else np.nan
         )
-        standard_error = float(np.sqrt(max(pooled_variance, 0.0)))
         mean = float(np.mean(values))
+        # A missing task-level SE is missing information, not evidence of
+        # zero uncertainty.  Keep the pooled point estimate and descriptive
+        # between-grid variance, but do not turn a one-grid group into a
+        # degenerate [estimate, estimate] confidence interval.
+        if all_task_se_available:
+            pooled_variance = within_var + between_var / n
+            standard_error = float(np.sqrt(max(pooled_variance, 0.0)))
+            uncertainty_status = "available"
+            ci_lower = mean - 1.96 * standard_error
+            ci_upper = mean + 1.96 * standard_error
+        else:
+            standard_error = np.nan
+            uncertainty_status = (
+                "missing_task_standard_errors"
+                if not finite_se.size
+                else "partially_missing_task_standard_errors"
+            )
+            ci_lower = ci_upper = np.nan
         city_codes = part["city_key"].astype("string").fillna("unknown")
         city_scores = (
             pd.DataFrame({"city": city_codes.to_numpy(), "residual": values - mean})
@@ -321,13 +539,14 @@ def aggregate_effect_paths(paths: pd.DataFrame) -> pd.DataFrame:
                 "sd_label": float(np.std(values, ddof=1)) if n > 1 else 0.0,
                 "se_label": standard_error,
                 "se_label_city_cluster": city_cluster_se,
-                "ci_lower": mean - 1.96 * standard_error,
-                "ci_upper": mean + 1.96 * standard_error,
+                "ci_lower": ci_lower,
+                "ci_upper": ci_upper,
                 "ci_lower_city_cluster": city_lower,
                 "ci_upper_city_cluster": city_upper,
                 "within_var": within_var,
                 "between_var": between_var,
                 "se_available": int(finite_se.size),
+                "uncertainty_status": uncertainty_status,
                 "specifications": "|".join(
                     sorted(set(part["specification_fingerprint"].dropna().astype(str)))
                 ),
@@ -346,11 +565,8 @@ def select_pretrend_rows(
     if min_pre_event_time is not None and min_pre_event_time >= 0:
         raise ValueError("min_pre_event_time must be negative")
     event_time = pd.to_numeric(paths["event_time"], errors="coerce")
-    clean_pre = (
-        paths["frequency"].eq("monthly") & event_time.le(-7)
-    ) | (
-        paths["frequency"].eq("annual") & event_time.lt(0)
-    )
+    reference = pd.to_numeric(paths["reference_event_time"], errors="coerce")
+    clean_pre = event_time.lt(reference)
     pre = paths.loc[
         paths["label_available"].fillna(False)
         & clean_pre
@@ -559,9 +775,11 @@ def run_pooled_path_event_study(
     frequency: str | None = None,
     min_pre_event_time: int | None = None,
     latest_pre_periods: int = 5,
-    observation_window: int = 3,
+    observation_window: int = 1,
+    monthly_observation_windows: Mapping[str, int] | None = None,
     figures: bool = True,
     task_keys: set[tuple[int, str]] | None = None,
+    reference_event_time: int = -1,
 ) -> PooledPathEventStudyResult:
     if not 1 <= observation_window <= 6:
         raise ValueError("observation_window must be between 1 and 6")
@@ -569,7 +787,11 @@ def run_pooled_path_event_study(
         staging_root,
         specification_fingerprint=specification_fingerprint,
         frequency=frequency,
-        monthly_observation_window=observation_window,
+        monthly_observation_window=(
+            None if monthly_observation_windows is not None else observation_window
+        ),
+        monthly_observation_windows=monthly_observation_windows,
+        reference_event_time=reference_event_time,
     )
     admission_counts = paths.attrs.get("admission_counts", {})
     if task_keys is not None and not paths.empty:
@@ -618,8 +840,13 @@ def run_pooled_path_event_study(
         "pretrend_policy": "diagnostic_only_not_an_automatic_label_gate",
         "requested_task_keys": len(task_keys) if task_keys is not None else None,
         "observation_window_monthly": observation_window,
+        "observation_windows_monthly": (
+            dict(monthly_observation_windows) if monthly_observation_windows is not None else None
+        ),
+        "reference_event_time": int(reference_event_time),
         "common_support_policy": (
-            "all_available_periods; monthly_anticipation_-6_-1_and_t0_visual_only; "
+            "all_available_periods; estimates normalized to the declared omitted "
+            "reference; t0 is the real opening-period effect; "
             "longest_cross_method_overlap_selected_per_outcome_at_plot_time"
         ),
         "rows_excluded_outside_common_support": admitted_before_common_support - len(paths),

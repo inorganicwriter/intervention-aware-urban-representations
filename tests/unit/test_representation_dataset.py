@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import torch
 
 from tests.helpers.representation import build_synthetic_model_inputs
@@ -72,6 +73,22 @@ class TestRepresentationDataset:
         assert housing_dim == 6
         total_dim = sum(end - start for start, end, _ in offsets.values())
         assert total_dim == RESPONSE_DIM
+
+    def test_response_mask_respects_per_label_training_eligibility(self, tmp_path: Path) -> None:
+        ds_dir, _ = build_synthetic_model_inputs(tmp_path)
+        responses = pd.read_parquet(ds_dir / "response_targets.parquet")
+        target = (responses["treatment_order"] == 1) & responses["outcome_family"].eq("housing")
+        target &= responses["event_time"] == 1
+        responses.loc[target, "causal_response_label"] = 99.0
+        responses.loc[target, "final_training_mask"] = False
+        responses.to_parquet(ds_dir / "response_targets.parquet", index=False)
+
+        ds = RepresentationDataset(ds_dir)
+        sample = ds[0]
+        housing_start = ds.response_offsets()["housing"][0]
+        assert not bool(sample.response_mask[housing_start].item())
+        assert torch.isnan(sample.response_vector[housing_start])
+        assert bool(sample.response_mask[housing_start + 1].item())
 
     def test_response_similarity_identical(self, tmp_path: Path) -> None:
         ds_dir, _ = build_synthetic_model_inputs(tmp_path)

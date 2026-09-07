@@ -163,13 +163,14 @@ def test_matrix_completion_evaluates_all_configured_lambda_candidates() -> None:
         config=MatrixCompletionConfig(
             lambdas=lambdas,
             folds=2,
-            max_iter=100,
+            max_iter=5000,
             inference="none",
         ),
         runtime=_runtime(),
     )
     assert len(result.cv_mean_mspe) == 20
     assert set(result.cv_mean_mspe) == set(lambdas)
+    assert result.provenance.numerical_policy["cv_tolerance"] == 1e-3
 
 
 def test_matrix_completion_excludes_missing_treated_post_from_jackknife() -> None:

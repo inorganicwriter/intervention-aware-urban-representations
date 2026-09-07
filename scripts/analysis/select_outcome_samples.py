@@ -644,7 +644,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--n-per-family", type=int, default=300)
     parser.add_argument("--seed", type=int, default=20260901)
-    parser.add_argument("--window", type=int, default=3)
+    parser.add_argument("--window", type=int, default=1)
     parser.add_argument("--transaction-count-threshold", type=int, default=1)
     parser.add_argument(
         "--price-measure",

@@ -333,6 +333,8 @@ def fit_matrix_completion(
         score_sse: dict[float, float] = {penalty: 0.0 for penalty in lambdas}
         score_count: dict[float, int] = {penalty: 0 for penalty in lambdas}
         evaluated: list[float] = []
+        # Match fect's two-tier numerical policy: CV uses a looser tolerance
+        # for lambda selection, while the final refit uses config.tol.
         cv_tolerance = max(config.tol, 1e-3)
         for penalty in lambdas:
             if config.batch_cv:

@@ -1,6 +1,6 @@
 # 因果识别与平行趋势诊断
 
-更新：2026-08-27
+更新：2026-09-04
 状态：当前识别说明
 
 本文说明项目如何执行 DID 和事件研究的平行趋势诊断，并说明输出文件和结果标记。计量对象、识别假设、估计量、推断方法和稳健性框架见 [`econometric_methods.md`](econometric_methods.md)。
@@ -17,12 +17,13 @@ L[i, k, h] = Y_observed[i, k, h] - Y_0_counterfactual[i, k, h]
 
 ## 2. 事件时间和可用的处理前时期
 
-| 频率 | 主 anticipation | 清洁处理前期 | 处理边界 | 主处理后期 | TWFE 参考期 |
+| 频率 | 规格 | 估计前期 | 正式冲击期 | 处理后期 | 参考期 |
 |---|---:|---|---|---|---:|
-| 月度 | `-6:-1` | `-42:-7` | `0` 开通月排除 | `1:24` | `-7` |
-| 年度 | 项目层 `0` 年主规格；`1` 年敏感性 | `-4:-1` | `0` 开通年排除 | `1:3` | `-1` |
+| 月度 | 主规格 | `-36:-1` | `0` 开通月 | `1:24` | `-1` |
+| 月度 | anticipation 稳健性 | `-42:-1`（其中 `-6:-1` 为提前反应系数） | `0` 开通月 | `1:24` | `-7` |
+| 年度 | 主规格 | 所有可用开通前年份 | `0` 开通年 | `1:3` | `-1` |
 
-月度定义中，开通当月可能只有部分暴露，因此不作为处理后期；开通前 6 个月可能已经出现预期反应，因此不把 `-6:-1` 当作清洁 pre-trend。年度数据无法精确表示 6 个月 anticipation，所以 `annual_anticipation_years=0/1` 是项目层敏感性近似，必须写入 manifest。
+主规格把开通前一期作为标准事件研究参考期，便于四类 outcome 和三种方法直接比较。`t=0` 是正式冲击期，必须由真实开通月/年数据估计、保存和绘制，不能删除、插值或用 `t=1` 代替。月度稳健性规格允许开通前六个月已经受预期影响，因此省略 `t=-7`，并估计 `t=-6,...,-1,0,...,24`；它必须作为独立 Phase 2 拟合和独立产物报告，不能与主规格混合。
 
 ## 3. 匹配路径：事件研究 TWFE
 
@@ -34,7 +35,7 @@ Y_it = α_i + γ_t + Σ_{k∈K, k≠k0} β_k [treated_i × 1(event_time=k)] + ε
 
 - `α_i` 是配对中每个网格的固定效应；`γ_t` 是日历期固定效应；
 - 控制网格始终作为未处理单元，事件期虚拟变量只作用于 treated 单元；
-- `k0=-7`（月度）或 `k0=-1`（年度）是最后一个清洁处理前参考期；
+- 主规格统一令 `k0=-1`；月度 anticipation 稳健性规格令 `k0=-7`；
 - 主检验使用最近 5 个清洁处理前期，其中最后一期为参考期，因此联合检验包含最多 4 个 lead。完整清洁处理前窗口保留在图形和系数表中。该低维检验避免约束数超过城市聚类自由度。联合原假设为：
 
 ```text
@@ -89,22 +90,25 @@ GSC/MC 保留每个任务的处理前反事实 gap：
 gap[i, k, t] = Y_observed[i, k, t] - Y_hat_0[i, k, t]
 ```
 
-项目把这些 gap 对齐到事件时间，再按 `frequency × outcome_family × outcome × method × donor_scope × observation_window` 分开聚合。不同 observation window 的历史产物不会混在同一条曲线中：
+项目先在每个 treated grid 内计算相对于所声明参考期的差分
+`gap(h)-gap(k0)`，再按 `frequency × outcome_family × outcome × method × donor_scope × observation_window × reference_event_time` 分开聚合。不同参考期或 observation window 的产物不会混在同一条曲线中：
 
 1. 每个事件期先报告网格间均值、标准差、样本量和 95% 区间；
-2. 若任务提供标准误，聚合方差包含 `mean(SE_i²)/n` 的 within-task 成分和网格间方差成分；
+2. GSC/MC 的差分标准误由同一任务的联合 bootstrap/jackknife draws 计算，不能用两个边际标准误拼接；聚合方差再包含 within-task 和网格间成分；
 3. 处理前联合检验先在每个网格内对选定 clean pre-period 求均值，再在网格层面做 one-sample t 检验；
 4. 由于同一城市的网格共享城市冲击，再把处理前 gap 先聚合到城市均值，在城市之间做同样的 one-sample t 检验；
-5. 主 Python 实现默认使用每个网格最近的 5 个 clean pre-period，不把 anticipation 期误当作 `-1:-6` 的清洁趋势。
+5. 主规格使用参考期之前最近 5 个时期（即最多 `-6:-2`）做处理前联合诊断；稳健性规格只使用 `t<-7`，不把 `-6:-1` 的潜在提前反应误当作 clean pre-trend。
 
 三种方法的跨方法图按 outcome 动态选择最长共同事件时间支持。图形保留所有可用
 事件期，然后分别取 Matching、GSC、MC 中实际可用方法的最早/最晚区间交集。
-月度 `h=-6:-1` anticipation 和 `h=0` 开通边界可以显示，但只有 `h<=-7` 进入
-clean-pre 检验；年度 `h=0` 可以显示但不进入检验。
+主规格中 `h=-1` 是省略参考期、`h=0` 是正式冲击期，clean-pre 检验只使用
+`h<-1`；月度稳健性中 `h=-7` 是参考期，`h=-6:-1` 是提前反应系数，clean-pre
+检验只使用 `h<-7`。任何规格的 `h=0` 都不进入平行趋势检验。
 因此早期 history 不再被固定的 3 年展示窗口人为删除，但某一种方法独有的额外时期也
-不会冒充跨方法比较。月度 Matching 与 GSC/MC 必须使用相同的
-`observation_window`（主规格为 3）；年度窗口固定为 1。读取器对缺失、非法或不同
-窗口的 estimator manifest 采用 fail-closed。
+不会冒充跨方法比较。主规格下月度 housing 与 VIIRS 的 Matching、GSC/MC 统一使用
+`observation_window=1`，不做 post moving-window 聚合；housing 的
+`observation_window=3` 仅作为独立敏感性规格；年度窗口固定为 1。读取器按结果族校验窗口，对缺失、非法或
+不符合结果族口径的 estimator manifest 采用 fail-closed。
 
 “pooled”表示把任务清单内所有被各方法接纳的 treated grids，在**同一结果族、同一
 方法、同一 donor scope 和同一窗口**内聚合。housing、VIIRS、POI、population 的
@@ -162,7 +166,7 @@ pretrend_flag, pre_rmspe_summary, holdout_summary,
 placebo_threshold, spatial_exclusion_km, run_id, input_hashes
 ```
 
-图形显示所有有支持的 clean pre/post event times、95% 区间、`event_time=0` 处理边界和样本量。被排除的 anticipation 期从清洁 pre-trend 图中移除。
+图形显示所有有支持的事件期、95% 区间、参考期、`event_time=0` 正式冲击边界和样本量。稳健性规格的 anticipation 系数保留在图中，但从 clean-pre 联合检验中排除。
 
 ## 8. 复核入口
 

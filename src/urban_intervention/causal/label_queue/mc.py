@@ -216,7 +216,7 @@ def run_mc_scope(
             donor_scope,
             settings.run_mode,
             effective_price_measure(row),
-            str(settings.label_window),
+            str(settings.label_window if family == "housing" else 1),
         ],
         {
             "MIT_CAUSAL_RUN_ID": run_id,
@@ -319,7 +319,7 @@ def run_mc_scope(
             or manifest_values.get("specification_fingerprint") != specification_fingerprint(row)
             or manifest_values.get("price_measure") != effective_price_measure(row)
             or manifest_values.get("observation_window")
-            != str(settings.label_window if frequency == "monthly" else 1)
+            != str(settings.label_window if family == "housing" else 1)
             or manifest_values.get("inference") != "jackknife"
             or manifest_values.get("nboots") != expected_nboots
             or not math.isfinite(selected_lambda)

@@ -46,6 +46,7 @@ from .support import (
     viirs_has_min_preperiods,
 )
 from .validation import (
+    _validate_control_provenance,
     invalidate_stale_terminal_tasks,
     recover_completed_task,
     validate_task_labels,
@@ -59,6 +60,7 @@ __all__ = [
     "_cohort_year",
     "_family_observed_grids",
     "_month_key",
+    "_validate_control_provenance",
     "begin_mc_stage",
     "classify_gsc_failure",
     "control_for_order",

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -116,6 +117,52 @@ def queue_variant_path(path: Path, run_mode: str) -> Path:
 
 def shard_queue_path(path: Path, shard_id: int) -> Path:
     return path.with_name(f"{path.stem}_shard_{shard_id:02d}{path.suffix}")
+
+
+def isolated_queue_paths(namespace: str | None) -> tuple[Path, Path, Path]:
+    """Return family/control/unit queue paths for one isolated specification."""
+    if namespace is None:
+        return OUTCOME_FAMILY_QUEUE, CONTROL_DESIGN_QUEUE, COUNTERFACTUAL_QUEUE
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", namespace):
+        raise ValueError(
+            "queue namespace must contain only lowercase letters, digits, '_' or '-'"
+        )
+    return tuple(
+        path.with_name(f"{path.stem}_{namespace}{path.suffix}")
+        for path in (OUTCOME_FAMILY_QUEUE, CONTROL_DESIGN_QUEUE, COUNTERFACTUAL_QUEUE)
+    )  # type: ignore[return-value]
+
+
+def initialize_isolated_queues(
+    family_queue: Path, control_queue: Path, unit_queue: Path
+) -> None:
+    """Create pending analysis queues while preserving frozen Phase 1 controls."""
+    targets = (family_queue, control_queue, unit_queue)
+    canonical = (OUTCOME_FAMILY_QUEUE, CONTROL_DESIGN_QUEUE, COUNTERFACTUAL_QUEUE)
+    if targets == canonical:
+        return
+    existing = [path.exists() for path in targets]
+    if any(existing) and not all(existing):
+        raise RuntimeError(
+            "isolated queue namespace is incomplete; remove all three namespace "
+            "queues or restore the missing files before retrying"
+        )
+    if all(existing):
+        return
+    family = pd.read_csv(OUTCOME_FAMILY_QUEUE)
+    family["status"] = "pending"
+    for column in ("selected_method", "failure_reason"):
+        if column in family:
+            family[column] = pd.NA
+    unit = pd.read_csv(COUNTERFACTUAL_QUEUE)
+    unit["status"] = "pending"
+    for column in ("selected_method", "selected_control_grid_id", "failure_reason"):
+        if column in unit:
+            unit[column] = pd.NA
+    atomic_write_csv(family, family_queue)
+    atomic_write_csv(pd.read_csv(CONTROL_DESIGN_QUEUE), control_queue)
+    atomic_write_csv(unit, unit_queue)
+    print(f"Initialized isolated queues: {family_queue.stem}")
 
 
 def validate_resume_checkpoint(master_family: Path, shard_count: int) -> None:
@@ -242,8 +289,8 @@ def phase2_causal_labels(
     tasks_file: Path | None = None,
     run_mode: str = "production",
     price_measure: str = "main",
-    window: int = 3,
-    anticipation_months: int = 6,
+    window: int = 1,
+    anticipation_months: int = 0,
     queue_phase: str = "all",
     retry_matching: bool = False,
     reset_shards: bool = False,
@@ -255,14 +302,24 @@ def phase2_causal_labels(
     gsc_donor_sampling_seed: int = 20260823,
     transaction_count_threshold: int = 1,
     task_scheduling: str = "global_rounds",
+    queue_paths: tuple[Path, Path, Path] | None = None,
 ) -> None:
     """Launch shard workers for the selected treatment-order sample."""
     print("=" * 60)
     print(f"PHASE 2: Causal labels ({shard_count} shards)")
     print("=" * 60)
 
+    master_family_base, master_control_base, master_unit_base = (
+        queue_paths
+        if queue_paths is not None
+        else (OUTCOME_FAMILY_QUEUE, CONTROL_DESIGN_QUEUE, COUNTERFACTUAL_QUEUE)
+    )
+    initialize_isolated_queues(
+        master_family_base, master_control_base, master_unit_base
+    )
+
     # Validate control design is complete
-    cq = pd.read_csv(CONTROL_DESIGN_QUEUE)
+    cq = pd.read_csv(master_control_base)
     statuses = cq["status"].astype(str)
     task_keys = read_tasks_file(tasks_file) if tasks_file is not None else None
     selected_orders = (
@@ -295,14 +352,14 @@ def phase2_causal_labels(
     # Prepare master queues for each shard.  Existing shard files are the
     # durable checkpoint for an interrupted Phase 2 and must be preserved.
     # They are archived and rebuilt only for an explicit queue reset.
-    master_family = queue_variant_path(OUTCOME_FAMILY_QUEUE, run_mode)
-    master_control = queue_variant_path(CONTROL_DESIGN_QUEUE, run_mode)
-    master_unit = queue_variant_path(COUNTERFACTUAL_QUEUE, run_mode)
+    master_family = queue_variant_path(master_family_base, run_mode)
+    master_control = queue_variant_path(master_control_base, run_mode)
+    master_unit = queue_variant_path(master_unit_base, run_mode)
     if run_mode != "production":
         for source, target in (
-            (OUTCOME_FAMILY_QUEUE, master_family),
-            (CONTROL_DESIGN_QUEUE, master_control),
-            (COUNTERFACTUAL_QUEUE, master_unit),
+            (master_family_base, master_family),
+            (master_control_base, master_control),
+            (master_unit_base, master_unit),
         ):
             if not target.exists():
                 shutil.copy2(source, target)
@@ -509,15 +566,21 @@ def phase3_merge_shards(
     orders_file: Path | None = None,
     tasks_file: Path | None = None,
     run_mode: str = "production",
+    queue_paths: tuple[Path, Path, Path] | None = None,
 ) -> None:
     """Merge per-shard queue CSVs back to master and run sync_unit_queue."""
     print("=" * 60)
     print(f"PHASE 3: Merge {shard_count} shard queues → master")
     print("=" * 60)
 
-    master_family = queue_variant_path(OUTCOME_FAMILY_QUEUE, run_mode)
-    master_unit = queue_variant_path(COUNTERFACTUAL_QUEUE, run_mode)
-    master_control = queue_variant_path(CONTROL_DESIGN_QUEUE, run_mode)
+    family_base, control_base, unit_base = (
+        queue_paths
+        if queue_paths is not None
+        else (OUTCOME_FAMILY_QUEUE, CONTROL_DESIGN_QUEUE, COUNTERFACTUAL_QUEUE)
+    )
+    master_family = queue_variant_path(family_base, run_mode)
+    master_unit = queue_variant_path(unit_base, run_mode)
+    master_control = queue_variant_path(control_base, run_mode)
 
     # Each shard file is a full copy of the master queue at launch; only the
     # rows inside the shard's order range carry that shard's progress, so trim
@@ -730,14 +793,42 @@ def main() -> int:
     parser.add_argument(
         "--window",
         type=int,
-        default=3,
-        help="Monthly observation-window width (default: 3)",
+        default=1,
+        help="Monthly observation-window width (default: 1)",
     )
     parser.add_argument(
         "--anticipation-months",
         type=int,
-        default=6,
-        help="Monthly anticipation window (default: 6)",
+        default=0,
+        help=(
+            "Monthly anticipation window (default: 0, giving the main t=-1 "
+            "reference); use 6 for the monthly t=-7 robustness specification"
+        ),
+    )
+    parser.add_argument(
+        "--estimator-output-root",
+        type=Path,
+        default=OUTPUT_PYTHON_ESTIMATORS_DIR,
+        help=(
+            "Isolated Python estimator artifact root. Use a different root for "
+            "the monthly t=-7 robustness run so it cannot overwrite main results."
+        ),
+    )
+    parser.add_argument(
+        "--queue-namespace",
+        help=(
+            "Isolate Phase 2/3 queues for a separate specification (for example "
+            "robust_m7). The isolated family/unit queues start pending while the "
+            "completed Phase 1 control design is copied read-only."
+        ),
+    )
+    parser.add_argument(
+        "--task-output-root",
+        type=Path,
+        help=(
+            "Isolated task artifact root. Required with --queue-namespace so a "
+            "robustness run cannot overwrite main causal-label task manifests."
+        ),
     )
     parser.add_argument(
         "--queue-phase",
@@ -790,6 +881,15 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    if args.queue_namespace is not None and args.task_output_root is None:
+        parser.error("--queue-namespace requires --task-output-root")
+    if args.queue_namespace is not None and (args.run_all or args.phase == 1):
+        parser.error("--queue-namespace is only supported for isolated Phase 2/3 runs")
+    try:
+        queue_paths = isolated_queue_paths(args.queue_namespace)
+    except ValueError as exc:
+        parser.error(str(exc))
+
     if args.shard_count < 1 or args.workers < 1:
         parser.error("--shard-count and --workers must be positive")
     if min(args.gsc_cv_cores, args.gsc_bootstrap_cores, args.mc_cores) < 1:
@@ -823,7 +923,7 @@ def main() -> int:
             )
         try:
             validate_resume_checkpoint(
-                queue_variant_path(OUTCOME_FAMILY_QUEUE, args.run_mode),
+                queue_variant_path(queue_paths[0], args.run_mode),
                 args.shard_count,
             )
         except (OSError, ValueError) as exc:
@@ -885,9 +985,21 @@ def main() -> int:
             qualification_proof["formal_qualification_receipt_sha256"]
         )
     if args.estimator_backend == "python_gpu":
+        estimator_output_root = args.estimator_output_root
+        if not estimator_output_root.is_absolute():
+            estimator_output_root = ROOT / estimator_output_root
         estimator_env["MIT_CAUSAL_ESTIMATOR_OUTPUT_ROOT"] = str(
-            OUTPUT_PYTHON_ESTIMATORS_DIR
+            estimator_output_root.resolve()
         )
+    if args.queue_namespace is not None:
+        task_output_root = args.task_output_root
+        assert task_output_root is not None
+        if not task_output_root.is_absolute():
+            task_output_root = ROOT / task_output_root
+        estimator_env["MIT_CAUSAL_FAMILY_QUEUE"] = str(queue_paths[0].resolve())
+        estimator_env["MIT_CAUSAL_CONTROL_QUEUE"] = str(queue_paths[1].resolve())
+        estimator_env["MIT_CAUSAL_UNIT_QUEUE"] = str(queue_paths[2].resolve())
+        estimator_env["MIT_CAUSAL_TASK_ROOT"] = str(task_output_root.resolve())
 
     if not args.phase and not args.run_all:
         parser.error("Specify --phase, --run-all, or both phases separately")
@@ -957,6 +1069,7 @@ def main() -> int:
                 gsc_donor_sampling_seed=args.gsc_donor_sampling_seed,
                 transaction_count_threshold=args.transaction_count_threshold,
                 task_scheduling=args.task_scheduling,
+                queue_paths=queue_paths,
             )
         elif phase == 3:
             phase3_merge_shards(
@@ -964,6 +1077,7 @@ def main() -> int:
                 orders_file=orders_file,
                 tasks_file=tasks_file,
                 run_mode=args.run_mode,
+                queue_paths=queue_paths,
             )
 
     elapsed = time.time() - start

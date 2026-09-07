@@ -8,7 +8,10 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+import scripts.causal_r.run_parallel_production as production
 from scripts.causal_r.run_parallel_production import (
+    initialize_isolated_queues,
+    isolated_queue_paths,
     phase2_round_specs,
     shard_queue_path,
     validate_resume_checkpoint,
@@ -331,3 +334,43 @@ def test_prevalidated_resume_requires_existing_nonempty_progress(tmp_path: Path)
         shard_queue_path(master, 1), index=False
     )
     validate_resume_checkpoint(master, 2)
+
+
+def test_isolated_robustness_queues_reset_analysis_state_but_keep_controls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    family = tmp_path / "outcome_family_work_queue.csv"
+    control = tmp_path / "control_design_queue.csv"
+    unit = tmp_path / "counterfactual_work_queue.csv"
+    pd.DataFrame(
+        {
+            "treatment_order": [1],
+            "outcome_family": ["viirs"],
+            "status": ["gsc_labelled"],
+            "selected_method": ["gsc"],
+            "failure_reason": [pd.NA],
+        }
+    ).to_csv(family, index=False)
+    pd.DataFrame(
+        {"treatment_order": [1], "status": ["matched"], "control_grid_id": ["g2"]}
+    ).to_csv(control, index=False)
+    pd.DataFrame(
+        {
+            "treatment_order": [1],
+            "status": ["labelled"],
+            "selected_method": ["gsc"],
+            "selected_control_grid_id": ["g2"],
+            "failure_reason": [pd.NA],
+        }
+    ).to_csv(unit, index=False)
+    monkeypatch.setattr(production, "OUTCOME_FAMILY_QUEUE", family)
+    monkeypatch.setattr(production, "CONTROL_DESIGN_QUEUE", control)
+    monkeypatch.setattr(production, "COUNTERFACTUAL_QUEUE", unit)
+
+    isolated = isolated_queue_paths("robust_m7")
+    initialize_isolated_queues(*isolated)
+
+    assert pd.read_csv(isolated[0]).loc[0, "status"] == "pending"
+    assert pd.read_csv(isolated[1]).loc[0, "status"] == "matched"
+    assert pd.read_csv(isolated[2]).loc[0, "status"] == "pending"
+    assert isolated[0].name == "outcome_family_work_queue_robust_m7.csv"

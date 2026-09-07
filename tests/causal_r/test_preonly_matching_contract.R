@@ -52,7 +52,8 @@ stopifnot(
   calendar$first_treated_month == as.IDate("2020-01-01"),
   identical(as.character(calendar$excluded_months),
             as.character(seq(as.IDate("2019-06-01"), as.IDate("2019-12-01"), by = "1 month"))),
-  !calendar$opening_month %in% calendar$model_months
+  calendar$opening_month %in% calendar$model_months,
+  calendar$opening_month %in% calendar$treated_months
 )
 
-cat("Pre-only matching leakage and event-time contracts passed.\n")
+cat("Pre-only matching leakage and opening-period event-time contracts passed.\n")

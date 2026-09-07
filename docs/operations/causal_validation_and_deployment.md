@@ -1,8 +1,8 @@
 # 因果代码验证、服务器覆盖与生产复核命令
 
-更新：2026-09-02
+更新：2026-09-04
 适用环境：本地 Windows 工作区与 Linux 生产服务器 `/home/nas/lsr/MIT_summer`
-主规格：Python/GPU，月度 anticipation=6，observation window=3，年度 window=1，跨城 donor 上限 5,000。
+主规格：Python/GPU；四类 outcome 统一以 `t=-1` 为参考；月度 anticipation=0；`t=0` 为真实开通冲击期；housing 和 VIIRS 均使用逐月 observation window=1；年度 window=1；跨城 donor 上限 5,000。housing/VIIRS 另以 `t=-7`（anticipation=6）做独立稳健性分析。
 
 本文是因果流程的单一命令清单。命令均写成单行，不使用反斜杠续行。R 只用于冻结参考和 parity；通过资格后，Phase 1–3 的正式生产只依赖 Python/CUDA。
 
@@ -93,16 +93,16 @@ python -c "import pandas as pd; q=pd.read_csv('data/active/causal/control_design
 ### 6.1 全量
 
 ```bash
-OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 PYTHONUNBUFFERED=1 python scripts/causal_r/run_parallel_production.py --phase 2 --estimator-backend python_gpu --qualification-receipt outputs/causal_gpu/formal_qualification.json --gpu-ids 0,1,2,3 --shard-count 4 --task-scheduling global_rounds --run-mode production --price-measure main --window 3 --anticipation-months 6 --transaction-count-threshold 1 --max-gsc-cross-city-donors 5000 2>&1 | tee outputs/phase2.log
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 PYTHONUNBUFFERED=1 python scripts/causal_r/run_parallel_production.py --phase 2 --estimator-backend python_gpu --qualification-receipt outputs/causal_gpu/formal_qualification.json --gpu-ids 0,1,2,3 --shard-count 4 --task-scheduling global_rounds --run-mode production --price-measure main --window 1 --anticipation-months 0 --transaction-count-threshold 1 --max-gsc-cross-city-donors 5000 2>&1 | tee outputs/phase2.log
 ```
 
 ### 6.2 已冻结的汇报样本
 
 ```bash
-OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 PYTHONUNBUFFERED=1 python scripts/causal_r/run_parallel_production.py --phase 2 --tasks-file outputs/causal_labels/presentation_sample_tasks.csv --estimator-backend python_gpu --qualification-receipt outputs/causal_gpu/formal_qualification.json --gpu-ids 0,1,2,3 --shard-count 4 --task-scheduling global_rounds --run-mode production --price-measure main --window 3 --anticipation-months 6 --transaction-count-threshold 1 --max-gsc-cross-city-donors 5000 2>&1 | tee outputs/phase2_sample.log
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 PYTHONUNBUFFERED=1 python scripts/causal_r/run_parallel_production.py --phase 2 --tasks-file outputs/causal_labels/presentation_sample_tasks.csv --estimator-backend python_gpu --qualification-receipt outputs/causal_gpu/formal_qualification.json --gpu-ids 0,1,2,3 --shard-count 4 --task-scheduling global_rounds --run-mode production --price-measure main --window 1 --anticipation-months 0 --transaction-count-threshold 1 --max-gsc-cross-city-donors 5000 2>&1 | tee outputs/phase2_sample.log
 ```
 
-四张 GPU 最多使用四个 shard。`global_rounds` 的顺序是：全部同城 Matching → 同城 GSC → 同城 MC → 跨城 Matching → 跨城 GSC → 跨城 MC。重复同一命令可从持久化 shard 续跑；不要为续跑添加 `--reset-queues`。
+四张 GPU 最多使用四个 shard。`global_rounds` 的顺序是：全部同城 Matching → 同城 GSC → 同城 MC → 跨城 Matching → 跨城 GSC → 跨城 MC。主规格必须显式写 `--anticipation-months 0 --window 1`。重复同一命令可从持久化 shard 续跑；不要为续跑添加 `--reset-queues`。
 
 实时监控：
 
@@ -111,6 +111,18 @@ pgrep -af 'run_parallel_production.py|run_causal_label_round_queue.py|run_causal
 nvidia-smi dmon -s pucm -d 2
 tail -n 80 outputs/phase2.log
 ```
+
+### 6.3 月度 `t=-7` 稳健性规格（与主规格完全隔离）
+
+先从目标任务清单中只保留 housing/VIIRS，然后使用独立 queue、task root 和 estimator root。不要对这组命令添加 `--reset-queues`，也不要复用主规格输出目录。
+
+```bash
+python -c "import pandas as pd; p='outputs/causal_labels/presentation_sample_tasks.csv'; q='outputs/causal_labels/presentation_sample_monthly_tasks.csv'; x=pd.read_csv(p); x=x[x['outcome_family'].isin(['housing','viirs'])]; x.to_csv(q,index=False); print(x['outcome_family'].value_counts().to_string(), '\nrows=',len(x))"
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 PYTHONUNBUFFERED=1 python scripts/causal_r/run_parallel_production.py --phase 2 --tasks-file outputs/causal_labels/presentation_sample_monthly_tasks.csv --estimator-backend python_gpu --qualification-receipt outputs/causal_gpu/formal_qualification.json --gpu-ids 0,1,2,3 --shard-count 4 --task-scheduling global_rounds --run-mode production --price-measure main --window 1 --anticipation-months 6 --transaction-count-threshold 1 --max-gsc-cross-city-donors 5000 --queue-namespace robust_m7 --task-output-root outputs/causal_labels/tasks_robust_m7 --estimator-output-root outputs/complete_estimators/python_production_robust_m7 2>&1 | tee outputs/phase2_robust_m7.log
+python scripts/causal_r/run_parallel_production.py --phase 3 --tasks-file outputs/causal_labels/presentation_sample_monthly_tasks.csv --shard-count 4 --run-mode production --queue-namespace robust_m7 --task-output-root outputs/causal_labels/tasks_robust_m7 --estimator-output-root outputs/complete_estimators/python_production_robust_m7
+```
+
+首次运行会复制已完成的 Phase 1 控制设计，但把独立 family/unit queue 重置为 pending。主规格的三个 master queues、task manifests 和 estimator paths 均不会被修改。
 
 ## 7. Phase 3：合并队列
 
@@ -136,19 +148,27 @@ python -c "import pandas as pd; r='outputs/causal_labels/summary_presentation_sa
 
 入口按任务文件纳入所有可接纳样本，但不跨 outcome 量纲混合：每个结果族内分别汇总 Matching、GSC、MC。事件研究诊断不再把图形机械截断为固定 3 年；它先保留每个 outcome 的全部可用 clean history，再按该 outcome 实际存在的方法计算最长共同重叠区间：
 
-- 月度：显示所有可用时期；window=3；`-6:-1` anticipation 用灰色背景标识但不参加 clean-pre 检验；t=0 若产物可用则正常绘制；
-- 年度：显示所有可用时期；window=1；t=0 作为开通边界诊断，不进入 clean-pre 检验；
-- Matching、GSC、MC 的拟合和正式标签规格不变；这里只改变诊断读取和图形支持；
+- 主规格：四类 outcome 都省略 `t=-1`，`t=0` 是正式冲击期；平行趋势检验仅使用 `t<-1`；
+- 月度稳健性：housing/VIIRS 单独省略 `t=-7`，把 `-6:-1` 作为可能的提前反应系数显示，但 clean-pre 检验仅使用 `t<-7`；
+- housing/VIIRS 均使用逐月 window=1，不做 post moving-window 聚合；年度 window=1；
+- Matching、GSC、MC 的 t=0 都保留；主规格下 housing 和 VIIRS 的正向 horizon 均按逐月 window=1；
 - 比较图使用各可用方法区间的交集，不用某一种方法的额外历史冒充跨方法证据；
-- `-6:-1` 月度 anticipation 不参加平行趋势检验，但不再从图形删除，因此曲线不会在处理边界前人为中断。月度 GSC/MC 的旧正式产物若未保存 t=0，不伪造该点，而是连接 `h=-1` 与 `h=1` 并保留开通月阴影。
+- `-6:-1` 月度 anticipation 不参加平行趋势检验，但不再从图形删除，因此曲线不会在处理边界前人为中断。重新生成的 GSC/MC 产物必须保存 t=0；旧产物若未保存 t=0，只能标记为旧口径并重跑，不能伪造该点。
 
 ```bash
-PYTHONUNBUFFERED=1 python scripts/causal_python/run_all_method_event_study.py --staging-root outputs/causal_labels/presentation_sample_estimator_paths_20260902 --tasks-file outputs/causal_labels/presentation_sample_tasks.csv --output-directory outputs/event_study_presentation_sample --latest-pre-periods 5 --observation-window 3 2>&1 | tee outputs/event_study_presentation_sample.log
+PYTHONUNBUFFERED=1 python scripts/causal_python/run_all_method_event_study.py --staging-root outputs/complete_estimators/python_production --tasks-file outputs/causal_labels/presentation_sample_tasks.csv --output-directory outputs/event_study_presentation_sample --latest-pre-periods 5 --observation-window 1 --reference-event-time -1 2>&1 | tee outputs/event_study_presentation_sample.log
 python -c "import pandas as pd; r='outputs/event_study_presentation_sample'; print(pd.read_csv(r+'/suite_status.csv').to_string(index=False)); print(pd.read_csv(r+'/sample_aggregation_coverage.csv').to_string(index=False)); assert pd.read_csv(r+'/suite_status.csv')['status'].eq('completed').all()"
-python -c "import pandas as pd; r='outputs/event_study_presentation_sample'; x=pd.read_parquet(r+'/gsc_mc_paths/effect_paths_with_pretrend.parquet'); assert set(x.loc[x.frequency.eq('monthly'),'observation_window'])=={3}; assert set(x.loc[x.frequency.eq('annual'),'observation_window'])<= {1}; print(pd.read_csv(r+'/event_time_support.csv').to_string(index=False)); print(pd.read_csv(r+'/event_time_coverage.csv').to_string(index=False))"
+python -c "import pandas as pd; r='outputs/event_study_presentation_sample'; x=pd.read_parquet(r+'/gsc_mc_paths/effect_paths_with_pretrend.parquet'); m=x.loc[x.frequency.eq('monthly')]; assert set(m.loc[m.outcome_family.isin(['housing','viirs']),'observation_window'])=={1}; assert set(x['reference_event_time'])=={-1}; assert x.loc[x.event_time.eq(0),'label_available'].any(); print(pd.read_csv(r+'/event_time_support.csv').to_string(index=False)); print(pd.read_csv(r+'/event_time_coverage.csv').to_string(index=False))"
 ```
 
 `event_time_support.csv` 给出每种方法自身的最早/最晚时期及该 outcome 的共同区间；`event_time_coverage.csv` 给出每个事件期实际贡献的 treated grids。最长尾部时期若只剩很少网格，只能作为探索性趋势，不能与支持充分的中心时期同等解释。
+
+月度 `t=-7` 稳健性图使用对应的独立 Phase 2 产物：
+
+```bash
+PYTHONUNBUFFERED=1 python scripts/causal_python/run_all_method_event_study.py --staging-root outputs/complete_estimators/python_production_robust_m7 --tasks-file outputs/causal_labels/presentation_sample_monthly_tasks.csv --families housing,viirs --matching-family-queue data/active/causal/outcome_family_work_queue_robust_m7.csv --matching-control-queue data/active/causal/control_design_queue_robust_m7.csv --matching-task-root outputs/causal_labels/tasks_robust_m7 --output-directory outputs/event_study_presentation_sample_robust_m7 --latest-pre-periods 5 --observation-window 1 --reference-event-time -7 2>&1 | tee outputs/event_study_presentation_sample_robust_m7.log
+python -c "import pandas as pd; r='outputs/event_study_presentation_sample_robust_m7'; x=pd.read_parquet(r+'/gsc_mc_paths/effect_paths_with_pretrend.parquet'); assert set(x['reference_event_time'])=={-7}; assert x.loc[x.event_time.eq(0),'label_available'].any(); print(pd.read_csv(r+'/suite_status.csv').to_string(index=False))"
+```
 
 如果正式 estimator paths 被复制到单独目录，应把 `--staging-root` 指向那个目录；不能指向只含汇总 labels、没有 estimator manifest 的 release。
 
@@ -186,3 +206,5 @@ python -c "import pandas as pd; p='outputs/figures/causal_balance/balance_smd.cs
 | window、anticipation、price measure、交易阈值 | 对应资格/规格审计 | 视 Matching 规格而定 | 必须 | 必须 |
 
 不要因事件研究图不理想而事后修改窗口、抽样或门禁。任何敏感性规格必须使用独立输出目录，并与主规格并列报告。
+
+本次 `t=0` 修复改变了资格绑定源码，必须重新生成三方法 qualification receipt。Phase 1 的实际匹配特征和 6 个月设计缓冲没有改变；但严格代码指纹会把旧 durable control records 标记为 stale，因此服务器覆盖新代码后应使用 `--repair-stale-controls` 复核/重建 Phase 1 记录，再启动新的 Phase 2。

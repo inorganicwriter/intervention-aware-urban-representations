@@ -268,7 +268,7 @@ def main() -> int:
     parser.add_argument(
         "--donor-scope", choices=("same_city", "all_city_standardized"), default="same_city"
     )
-    parser.add_argument("--anticipation-months", type=int, default=6)
+    parser.add_argument("--anticipation-months", type=int, default=0)
     parser.add_argument("--price-measure", choices=("median", "hedonic"), default="median")
     parser.add_argument("--observation-window", type=int, default=1)
     parser.add_argument(

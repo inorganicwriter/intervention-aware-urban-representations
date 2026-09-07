@@ -4,7 +4,7 @@
 
 日期：2026-07-23
 
-实现修订：2026-08-27
+实现修订：2026-09-04
 
 ## 1. 目标
 
@@ -18,16 +18,19 @@
 ## 2. 时间合同
 
 - 精确开通日保留为来源信息，但月度分析以日历月为单位。
-- 开通当月是部分暴露月，主分析排除该月，不将其作为处理前或处理后观测。
-- 开通后的下一个完整日历月为 `event_time = 1`。
-- 主 anticipation window 为开通前 6 个月；0 和 12 个月为预先规定的敏感性分析。
-- 月度主处理前窗口为 36 个干净月份；月度标签期为 1-24 月，重点汇总 1、3、6、12、18、24 月。
-- 年度结果排除开通年，下一完整年份为 `event_time = 1`，标签期为 1-3 年。
-- 年度 anticipation：月度 6 个月窗口无法在年粒度面板中表达。年度 GSC 主规格
-  使用 `annual_anticipation_years = 0`，保留开通前一年，对应月度 0 个月敏感性
-  规格）；`annual_anticipation_years = 1` 排除开通前一年，对应月度 12 个月敏感性
-  规格。manifest 记录使用的值。Xu (2017) 不讨论 anticipation；此参数是项目层面
-  对 DDR-004 anticipation 合同在年粒度上的近似实现，不修改 gsynth 算法本身。
+- 开通当月是正式冲击期 `event_time = 0`，必须读取真实当月观测、估计、保存并绘制；
+  不得删除、插值或用 `event_time = 1` 代替。
+- 四类结果的主事件研究统一省略 `event_time = -1`；月度主规格因此使用
+  `anticipation_months = 0`。
+- housing/VIIRS 另做独立月度稳健性：省略 `event_time = -7`，把 `-6:-1`
+  显示为可能的提前反应，clean-pre 检验只使用 `event_time < -7`。
+- 月度主处理前窗口为参考期之前的 36 个模型期；正式路径包含 `t=0` 与 1-24 月，
+  正向标签重点汇总 1、3、6、12、18、24 月。主规格使用原始逐月
+  `observation_window = 1`。
+- 年度路径包含开通年 `event_time = 0` 与 1-3 年，并统一省略 `event_time = -1`；
+  `annual_anticipation_years = 0`。
+- anticipation 或 observation window 改变时必须重新拟合并写入独立 queue、task root、
+  estimator root 和 manifest，不能把不同参考期或窗口的结果混合。
 
 ## 3. 控制组与信息边界
 

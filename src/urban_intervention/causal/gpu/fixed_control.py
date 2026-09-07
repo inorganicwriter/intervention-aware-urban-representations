@@ -105,6 +105,10 @@ def monthly_fixed_control_labels(
 ) -> pd.DataFrame:
     if family not in {"housing", "viirs"}:
         raise ValueError("monthly fixed-control family must be housing or viirs")
+    if family == "viirs":
+        # VIIRS is the monthly shock outcome.  Do not smooth the opening
+        # month or subsequent monthly effects with a moving window.
+        window = 1
     if not 1 <= window <= 6:
         raise ValueError("window must be in 1..6")
     if transaction_count_threshold < 1:

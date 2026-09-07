@@ -111,6 +111,7 @@ LABEL_COLUMNS = [
     "donor_scope",
     "estimator_backend",
     "implementation_version",
+    "specification_fingerprint",
 ]
 CONTROL_COLUMNS = [
     "schema",
@@ -437,6 +438,33 @@ def _month_key(value: object) -> str:
         raise ValueError(f"Invalid opening month: {value!r}") from exc
 
 
+def _specification_contract_key(family: str, fingerprint: str) -> tuple[str, ...]:
+    """Normalize only the explicitly approved housing price variation.
+
+    A task fingerprint remains exact at the task boundary.  At release level,
+    the main housing specification is intentionally allowed to use either
+    the median or hedonic price series; all other specification components
+    must remain identical within a family.
+    """
+    raw_fingerprint = str(fingerprint)
+    parts = raw_fingerprint.split("__")
+    if not raw_fingerprint or any(part == "" for part in parts):
+        raise ValueError(f"Malformed specification_fingerprint: {fingerprint!r}")
+    normalized: list[str] = []
+    for part in parts:
+        if family == "housing" and part.startswith("price_"):
+            price_measure = part.removeprefix("price_")
+            if price_measure not in {"median", "hedonic"}:
+                raise ValueError(
+                    "Unsupported housing price_measure in specification_fingerprint: "
+                    f"{fingerprint!r}"
+                )
+            normalized.append("price_<approved_housing_measure>")
+        else:
+            normalized.append(part)
+    return tuple(normalized)
+
+
 def _normalize_task_labels(
     path: Path, expected_identity: dict[str, object], expected_family: str, specification_id: str
 ) -> pd.DataFrame:
@@ -598,6 +626,16 @@ def collect_task_products(
                 raise ValueError(
                     f"Production Python task lacks formal qualification proof: {manifest_path}"
                 )
+        manifest_fingerprint = str(manifest.get("specification_fingerprint") or "")
+        label_fingerprints = set(
+            task_labels["specification_fingerprint"].dropna().astype(str)
+        )
+        if strict_production and not manifest_fingerprint:
+            raise ValueError(f"Production task manifest lacks specification_fingerprint: {manifest_path}")
+        if manifest_fingerprint and label_fingerprints != {manifest_fingerprint}:
+            raise ValueError(
+                f"Task labels specification_fingerprint disagrees with manifest: {manifest_path}"
+            )
         metadata.append(
             {
                 "treatment_order": order,
@@ -623,6 +661,27 @@ def collect_task_products(
         labels = pd.DataFrame(columns=KEY_COLUMNS + LABEL_COLUMNS)
     if labels.duplicated(KEY_COLUMNS).any():
         raise ValueError("Labels from different tasks violate the global primary key")
+    specification_contracts: dict[str, set[tuple[str, ...]]] = {}
+    if not labels.empty:
+        for family, part in labels.groupby("outcome_family", sort=False):
+            fingerprints = set(part["specification_fingerprint"].dropna().astype(str))
+            if strict_production and not fingerprints:
+                raise ValueError(
+                    f"Production family {family} has no specification_fingerprint evidence"
+                )
+            specification_contracts[str(family)] = {
+                _specification_contract_key(str(family), fingerprint)
+                for fingerprint in fingerprints
+            }
+            if len(specification_contracts[str(family)]) > 1:
+                raise ValueError(
+                    "Production release mixes incompatible specification contracts for "
+                    f"{family}: {sorted(specification_contracts[str(family)])}"
+                )
+    labels.attrs["specification_contracts"] = {
+        family: [list(contract) for contract in sorted(contracts)]
+        for family, contracts in specification_contracts.items()
+    }
     return labels, pd.DataFrame(metadata), used_paths
 
 
@@ -954,6 +1013,10 @@ def build_response_frame(
         ),
         "task_status_counts": family_queue["status"].value_counts(dropna=False).to_dict(),
         "quality_grade_counts": artifact["quality_grade"].value_counts(dropna=False).to_dict(),
+        "specification_fingerprints": sorted(
+            set(artifact["specification_fingerprint"].dropna().astype(str))
+        ),
+        "specification_contracts": labels.attrs.get("specification_contracts", {}),
     }
     return artifact, diagnostics, task_paths + control_record_paths
 
@@ -1044,6 +1107,9 @@ def publish_response_artifact(
                 ),
             },
             "specification_id": specification_id,
+            "specification_fingerprints": diagnostics["specification_fingerprints"],
+            "specification_contracts": diagnostics["specification_contracts"],
+            "approved_mixed_fields": {"housing": ["price_measure"]},
             "primary_key": KEY_COLUMNS,
             "diagnostics": diagnostics,
             "source_files": source_hashes,

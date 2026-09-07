@@ -13,24 +13,16 @@ from pathlib import Path
 
 import pandas as pd
 
-from urban_intervention.data.paths import (
-    CONTROL_DESIGN_QUEUE as CONTROL_QUEUE,
-)
-from urban_intervention.data.paths import (
-    COUNTERFACTUAL_QUEUE as UNIT_QUEUE,
-)
+from urban_intervention.data.paths import CONTROL_DESIGN_QUEUE as _DEFAULT_CONTROL_QUEUE
+from urban_intervention.data.paths import COUNTERFACTUAL_QUEUE as _DEFAULT_UNIT_QUEUE
 from urban_intervention.data.paths import (
     ELIGIBLE_DONORS as DONOR_UNIVERSE,
 )
 from urban_intervention.data.paths import (
     FORMAL_TARGET_SUPPORT as SUPPORT,
 )
-from urban_intervention.data.paths import (
-    OUTCOME_FAMILY_QUEUE as DEFAULT_FAMILY_QUEUE,
-)
-from urban_intervention.data.paths import (
-    OUTPUT_CAUSAL_TASKS_DIR as TASK_ROOT,
-)
+from urban_intervention.data.paths import OUTCOME_FAMILY_QUEUE as _DEFAULT_FAMILY_QUEUE
+from urban_intervention.data.paths import OUTPUT_CAUSAL_TASKS_DIR as _DEFAULT_TASK_ROOT
 from urban_intervention.data.paths import (
     OUTPUT_COMPLETE_STAGING_DIR,
     OUTPUT_CONTROL_TASKS_DIR,
@@ -50,6 +42,14 @@ R_SCRIPT = os.environ.get("MIT_RSCRIPT", "Rscript")
 R_LIB = Path(os.environ.get("MIT_R_LIB", str(R_LIB_DIR)))
 VIIRS_RAW = os.environ.get("MIT_VIIRS_RAW")
 ROOT = PROJECT_ROOT
+CONTROL_QUEUE = Path(
+    os.environ.get("MIT_CAUSAL_CONTROL_QUEUE", str(_DEFAULT_CONTROL_QUEUE))
+)
+UNIT_QUEUE = Path(os.environ.get("MIT_CAUSAL_UNIT_QUEUE", str(_DEFAULT_UNIT_QUEUE)))
+DEFAULT_FAMILY_QUEUE = Path(
+    os.environ.get("MIT_CAUSAL_FAMILY_QUEUE", str(_DEFAULT_FAMILY_QUEUE))
+)
+TASK_ROOT = Path(os.environ.get("MIT_CAUSAL_TASK_ROOT", str(_DEFAULT_TASK_ROOT)))
 # The parallel Python production launcher sets this explicitly.  Keeping the
 # fallback at the legacy staging root preserves the frozen R-reference queue
 # contract, while production Python outputs are isolated from qualification
@@ -86,7 +86,7 @@ DEFAULT_ESTIMATOR_BACKEND = "python_gpu"
 class QueueSettings:
     """Process-local settings formerly stored as script globals."""
 
-    anticipation_months: int = 6
+    anticipation_months: int = 0
     price_measure: str = "median"
     label_window: int = 1
     transaction_count_threshold: int = 1

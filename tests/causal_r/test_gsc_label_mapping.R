@@ -1,6 +1,14 @@
 suppressPackageStartupMessages(library(data.table))
 source(file.path("scripts", "causal_r", "complete_estimators_lib.R"))
 
+spec <- complete_estimator_spec()
+stopifnot(
+  identical(spec$timing$main_anticipation_months, 0L),
+  identical(spec$timing$first_treated_month_offset, 0L),
+  identical(spec$timing$annual_first_treated_year_offset, 0L),
+  identical(spec$annual$leads, 0:3)
+)
+
 treated <- data.table(
   gsc_unit_id = c(2L, 4L), treatment_order = c(10L, 20L),
   city_key = c("a", "b"), grid_id = c("g1", "g2")
@@ -98,7 +106,57 @@ calendar_uncertainty <- attach_single_target_gsc_uncertainty(
 )
 stopifnot(
   is.na(calendar_uncertainty$standard_error[1L]),
-  all(calendar_uncertainty$standard_error[2:5] == 0.50)
+  all(is.na(calendar_uncertainty$standard_error[2:3])),
+  all(calendar_uncertainty$standard_error[4:5] == 0.50)
+)
+
+# Current formal paths retain the real opening period. Estimator t=0 must map
+# to project t=0 rather than being dropped or shifted onto the first lead.
+t0_paths <- normalize_gsc_labels(
+  fit, panel, treated[1L], pre_periods = 1:3, post_periods = 4:5,
+  outcome_family = "viirs", outcome = "viirs_avg_asinh",
+  pre_event_time = c(-3L, -2L, -1L), post_event_time = c(0L, 1L)
+)
+t0_fit <- single_fit
+t0_fit$est.att <- single_fit$est.att
+rownames(t0_fit$est.att) <- c("-3", "-2", "-1", "0", "1")
+t0_uncertainty <- attach_single_target_gsc_uncertainty(
+  t0_paths, t0_fit, nboots = 200L, effect_scale = 2
+)
+stopifnot(
+  identical(t0_uncertainty$event_time, c(-3L, -2L, -1L, 0L, 1L)),
+  is.finite(t0_uncertainty[event_time == 0L, standard_error])
+)
+
+# Under the t=-7 robustness contract D starts at project event time -6, while
+# gsynth still calls that model period zero. Inference must shift with D rather
+# than being attached six months late.
+robust_paths <- copy(t0_paths)
+robust_paths[, event_time := c(-9L, -8L, -7L, -6L, -5L)]
+robust_fit <- t0_fit
+rownames(robust_fit$est.att) <- c("-3", "-2", "-1", "0", "1")
+robust_uncertainty <- attach_single_target_gsc_uncertainty(
+  robust_paths, robust_fit, nboots = 200L, effect_scale = 2,
+  first_treated_event_time = -6L
+)
+stopifnot(
+  identical(robust_uncertainty$event_time, c(-9L, -8L, -7L, -6L, -5L)),
+  all(is.finite(robust_uncertainty$standard_error))
+)
+
+# fect's MC est.att uses one for its first treated model period, while the
+# project keeps the opening period at event_time = 0. This must shift MC
+# uncertainty back by one period without changing the GSC mapping above.
+mc_fit <- t0_fit
+rownames(mc_fit$est.att) <- c("-3", "-2", "-1", "1", "2")
+mc_uncertainty <- attach_single_target_gsc_uncertainty(
+  t0_paths, mc_fit, nboots = 200L, effect_scale = 2,
+  estimator_first_treated_event_time = 1L
+)
+stopifnot(
+  is.finite(mc_uncertainty[event_time == 0L, standard_error]),
+  is.finite(mc_uncertainty[event_time == 1L, standard_error]),
+  is.na(mc_uncertainty[event_time == 2L, standard_error])
 )
 
 cat("GSC counterfactual columns map to treatment order and event time correctly.\n")

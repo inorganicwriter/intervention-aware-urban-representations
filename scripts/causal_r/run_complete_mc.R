@@ -11,7 +11,7 @@ specification_fingerprint <- Sys.getenv("MIT_SPECIFICATION_FINGERPRINT", unset =
 if (length(args) < 3L || length(args) > 11L) {
   stop(paste(
     "Usage: run_complete_mc.R CITY COHORT OUTCOME_FAMILY",
-    "[SIGNATURE=auto] [FREQUENCY=annual] [ANTICIPATION_MONTHS=6]",
+    "[SIGNATURE=auto] [FREQUENCY=annual] [ANTICIPATION_MONTHS=0]",
        "[TREATMENT_ORDER] [DONOR_SCOPE=same_city] [RUN_MODE=production]",
        "[PRICE_MEASURE=median] [OBSERVATION_WINDOW=1]"
   ))
@@ -40,7 +40,9 @@ if (frequency == "monthly") {
 }
 if (!nzchar(specification_fingerprint)) {
   specification_fingerprint <- paste0(
-    "main_a6_r1km__a6__w", observation_window, "__price_", price_measure
+    "main_a6_r1km__a", ifelse(is.null(anticipation_months),
+      complete_estimator_spec()$timing$main_anticipation_months, anticipation_months),
+    "__w", observation_window, "__price_", price_measure
   )
 }
 
@@ -175,7 +177,7 @@ build_mc_design <- function() {
     # cells in the balanced panel and are handled by the estimator's missing
     # observation mask.
     pre <- seq.int(min(available_pre), pre_end)
-    post <- seq.int(as.integer(cohort) + 1L, as.integer(cohort) + 3L)
+    post <- seq.int(as.integer(cohort), as.integer(cohort) + 3L)
     if (!any(outcomes$year %in% post)) stop("No post-treatment outcome")
     times <- c(pre, post)
     setnames(outcomes, "year", "period")
@@ -202,23 +204,23 @@ build_mc_design <- function() {
     )
     if (outcome_family == "viirs") {
       pre <- calendar$pre_months[calendar$pre_months >= as.IDate("2012-01-01")]
-      outcomes <- scope_monthly_outcomes(donors, c(pre, calendar$post_months))
+      outcomes <- scope_monthly_outcomes(donors, c(pre, calendar$treated_months))
     } else {
-      outcomes <- scope_monthly_outcomes(donors, calendar$model_months)
+      outcomes <- scope_monthly_outcomes(donors, c(calendar$pre_months, calendar$treated_months))
       # Keep every requested calendar month in the MC design.  Sparse housing
       # observations are represented as NA cells rather than removed from the
       # time axis, so a missing month cannot silently shorten the pre-period.
       pre <- calendar$pre_months
-      outcomes <- outcomes[month %in% c(pre, calendar$post_months)]
+      outcomes <- outcomes[month %in% c(pre, calendar$treated_months)]
     }
     if (length(pre) < spec$mc$min.T0) {
       stop("Insufficient pre-treatment monthly periods for MC")
     }
-    post <- calendar$post_months
+    post <- calendar$treated_months
     times <- c(pre, post)
     setnames(outcomes, "month", "period")
     opening_period_excluded <- calendar$opening_month
-    first_treated_period <- calendar$first_treated_month
+    first_treated_period <- min(post)
   }
   list(
     treated = treated, donors = donors, outcomes = outcomes,
@@ -483,9 +485,9 @@ run_one_outcome <- function(outcome) {
   target_panel <- panel[mc_unit_id == treated_units$mc_unit_id[[1L]]][order(time_id)]
   model_periods <- c(design$pre, design$post)
   pre_count <- length(design$pre)
-  post_event_time <- if (frequency == "annual") {
-    as.integer(design$post) - as.integer(cohort)
-  } else seq_along(design$post)
+  post_event_time <- event_time_from_period(
+    design$post, design$opening_period_excluded, frequency
+  )
   counterfactual <- as.numeric(fit$Y.ct[, target_column])
   if (length(counterfactual) != length(model_periods) ||
       !all(is.finite(counterfactual))) {
@@ -522,14 +524,19 @@ run_one_outcome <- function(outcome) {
     )]
   } else {
     paths <- attach_single_target_gsc_uncertainty(
-      paths, fit, inference_repetitions, effect_scale = target_scale
+      paths, fit, inference_repetitions, effect_scale = target_scale,
+      first_treated_event_time = min(post_event_time),
+      estimator_first_treated_event_time = 1L
     )
     paths[, uncertainty_source := paste0("mc_", spec$mc$inference)]
   }
   if (frequency == "monthly") {
     paths <- apply_post_observation_window(paths, observation_window)
   }
-  prefit <- paths[event_time < 0L, .(
+  reference_event_time <- if (frequency == "monthly") {
+    -(as.integer(design$anticipation_months) + 1L)
+  } else -1L
+  prefit <- paths[event_time < reference_event_time, .(
     pre_rmspe = sqrt(mean(causal_response_label^2, na.rm = TRUE)),
     pre_observed_periods = sum(is.finite(observed))
   ), by = .(treatment_order, outcome_family, outcome)]
@@ -575,6 +582,7 @@ run_one_outcome <- function(outcome) {
     city_key = city_key, cohort = cohort, frequency = frequency,
     treatment_order = treatment_order,
     specification_fingerprint = specification_fingerprint,
+    reference_event_time = reference_event_time,
     outcome_family = outcome_family, outcome = outcome,
     signature = design$signature, estimator = "mc", backend = spec$mc$backend,
     fitted_method = fit$method,

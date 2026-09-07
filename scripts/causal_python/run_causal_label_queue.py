@@ -95,16 +95,16 @@ R_LIB = Path(os.environ.get("MIT_R_LIB", str(R_LIB_DIR)))
 VIIRS_RAW = os.environ.get("MIT_VIIRS_RAW")
 ROOT = PROJECT_ROOT
 
-# Main anticipation window in months (complete_estimator_spec()$timing:
-# main = 6; sensitivity = 0 / 12).  Set via --anticipation-months.
-_ANTICIPATION_MONTHS = 6
+# Main anticipation window in months.  Zero gives the common t=-1 omitted
+# reference; six is the separately fitted monthly t=-7 robustness contract.
+_ANTICIPATION_MONTHS = 0
 _PRICE_MEASURE = "median"
 _LABEL_WINDOW = 1
 _TRANSACTION_COUNT_THRESHOLD = 1
 _RUN_MODE = "production"
 DEFAULT_ESTIMATOR_BACKEND = "python_gpu"
 _ESTIMATOR_BACKEND = DEFAULT_ESTIMATOR_BACKEND
-_MAX_GSC_CROSS_CITY_DONORS = 50_000
+_MAX_GSC_CROSS_CITY_DONORS = 5_000
 _GSC_DONOR_SAMPLING_SEED = 20260823
 _QUALIFICATION_RECEIPT: Path | None = None
 _QUALIFICATION_PROOF: dict[str, object] = {}
@@ -148,7 +148,7 @@ def specification_fingerprint(row: pd.Series) -> str:
         else "r-reference"
     )
     return (
-        f"main_a6_r1km__a{_ANTICIPATION_MONTHS}__w{_LABEL_WINDOW}"
+        f"main_a6_r1km__a{_ANTICIPATION_MONTHS}__w{_LABEL_WINDOW if str(row.outcome_family) == 'housing' else 1}"
         f"__price_{effective_price_measure(row)}__tx{_TRANSACTION_COUNT_THRESHOLD}"
         f"__backend_{backend}"
         f"__xgsc{_MAX_GSC_CROSS_CITY_DONORS}s{_GSC_DONOR_SAMPLING_SEED}"
@@ -535,6 +535,55 @@ def validate_task_manifest(row: pd.Series, payload: dict[str, object], labels_pa
             )
 
 
+def _validate_control_provenance(
+    row: pd.Series,
+    payload: dict[str, object],
+    control_queue: pd.DataFrame,
+) -> None:
+    """Validate the control record actually used by a completed label."""
+    details = payload.get("details")
+    if not isinstance(details, dict):
+        raise ValueError("Completed matched task lacks control provenance details")
+    scope = str(details.get("donor_scope") or "")
+    if scope not in {"same_city", "all_city_standardized"}:
+        raise ValueError("Completed matched task has an unknown donor scope")
+    control_key = str(details.get("control_unit_key") or "")
+    if not control_key:
+        raise ValueError("Completed matched task lacks control_unit_key provenance")
+    record_value = str(details.get("control_record") or "")
+    record_hash = str(details.get("control_record_sha256") or "")
+    if not control_key or not record_value or len(record_hash) != 64:
+        raise ValueError("Completed matched task lacks hashed control-record provenance")
+    record_path = Path(record_value)
+    if not record_path.is_absolute():
+        record_path = ROOT / record_path
+    if not record_path.is_file() or file_sha256(record_path) != record_hash:
+        raise ValueError("Completed matched task control record is missing or has changed")
+    record = pd.read_csv(record_path)
+    if len(record) != 1:
+        raise ValueError("Completed matched task control record is not unique")
+    record_row = record.iloc[0]
+    if int(record_row.get("treatment_order", -1)) != int(row.treatment_order):
+        raise ValueError("Completed matched task control record has the wrong treatment order")
+    if str(record_row.get("status", "")) != "matched":
+        raise ValueError("Completed matched task control record is not matched")
+    if str(record_row.get("control_unit_key", "")) != control_key:
+        raise ValueError("Completed matched task control_unit_key disagrees with record")
+    if str(record_row.get("donor_scope", scope)) not in {scope, "", "nan"}:
+        raise ValueError("Completed matched task donor scope disagrees with record")
+    queue_row = control_for_order(int(row.treatment_order), control_queue)
+    if scope == "same_city":
+        if str(queue_row.get("status", "")) != "matched":
+            raise ValueError(
+                f"Recovery refused: same-city control design for treatment "
+                f"{int(row.treatment_order)} is {queue_row.get('status')}, not matched"
+            )
+        if str(queue_row.get("control_unit_key", "")) != control_key:
+            raise ValueError("Completed matched task control differs from same-city queue")
+    elif str(queue_row.get("status", "")) not in {"gsc_pending", "matched"}:
+        raise ValueError("Completed cross-city task has an invalid source queue status")
+
+
 def recover_completed_task(
     queue: pd.DataFrame, index: int, control_queue: pd.DataFrame | None = None
 ) -> bool:
@@ -563,24 +612,29 @@ def recover_completed_task(
             # changing the monthly window or housing price measure.
             if payload.get("specification_fingerprint") != specification_fingerprint(row):
                 return False
-            validate_task_manifest(row, payload, labels)
-            if payload.get("status") == "matched_labelled" and control_queue is not None:
-                control = control_for_order(int(row.treatment_order), control_queue)
-                if str(control.status) != "matched":
-                    raise ValueError(
-                        f"Recovery refused: control design for treatment "
-                        f"{int(row.treatment_order)} is {control.status}, not matched"
+            try:
+                validate_task_manifest(row, payload, labels)
+            except ValueError as exc:
+                expected_receipt = str(
+                    _QUALIFICATION_PROOF.get(
+                        "formal_qualification_receipt_sha256", ""
                     )
-                manifest_control = str(payload.get("details", {}).get("control_unit_key", ""))
+                )
                 if (
-                    manifest_control
-                    and str(control.get("control_unit_key", "")) != manifest_control
+                    str(exc)
+                    != "Completed Python task lacks the current formal qualification receipt"
+                    or not expected_receipt
                 ):
-                    raise ValueError(
-                        f"Recovery refused: control_unit_key in manifest "
-                        f"({manifest_control}) disagrees with control queue "
-                        f"({control.get('control_unit_key', '')})"
-                    )
+                    raise
+                manifest.unlink(missing_ok=True)
+                labels.unlink(missing_ok=True)
+                print(
+                    "Invalidated completed task bound to a stale qualification receipt: "
+                    f"{int(row.treatment_order)}/{row.outcome_family}"
+                )
+                return False
+            if payload.get("status") == "matched_labelled" and control_queue is not None:
+                _validate_control_provenance(row, payload, control_queue)
             stored_labels = pd.read_parquet(labels)
             validate_task_labels(row, stored_labels)
             if int(payload.get("label_rows", -1)) != len(stored_labels):
@@ -610,7 +664,24 @@ def invalidate_stale_terminal_tasks(queue: pd.DataFrame, orders: set[int]) -> in
                 payload = json.loads(manifest.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 payload = None
-        if isinstance(payload, dict) and payload.get("specification_fingerprint") == specification_fingerprint(row):
+        expected_receipt = ""
+        if _ESTIMATOR_BACKEND == "python_gpu" and _RUN_MODE == "production":
+            expected_receipt = str(
+                _QUALIFICATION_PROOF.get(
+                    "formal_qualification_receipt_sha256", ""
+                )
+            )
+        receipt_is_stale = bool(expected_receipt) and (
+            not isinstance(payload, dict)
+            or not isinstance(payload.get("details"), dict)
+            or payload["details"].get("formal_qualification_receipt_sha256")
+            != expected_receipt
+        )
+        if (
+            isinstance(payload, dict)
+            and payload.get("specification_fingerprint") == specification_fingerprint(row)
+            and not receipt_is_stale
+        ):
             continue
         queue.loc[index, ["status", "selected_method", "failure_reason"]] = [
             "pending",
@@ -778,13 +849,16 @@ def run_cross_city_matching(
         "control_unit_key": str(record.get("control_unit_key")),
         "donor_scope": "all_city_standardized",
         "control_record": str(record_path.relative_to(ROOT)),
+        "control_record_sha256": file_sha256(record_path),
     }
     _CROSS_CITY_DESIGN_CACHE[order] = (record.copy(), details.copy())
     return True, record, details
 
 
 def run_frozen_control(
-    row: pd.Series, control: pd.Series
+    row: pd.Series,
+    control: pd.Series,
+    control_provenance: dict[str, object] | None = None,
 ) -> tuple[bool, list[pd.DataFrame], dict[str, object]]:
     family = str(row.outcome_family)
     if str(control.status) != "matched":
@@ -810,6 +884,26 @@ def run_frozen_control(
                 )
     output = fixed_control_output(row)
     run_id = new_run_id()
+    default_control_record = (
+        OUTPUT_CONTROL_TASKS_DIR / f"{int(row.treatment_order):05d}" / "control_record.csv"
+    )
+    provenance = control_provenance or {}
+    control_record_value = provenance.get("control_record") or str(
+        default_control_record.relative_to(ROOT)
+        if default_control_record.is_relative_to(ROOT)
+        else default_control_record
+    )
+    control_record = Path(str(control_record_value))
+    if not control_record.is_absolute():
+        control_record = ROOT / control_record
+    control_record_hash = provenance.get("control_record_sha256")
+    if control_record_hash is None and control_record.exists():
+        control_record_hash = file_sha256(control_record)
+    control_record_reference = (
+        str(control_record.relative_to(ROOT))
+        if control_record.is_relative_to(ROOT)
+        else str(control_record)
+    )
     if _ESTIMATOR_BACKEND == "python_gpu":
         try:
             raw = fixed_control_labels(
@@ -818,7 +912,7 @@ def run_frozen_control(
                 str(control.control_grid_id),
                 family,
                 root=ROOT,
-                window=_LABEL_WINDOW,
+                window=_LABEL_WINDOW if family == "housing" else 1,
                 price_measure=effective_price_measure(row),
                 transaction_count_threshold=_TRANSACTION_COUNT_THRESHOLD,
             )
@@ -839,9 +933,15 @@ def run_frozen_control(
                 "outcome_family": family,
                 "control_city_key": str(control.control_city_key),
                 "control_grid_id": str(control.control_grid_id),
+                "donor_scope": str(
+                    (control_provenance or {}).get("donor_scope")
+                    or control.get("donor_scope", "")
+                ),
+                "control_record": control_record_reference,
+                "control_record_sha256": control_record_hash,
                 "run_mode": _RUN_MODE,
                 "production_eligible": _RUN_MODE == "production",
-                "window": _LABEL_WINDOW,
+                "window": _LABEL_WINDOW if family == "housing" else 1,
                 "price_measure": effective_price_measure(row),
                 "transaction_count_threshold": _TRANSACTION_COUNT_THRESHOLD,
                 "labels_sha256": file_sha256(labels_path),
@@ -870,7 +970,7 @@ def run_frozen_control(
                 str(control.control_grid_id),
                 family,
                 str(output),
-                str(_LABEL_WINDOW),
+                str(_LABEL_WINDOW if family == "housing" else 1),
                 effective_price_measure(row),
             ],
             {
@@ -940,9 +1040,6 @@ def run_frozen_control(
                 "log": completed_log,
             },
         )
-    control_record = (
-        OUTPUT_CONTROL_TASKS_DIR / f"{int(row.treatment_order):05d}" / "control_record.csv"
-    )
     return (
         True,
         [raw],
@@ -954,12 +1051,8 @@ def run_frozen_control(
             "fixed_control_labels_sha256": file_sha256(labels_path),
             "fixed_control_manifest_sha256": file_sha256(estimator_manifest),
             "run_id": run_id,
-            "control_record": str(control_record.relative_to(ROOT))
-            if control_record.exists()
-            else None,
-            "control_record_sha256": file_sha256(control_record)
-            if control_record.exists()
-            else None,
+            "control_record": control_record_reference if control_record.exists() else None,
+            "control_record_sha256": control_record_hash,
             "log": completed_log,
         },
     )
@@ -1004,7 +1097,7 @@ def python_estimator_command(
         "--price-measure",
         effective_price_measure(row),
         "--observation-window",
-        str(_LABEL_WINDOW if str(row.outcome_family) in {"housing", "viirs"} else 1),
+        str(_LABEL_WINDOW if str(row.outcome_family) == "housing" else 1),
         "--transaction-count-threshold",
         str(_TRANSACTION_COUNT_THRESHOLD),
         "--max-gsc-cross-city-donors",
@@ -1090,7 +1183,7 @@ def validate_python_estimator_manifest(
         and len(values.get("input_panel_signature", "")) == 64
         and values.get("price_measure") == effective_price_measure(row)
         and values.get("observation_window")
-        == str(_LABEL_WINDOW if str(row.outcome_family) in {"housing", "viirs"} else 1)
+        == str(_LABEL_WINDOW if str(row.outcome_family) == "housing" else 1)
         and values.get("transaction_count_threshold")
         == str(_TRANSACTION_COUNT_THRESHOLD)
         and expected_inference
@@ -1270,7 +1363,7 @@ def run_gsc_scope(
             donor_scope,
             _RUN_MODE,
             effective_price_measure(row),
-            str(_LABEL_WINDOW),
+            str(_LABEL_WINDOW if family == "housing" else 1),
         ],
         {
             "MIT_CAUSAL_RUN_ID": run_id,
@@ -1325,7 +1418,7 @@ def run_gsc_scope(
             or manifest_values.get("specification_fingerprint") != specification_fingerprint(row)
             or manifest_values.get("price_measure") != effective_price_measure(row)
             or manifest_values.get("observation_window")
-            != str(_LABEL_WINDOW if frequency == "monthly" else 1)
+            != str(_LABEL_WINDOW if family == "housing" else 1)
             or manifest_values.get("inference") != "parametric"
             or manifest_values.get("nboots") != expected_nboots
         ):
@@ -1649,7 +1742,7 @@ def run_mc_scope(
             donor_scope,
             _RUN_MODE,
             effective_price_measure(row),
-            str(_LABEL_WINDOW),
+            str(_LABEL_WINDOW if family == "housing" else 1),
         ],
         {
             "MIT_CAUSAL_RUN_ID": run_id,
@@ -1752,7 +1845,7 @@ def run_mc_scope(
             or manifest_values.get("specification_fingerprint") != specification_fingerprint(row)
             or manifest_values.get("price_measure") != effective_price_measure(row)
             or manifest_values.get("observation_window")
-            != str(_LABEL_WINDOW if frequency == "monthly" else 1)
+            != str(_LABEL_WINDOW if family == "housing" else 1)
             or manifest_values.get("inference") != "jackknife"
             or manifest_values.get("nboots") != expected_nboots
             or not math.isfinite(selected_lambda)
@@ -1889,7 +1982,7 @@ def write_task(
             "labels_sha256": file_sha256(labels_path),
             "specification_fingerprint": specification_fingerprint(row),
             "anticipation_months": _ANTICIPATION_MONTHS,
-            "observation_window": _LABEL_WINDOW,
+            "observation_window": _LABEL_WINDOW if str(row.outcome_family) == "housing" else 1,
             "price_measure": effective_price_measure(row),
             "production_eligible": _RUN_MODE == "production",
             "run_mode": _RUN_MODE,
@@ -1995,7 +2088,11 @@ def run_mc_stage(
             )
             match_details = cross_match_details
             if cross_match_ok:
-                cross_ok, cross_labels, cross_details = run_frozen_control(row, cross_control)
+                cross_ok, cross_labels, cross_details = run_frozen_control(
+                    row,
+                    cross_control,
+                    control_provenance=cross_match_details,
+                )
                 if cross_ok:
                     selected_method = "frozen_matched_change_12m_baseline_cross_city"
                     write_task(row, cross_labels, "matched_labelled", selected_method, cross_details)
@@ -2343,8 +2440,8 @@ def main() -> int:
     parser.add_argument(
         "--anticipation-months",
         type=int,
-        default=6,
-        help="Anticipation window in months (main=6; sensitivity 0/12)",
+        default=0,
+        help="Anticipation window in months (main=0; monthly t=-7 robustness=6)",
     )
     parser.add_argument(
         "--price-measure",
@@ -2358,7 +2455,7 @@ def main() -> int:
         type=int,
         default=1,
         help="Observation-window width in months for monthly labels "
-        "(main housing specification uses 3; 1/6 are sensitivity views)",
+        "(main specification uses 1; wider windows are sensitivity views)",
     )
     parser.add_argument("--retry-matching", action="store_true")
     parser.add_argument(
@@ -2399,7 +2496,7 @@ def main() -> int:
     parser.add_argument(
         "--max-gsc-cross-city-donors",
         type=int,
-        default=50_000,
+        default=5_000,
         help="Pre-outcome deterministic donor cap for cross-city GSC.",
     )
     parser.add_argument(
@@ -2593,9 +2690,14 @@ def main() -> int:
             if not orders_set:
                 print(f"Shard {args.shard_id + 1}/{args.shard_count}: no selected sample orders")
                 return 0
-        invalidated = invalidate_stale_terminal_tasks(queue, orders_set)
-        if invalidated:
-            print(f"Invalidated {invalidated} terminal tasks from a different specification")
+    selected_orders_for_invalidation = (
+        orders_set
+        if orders_set is not None
+        else set(queue["treatment_order"].astype(int))
+    )
+    invalidated = invalidate_stale_terminal_tasks(queue, selected_orders_for_invalidation)
+    if invalidated:
+        print(f"Invalidated {invalidated} terminal tasks from a different specification")
     eligible = eligible_indices(
         queue,
         args.start_order,

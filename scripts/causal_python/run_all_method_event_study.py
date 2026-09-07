@@ -19,6 +19,7 @@ from urban_intervention.causal.diagnostic_figures import (  # noqa: E402
 )
 from urban_intervention.causal.event_study import run_matching_event_study  # noqa: E402
 from urban_intervention.causal.pooled_event_study import (  # noqa: E402
+    DEFAULT_MAIN_SPECIFICATION_FINGERPRINT,
     PooledPathEventStudyResult,
     run_pooled_path_event_study,
 )
@@ -34,17 +35,39 @@ def main() -> int:
         default="housing,viirs,poi,population",
         help="Comma-separated Matching families.",
     )
-    parser.add_argument("--specification-fingerprint")
+    parser.add_argument(
+        "--specification-fingerprint",
+        default=DEFAULT_MAIN_SPECIFICATION_FINGERPRINT,
+        help="Exact fingerprint or full-match regex for the main/robustness specification.",
+    )
     parser.add_argument("--frequency", choices=("monthly", "annual"))
     parser.add_argument("--min-pre-event-time", type=int)
     parser.add_argument("--latest-pre-periods", type=int, default=5)
     parser.add_argument(
+        "--reference-event-time",
+        type=int,
+        default=-1,
+        help=(
+            "Omitted event-time reference (main: -1 for every family; monthly "
+            "robustness: -7, paired with Phase 2 --anticipation-months 6)."
+        ),
+    )
+    parser.add_argument(
         "--observation-window",
         type=int,
-        default=3,
+        default=1,
         choices=range(1, 7),
         metavar="{1,...,6}",
-        help="Monthly post-treatment moving-window width used by production labels.",
+        help=(
+            "Monthly post-treatment observation-window width; the main specification "
+            "uses window=1 for both housing and VIIRS."
+        ),
+    )
+    parser.add_argument(
+        "--transaction-count-threshold",
+        type=int,
+        default=1,
+        help="Minimum monthly housing transaction count used by labels and TWFE.",
     )
     parser.add_argument(
         "--tasks-file",
@@ -54,8 +77,27 @@ def main() -> int:
             "event study to the exact independently sampled tasks."
         ),
     )
+    parser.add_argument(
+        "--matching-family-queue",
+        type=Path,
+        help="Optional isolated outcome-family queue used by Matching event studies.",
+    )
+    parser.add_argument(
+        "--matching-control-queue",
+        type=Path,
+        help="Optional isolated frozen-control queue used by Matching event studies.",
+    )
+    parser.add_argument(
+        "--matching-task-root",
+        type=Path,
+        help="Optional isolated Matching task artifact root.",
+    )
     parser.add_argument("--no-figures", action="store_true")
     args = parser.parse_args()
+    if args.reference_event_time >= 0:
+        parser.error("--reference-event-time must be negative")
+    if args.transaction_count_threshold < 1:
+        parser.error("--transaction-count-threshold must be positive")
 
     task_keys: set[tuple[int, str]] | None = None
     if args.tasks_file is not None:
@@ -76,6 +118,7 @@ def main() -> int:
     path_result: PooledPathEventStudyResult | None = None
     matching_results = {}
     path_output = args.output_directory / "gsc_mc_paths"
+    monthly_observation_windows = {"housing": args.observation_window, "viirs": 1}
     try:
         path_result = run_pooled_path_event_study(
             args.staging_root,
@@ -85,8 +128,10 @@ def main() -> int:
             min_pre_event_time=args.min_pre_event_time,
             latest_pre_periods=args.latest_pre_periods,
             observation_window=args.observation_window,
+            monthly_observation_windows=monthly_observation_windows,
             figures=not args.no_figures,
             task_keys=task_keys,
+            reference_event_time=args.reference_event_time,
         )
         statuses.append(
             {
@@ -110,12 +155,18 @@ def main() -> int:
                 family,
                 output,
                 pretrend_window=args.latest_pre_periods,
-                observation_window=args.observation_window,
+                observation_window=(1 if family == "viirs" else args.observation_window),
                 treatment_orders=(
                     {order for order, task_family in task_keys if task_family == family}
                     if task_keys is not None
                     else None
                 ),
+                reference_event_time=args.reference_event_time,
+                family_queue=args.matching_family_queue,
+                control_queue=args.matching_control_queue,
+                task_root=args.matching_task_root,
+                transaction_count_threshold=args.transaction_count_threshold,
+                specification_fingerprint=args.specification_fingerprint,
             )
             matching_results[family] = result
             statuses.append(

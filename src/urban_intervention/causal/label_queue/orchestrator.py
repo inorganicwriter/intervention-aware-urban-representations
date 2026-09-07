@@ -97,7 +97,7 @@ def write_task(
             "labels_sha256": file_sha256(labels_path),
             "specification_fingerprint": specification_fingerprint(row),
             "anticipation_months": settings.anticipation_months,
-            "observation_window": settings.label_window,
+            "observation_window": settings.label_window if str(row.outcome_family) == "housing" else 1,
             "price_measure": effective_price_measure(row),
             "production_eligible": settings.run_mode == "production",
             "run_mode": settings.run_mode,
@@ -204,7 +204,11 @@ def run_mc_stage(
             )
             match_details = cross_match_details
             if cross_match_ok:
-                cross_ok, cross_labels, cross_details = run_frozen_control(row, cross_control)
+                cross_ok, cross_labels, cross_details = run_frozen_control(
+                    row,
+                    cross_control,
+                    control_provenance=cross_match_details,
+                )
                 if cross_ok:
                     selected_method = "frozen_matched_change_12m_baseline_cross_city"
                     write_task(

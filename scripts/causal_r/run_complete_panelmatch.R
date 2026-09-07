@@ -102,7 +102,8 @@ run_one_outcome <- function(outcome) {
     size.match = spec$panelmatch$size.match,
     match.missing = spec$panelmatch$match.missing,
     covs.formula = covariate_formula,
-    lead = design$leads - 1L,
+    # PanelMatch lead 0 is the first treated period, i.e. event_time 0.
+    lead = design$leads,
     verbose = TRUE,
     forbid.treatment.reversal = spec$panelmatch$forbid.treatment.reversal,
     matching = spec$panelmatch$matching,
@@ -115,7 +116,7 @@ run_one_outcome <- function(outcome) {
     pm, panel.data = design_panel_data, covariates = design$covariates,
     include.unrefined = TRUE
   )
-  set_effects <- setNames(lapply(design$leads - 1L, function(lead) {
+  set_effects <- setNames(lapply(design$leads, function(lead) {
     get_set_treatment_effects(pm.obj = pm, panel.data = outcome_panel_data, lead = lead)
   }), paste0("event_time_", design$leads))
   estimate <- PanelEstimate(
@@ -151,7 +152,7 @@ run_one_outcome <- function(outcome) {
     eligible_same_city_donors = nrow(design$donors),
     matched_sets = length(pm$att), lag = design$lag,
     covariate_lags = design$covariate_lags, event_time = design$leads,
-    panelmatch_zero_based_leads = design$leads - 1L,
+    panelmatch_zero_based_leads = design$leads,
     control_selection_uses_post_outcome = FALSE,
     refinement_method = spec$panelmatch$refinement.method,
     size_match = spec$panelmatch$size.match,

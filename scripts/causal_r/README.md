@@ -36,9 +36,10 @@ Each estimator has its own formula, output and inference record. The project
 route selects the estimator for each task.
 
 The causal-response label and routing contract is frozen in
-`docs/research/decisions/DDR-004_causal_response_labels.md`. The opening month
-is excluded, the next full month is event time 1, and the main anticipation
-window is six months (0/12-month sensitivity specifications).
+`docs/research/decisions/DDR-004_causal_response_labels.md`. The opening
+month/year is the real event-time-zero impact period. The main specification
+uses a common omitted reference at event time -1; monthly housing/VIIRS also
+use a separately fitted event-time--7 anticipation robustness specification.
 
 Environment:
 
@@ -122,7 +123,7 @@ pre-treatment paths; normalized output is keyed by treatment order and event
 time.
 
 For the 3,771,800-unit all-city donor universe, Python GSC applies a
-pre-outcome stable-hash sample (default 50,000, seed 20260823) before reading
+pre-outcome stable-hash sample (default 5,000, seed 20260823) before reading
 outcome panels. The cap and seed are included in the specification fingerprint;
 same-city GSC is uncapped, and cross-city cap sensitivity remains a required
 robustness check.

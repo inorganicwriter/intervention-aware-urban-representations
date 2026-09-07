@@ -188,7 +188,9 @@ def _cross_city_matching(
     atomic_csv(queue, settings.family_queue)
     ok, control, details = run_cross_city_matching(row, control_queue, control_queue_path)
     if ok:
-        labels_ok, labels, label_details = run_frozen_control(row, control)
+        labels_ok, labels, label_details = run_frozen_control(
+            row, control, control_provenance=details
+        )
         if labels_ok:
             method = "frozen_matched_change_12m_baseline_cross_city"
             _publish_success(

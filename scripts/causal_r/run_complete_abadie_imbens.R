@@ -207,7 +207,8 @@ run_one_outcome <- function(outcome) {
       design$event_calendar$anticipation_months
     } else NA_integer_,
     annual_anticipation_years = if (frequency == "annual") design$annual_anticipation_years else NA_integer_,
-    opening_month_excluded = frequency == "monthly",
+    opening_month_excluded = FALSE,
+    opening_period_event_time = 0L,
     formal_queue_written = FALSE
   ))
   cat("Completed pre-only matching and label construction for", outcome, "at", output, "\n")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 from pathlib import Path
 
@@ -15,15 +16,15 @@ from urban_intervention.causal.event_study import (
 )
 
 
-def _staggered_panel() -> pd.DataFrame:
+def _staggered_panel(event_times: list[int] | None = None) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
-    event_times = [-3, -2, -1, 0, 1, 2]
+    selected_event_times = event_times or [-3, -2, -1, 0, 1, 2]
     for pair in range(24):
         cohort = 2010 + pair % 6
         for role in ("treated", "control"):
             unit = f"{role}_{pair}"
             unit_effect = pair * 0.05 + (0.2 if role == "treated" else 0.0)
-            for event_time in event_times:
+            for event_time in selected_event_times:
                 period = cohort + event_time
                 time_effect = (period - 2000) * 0.03
                 treatment_effect = (
@@ -78,6 +79,33 @@ def test_monthly_pretrend_cutoff_excludes_visible_anticipation_coefficients() ->
     assert result.diagnostics["pretrend_restrictions"] == 0
 
 
+@pytest.mark.parametrize(
+    ("reference", "expected"),
+    [
+        (-1, {-6, -5, -4, -3, -2}),
+        (-7, {-12, -11, -10, -9, -8}),
+    ],
+)
+def test_pretrend_window_counts_clean_leads_not_the_omitted_reference(
+    reference: int, expected: set[int]
+) -> None:
+    result = fit_twfe_event_study(
+        _staggered_panel(list(range(-14, 3))),
+        reference_event_time=reference,
+        pretrend_max_event_time=reference,
+        pretrend_window=5,
+    )
+    coefficients = result.coefficients
+    selected = coefficients.loc[
+        coefficients["event_time"].lt(reference)
+        & coefficients["event_time"].ge(reference - 5),
+        "event_time",
+    ]
+
+    assert set(selected) == expected
+    assert result.diagnostics["pretrend_restrictions"] == 5
+
+
 def test_monthly_post_window_preserves_t0_and_matches_formal_trailing_mean() -> None:
     frame = pd.DataFrame(
         {
@@ -95,6 +123,67 @@ def test_monthly_post_window_preserves_t0_and_matches_formal_trailing_mean() -> 
     assert result.loc[2, "outcome"] == 1.5
     assert result.loc[3, "outcome"] == 2.0
     assert result.loc[4, "outcome"] == 3.0
+
+
+def test_monthly_housing_panel_applies_transaction_support_to_both_roles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    periods = pd.date_range("2019-12-01", "2020-02-01", freq="MS")
+
+    def fake_reader(_root: Path, city: str, _measure: str) -> pd.DataFrame:
+        grid = "treated" if city == "alpha" else "control"
+        counts = [2, 0, 3] if city == "alpha" else [2, 1, 3]
+        return pd.DataFrame(
+            {
+                "grid_id": [grid] * 3,
+                "period": periods,
+                "housing_log_price": [1.0, 2.0, 3.0],
+                "transaction_count": counts,
+            }
+        )
+
+    monkeypatch.setattr(event_study, "read_monthly_housing", fake_reader)
+    row = pd.Series(
+        {
+            "city_key": "alpha",
+            "grid_id": "treated",
+            "control_city_key": "beta",
+            "control_grid_id": "control",
+            "opening_month": "2020-01",
+        }
+    )
+
+    panel = event_study._monthly_pair_panel(
+        row,
+        "housing",
+        tmp_path,
+        -1,
+        1,
+        "median",
+        transaction_count_threshold=2,
+    )
+
+    treated_t0 = panel.loc[
+        (panel["role"] == "treated") & (panel["period"] == pd.Timestamp("2020-01-01"))
+    ]
+    control_t0 = panel.loc[
+        (panel["role"] == "control") & (panel["period"] == pd.Timestamp("2020-01-01"))
+    ]
+    assert treated_t0["outcome"].isna().all()
+    assert control_t0["outcome"].isna().all()
+    assert treated_t0["transaction_count_supported"].tolist() == [False]
+    assert control_t0["transaction_count_supported"].tolist() == [False]
+
+
+def test_main_event_study_builders_default_to_raw_monthly_scale() -> None:
+    panel_default = inspect.signature(
+        event_study.build_matching_event_study_panel
+    ).parameters["observation_window"].default
+    run_default = inspect.signature(
+        event_study.run_matching_event_study
+    ).parameters["observation_window"].default
+    assert panel_default == 1
+    assert run_default == 1
 
 
 def test_matching_event_study_figure_is_written(tmp_path: Path) -> None:
@@ -149,6 +238,7 @@ def test_event_study_builder_requires_accepted_task_manifest(
         "run_mode": "production",
         "production_eligible": True,
         "labels_sha256": event_study.file_sha256(task / "labels.parquet"),
+        "specification_fingerprint": "test-spec",
         "price_measure": "median",
         "details": {"donor_scope": "same_city", "control_unit_key": "alpha::c1"},
     }
@@ -211,6 +301,7 @@ def test_matching_event_study_default_requests_full_available_history(
         "run_mode": "production",
         "production_eligible": True,
         "labels_sha256": event_study.file_sha256(task / "labels.parquet"),
+        "specification_fingerprint": "test-spec",
         "price_measure": "median",
         "details": {"donor_scope": "same_city", "control_unit_key": "alpha::c1"},
     }
@@ -240,3 +331,71 @@ def test_matching_event_study_default_requests_full_available_history(
 
     assert requested_bounds == [(None, None)]
     assert set(panel["event_time"]) == {-10, 0, 5}
+
+
+def test_event_study_builder_filters_manifests_by_full_specification_fingerprint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    controls = pd.DataFrame(
+        {
+            "treatment_order": [1, 2],
+            "status": ["matched", "matched"],
+            "control_unit_key": ["alpha::c1", "alpha::c2"],
+        }
+    )
+    families = pd.DataFrame(
+        {
+            "treatment_order": [1, 2],
+            "city_key": ["alpha", "alpha"],
+            "grid_id": ["t1", "t2"],
+            "opening_month": ["2020-01", "2020-01"],
+            "outcome_family": ["population", "population"],
+            "status": ["matched_labelled", "matched_labelled"],
+        }
+    )
+    for order, fingerprint in ((1, "spec-a"), (2, "spec-b")):
+        task = tmp_path / "tasks" / f"{order:05d}" / "population"
+        task.mkdir(parents=True)
+        labels = pd.DataFrame({"estimator_backend": ["r_reference"]})
+        labels.to_parquet(task / "labels.parquet", index=False)
+        manifest = {
+            "schema": "causal_response_labels",
+            "status": "matched_labelled",
+            "method": "frozen_matched_change_12m_baseline",
+            "outcome_family": "population",
+            "run_mode": "production",
+            "production_eligible": True,
+            "labels_sha256": event_study.file_sha256(task / "labels.parquet"),
+            "specification_fingerprint": fingerprint,
+            "price_measure": "median",
+            "details": {
+                "donor_scope": "same_city",
+                "control_unit_key": f"alpha::c{order}",
+            },
+        }
+        (task / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    def fake_pair(row, _family, _root, _minimum, _maximum):
+        return pd.DataFrame(
+            {
+                "period": [2019, 2020, 2021, 2019, 2020, 2021],
+                "outcome": [1.0, 1.5, 2.0, 1.0, 1.25, 1.5],
+                "role": ["treated"] * 3 + ["control"] * 3,
+                "source_city": ["alpha"] * 6,
+                "source_grid": [row["grid_id"]] * 3 + [row["control_grid_id"]] * 3,
+            }
+        )
+
+    monkeypatch.setattr(event_study, "_annual_pair_panel", fake_pair)
+    panel, _ = event_study.build_matching_event_study_panel(
+        "population",
+        root=tmp_path,
+        control_queue=controls,
+        family_queue=families,
+        task_root=tmp_path / "tasks",
+        specification_fingerprint="spec-a",
+        min_pre=-1,
+        max_post=1,
+    )
+
+    assert set(panel["treatment_order"]) == {1}

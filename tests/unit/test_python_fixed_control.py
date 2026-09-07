@@ -51,3 +51,38 @@ def test_housing_transaction_threshold_controls_label_availability(monkeypatch) 
     assert admitted["label_available"].all()
     assert not restricted["label_available"].any()
     assert restricted["causal_response_label"].isna().all()
+
+
+def test_viirs_never_uses_temporal_moving_window(monkeypatch) -> None:
+    target = pd.Series(
+        {
+            "city_key": "treated_city",
+            "grid_id": "treated_grid",
+            "opening_month": "2020-07",
+        }
+    )
+
+    def city_frame(_root, city, periods):
+        grid = "treated_grid" if city == "treated_city" else "control_grid"
+        offset = 1.0 if city == "treated_city" else 0.5
+        values = offset + np.arange(len(periods), dtype=float)
+        return pd.DataFrame(
+            {
+                "city_key": city,
+                "grid_id": grid,
+                "period": periods,
+                "viirs_avg_asinh": values,
+            }
+        )
+
+    monkeypatch.setattr(fixed_control, "read_monthly_viirs", city_frame)
+    labels = fixed_control.monthly_fixed_control_labels(
+        target,
+        "control_city",
+        "control_grid",
+        "viirs",
+        window=3,
+    )
+
+    assert set(labels["minimum_window_n"]) == {1}
+    assert labels.loc[labels["event_time"].eq(3), "window_supported"].all()

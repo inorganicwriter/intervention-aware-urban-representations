@@ -190,6 +190,7 @@ def _apply_observation_window(frame: pd.DataFrame, window: int) -> pd.DataFrame:
     if window == 1 or not frame["event_time"].gt(0).any():
         return frame
     pre = frame.loc[frame["event_time"].lt(0)].copy()
+    opening = frame.loc[frame["event_time"].eq(0)].copy()
     post = frame.loc[frame["event_time"].gt(0)].copy()
     rows: list[pd.Series] = []
     for horizon in sorted(post["event_time"].astype(int).unique()):
@@ -238,7 +239,9 @@ def _apply_observation_window(frame: pd.DataFrame, window: int) -> pd.DataFrame:
         ] = np.nan
         result["uncertainty_source"] = f"{result['uncertainty_source']}_window{window}"
         rows.append(result)
-    return pd.concat([pre, pd.DataFrame(rows)], ignore_index=True)
+    # event_time=0 is the first exposed month and is the formal impact period.
+    # Keep it raw; only strictly positive horizons use trailing means.
+    return pd.concat([pre, opening, pd.DataFrame(rows)], ignore_index=True)
 
 
 def _apply_window_replicate_inference(
@@ -267,7 +270,7 @@ def _apply_window_replicate_inference(
     aggregated = np.full((draws.shape[0], len(output)), np.nan, dtype=np.float64)
     for column, (index, row) in enumerate(output.iterrows()):
         horizon = int(row["event_time"])
-        if horizon < 0 or window == 1:
+        if horizon <= 0 or window == 1:
             indices = np.flatnonzero(event_time == horizon)
         else:
             start = max(1, horizon - window + 1)
@@ -343,7 +346,7 @@ def _fit(
         resolved_gsc_config = gsc_config or GSCConfig(
             bootstrap_mode="auto" if request.run_mode == "production" else "none",
             n_bootstrap=200 if request.run_mode == "production" else 0,
-            seed=request.seed or 20260723,
+            seed=request.seed if request.seed is not None else 20260723,
         )
         if (
             request.donor_scope == "all_city_standardized"
@@ -387,7 +390,7 @@ def _fit(
         return gsc_result, dict(gsc_result.cv_mean_mspe), None
     resolved_mc_config = mc_config or MatrixCompletionConfig(
         inference="jackknife" if request.run_mode == "production" else "none",
-        seed=request.seed or 20260725,
+        seed=request.seed if request.seed is not None else 20260725,
     )
     mc_result = fit_matrix_completion(
         loaded.panel, config=resolved_mc_config, runtime=runtime
@@ -560,7 +563,7 @@ def run_formal_panel(
     panel_signature = _panel_content_signature(frame)
     loaded = load_estimation_panel(frame, request.estimator)
     metadata = _resolve_panel_metadata(frame, loaded, request, panel_metadata)
-    seed = request.seed or (20260723 if request.estimator == "gsc" else 20260725)
+    seed = request.seed if request.seed is not None else (20260723 if request.estimator == "gsc" else 20260725)
     runtime = TorchRuntime(RuntimeConfig(device=request.device, seed=seed))
     if qualification:
         differences = qualified_environment_differences(
@@ -596,6 +599,11 @@ def run_formal_panel(
     event_time = _event_time(
         loaded.periods, metadata["opening_period_excluded"], str(metadata["frequency"])
     )
+    reference_event_time = (
+        -(int(metadata.get("anticipation_months", 0)) + 1)
+        if str(metadata["frequency"]) == "monthly"
+        else -1
+    )
     inference = fit.inference
     if inference is None:
         standard_error = confidence_lower = confidence_upper = p_value = np.full(
@@ -621,6 +629,7 @@ def run_formal_panel(
             "outcome": request.outcome,
             "period": loaded.periods,
             "event_time": event_time,
+            "reference_event_time": reference_event_time,
             "observed": observed,
             "counterfactual": counterfactual,
             "causal_response_label": effect,
@@ -684,13 +693,14 @@ def run_formal_panel(
                 requested_repetitions=valid_population,
                 minimum_valid_fraction=valid_fraction,
             )
-    pre_effect = labels.loc[labels["event_time"].lt(0), "causal_response_label"]
+    clean_pre = labels["event_time"].lt(reference_event_time)
+    pre_effect = labels.loc[clean_pre, "causal_response_label"]
     labels["pre_rmspe"] = float(np.sqrt(np.nanmean(np.square(pre_effect))))
     labels["pre_observed_periods"] = int(
-        np.isfinite(labels.loc[labels["event_time"].lt(0), "observed"]).sum()
+        np.isfinite(labels.loc[clean_pre, "observed"]).sum()
     )
     pre_rows = labels.loc[
-        labels["event_time"].lt(0)
+        clean_pre
         & np.isfinite(pd.to_numeric(labels["causal_response_label"], errors="coerce")),
         ["event_time", "causal_response_label"],
     ]
@@ -762,12 +772,13 @@ def run_formal_panel(
     atomic_write_csv(diagnostics, output / "diagnostics.csv")
     if masked_placebo is not None:
         atomic_write_csv(masked_placebo, output / "cross_city_masked_placebo.csv")
+    draws_path = output / "inference_draws.parquet"
     if output_draws is not None:
         draw_frame = pd.DataFrame(
             output_draws, columns=[str(value) for value in labels["period"]]
         )
         draw_frame.insert(0, "replicate", np.arange(1, len(draw_frame) + 1))
-        atomic_write_parquet(draw_frame, output / "inference_draws.parquet")
+        atomic_write_parquet(draw_frame, draws_path)
 
     run_id = request.run_id or uuid.uuid4().hex
     manifest: dict[str, Any] = {
@@ -801,6 +812,7 @@ def run_formal_panel(
         "specification_fingerprint": request.specification_fingerprint,
         "price_measure": request.price_measure,
         "observation_window": request.observation_window,
+        "reference_event_time": reference_event_time,
         "transaction_count_threshold": request.transaction_count_threshold,
         "donor_scope": request.donor_scope,
         "inference": uncertainty_source,
@@ -815,6 +827,9 @@ def run_formal_panel(
         "tuning_panel_signature": metadata.get("tuning_panel_signature", ""),
         "input_panel_signature": panel_signature,
         "labels_sha256": file_sha256(labels_path),
+        "inference_draws_sha256": (
+            file_sha256(draws_path) if output_draws is not None else ""
+        ),
         "request": asdict(request) | {"output_directory": str(request.output_directory)},
         "panel_metadata": metadata,
         "runtime": runtime.metadata(),

@@ -37,9 +37,8 @@ pm <- PanelMatch(
   qoi = "att", size.match = 1L, match.missing = FALSE,
   covs.formula = ~ I(lag(population_log, 1:3)) +
     I(lag(viirs_avg_asinh, 1:3)),
-  # PanelMatch lead 0 is the first treated period, which is research
-  # event_time 1 because the partial opening year is excluded.
-  lead = design$leads - 1L,
+  # PanelMatch lead 0 is the first treated period and is research event_time 0.
+  lead = design$leads,
   forbid.treatment.reversal = TRUE, matching = TRUE,
   listwise.delete = TRUE, use.diagonal.variance.matrix = FALSE,
   placebo.test = TRUE
@@ -49,7 +48,7 @@ balance <- get_covariate_balance(
   covariates = c("population_log", "viirs_avg_asinh"),
   include.unrefined = TRUE
 )
-effects <- lapply(design$leads - 1L, function(lead) {
+effects <- lapply(design$leads, function(lead) {
   get_set_treatment_effects(pm.obj = pm, panel.data = panel_data, lead = lead)
 })
 estimate <- PanelEstimate(
@@ -57,7 +56,7 @@ estimate <- PanelEstimate(
   se.method = "bootstrap", include.placebo.test = TRUE, parallel = FALSE
 )
 stopifnot(
-  length(pm$att) == 1L, !is.null(balance), length(effects) == 3L,
+  length(pm$att) == 1L, !is.null(balance), length(effects) == 4L,
   inherits(estimate, "PanelEstimate")
 )
 

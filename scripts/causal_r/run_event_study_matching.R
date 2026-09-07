@@ -17,24 +17,37 @@ suppressPackageStartupMessages({
 # Parallel-trends check: joint Wald test of H0: beta_k = 0 for all k < 0.
 #
 # Usage:
-#   Rscript run_event_study_matching.R OUTCOME_FAMILY [MIN_PRE] [MAX_POST]
+#   Rscript run_event_study_matching.R OUTCOME_FAMILY [MIN_PRE] [MAX_POST] [REFERENCE]
+#       [TRANSACTION_COUNT_THRESHOLD]
 
 args <- commandArgs(trailingOnly = TRUE)
-if (length(args) < 1L) {
-  stop("Usage: run_event_study_matching.R OUTCOME_FAMILY [MIN_PRE] [MAX_POST]")
+if (length(args) < 1L || length(args) > 5L) {
+  stop("Usage: run_event_study_matching.R OUTCOME_FAMILY [MIN_PRE] [MAX_POST] [REFERENCE] [TRANSACTION_COUNT_THRESHOLD]")
 }
 outcome_family <- args[[1L]]
 if (!outcome_family %in% c("housing", "viirs", "poi", "population")) {
   stop("Event-study matching supports housing | viirs | poi | population")
 }
 is_annual <- outcome_family %in% c("poi", "population")
-anticipation_months <- if (is_annual) 0L else 6L
+reference_event_time <- if (length(args) >= 4L) as.integer(args[[4L]]) else -1L
+if (is.na(reference_event_time) || reference_event_time >= 0L) {
+  stop("REFERENCE must be a negative event time")
+}
+if (is_annual && reference_event_time != -1L) {
+  stop("Annual outcomes use REFERENCE=-1; REFERENCE=-7 is monthly robustness only")
+}
+anticipation_months <- if (is_annual) 0L else abs(reference_event_time) - 1L
+transaction_count_threshold <- if (length(args) >= 5L) {
+  as.integer(args[[5L]])
+} else 1L
+if (is.na(transaction_count_threshold) || transaction_count_threshold < 1L) {
+  stop("TRANSACTION_COUNT_THRESHOLD must be a positive integer")
+}
 lag_periods <- if (is_annual) 3L else 36L
 clean_pre_end_event_time <- -(anticipation_months + 1L)
 default_min_pre <- if (is_annual) -4L else -(lag_periods + anticipation_months)
 min_pre <- if (length(args) >= 2L) as.integer(args[[2L]]) else default_min_pre
 max_post <- if (length(args) >= 3L) as.integer(args[[3L]]) else if (is_annual) 3L else 24L
-reference_event_time <- clean_pre_end_event_time
 if (is.na(min_pre) || is.na(max_post) || min_pre > reference_event_time ||
     max_post < 0L) {
   stop("Event-study range must satisfy MIN_PRE < 0 <= MAX_POST")
@@ -109,12 +122,19 @@ read_panel <- function(city_key, opening_month) {
     path <- file.path(PANEL_HOUSING_MONTHLY_DIR, paste0(city_key, ".parquet"))
     if (!file.exists(path)) return(NULL)
     x <- as.data.table(read_parquet(
-      path, col_select = c("grid_id", "observed_month", "log_price_raw_median")
+      path, col_select = c(
+        "grid_id", "observed_month", "log_price_raw_median", "n_transaction"
+      )
     ))
     x[, city_key := city_key]
     x[, month := as.IDate(format(as.IDate(observed_month), "%Y-%m-01"))]
     x[, outcome := log_price_raw_median]
-    x[, .(city_key, grid_id, month, outcome)]
+    x[, transaction_count := as.numeric(n_transaction)]
+    x[, transaction_count_supported := is.finite(transaction_count) &
+      transaction_count >= transaction_count_threshold]
+    x[!transaction_count_supported, outcome := NA_real_]
+    x[, .(city_key, grid_id, month, outcome,
+          transaction_count, transaction_count_supported)]
   } else if (is_annual) {
     if (outcome_family == "poi") {
       path <- file.path(POI_DIR, paste0(city_key, "_poi_grid_yearly.parquet"))
@@ -197,20 +217,33 @@ for (i in seq_len(nrow(treated_units))) {
     get_same_month_size(row$city_key, row$grid_id),
     NA_integer_
   )]
+  if (outcome_family == "housing") {
+    # A matched-pair event-time observation is supported only when both the
+    # treated and control grid pass the same transaction-count rule.  Keeping
+    # the pair-level gate prevents one-sided months from entering fixest.
+    pair_support <- combined[, .(
+      role_count = uniqueN(role),
+      pair_supported = uniqueN(role) == 2L &&
+        all(transaction_count_supported & is.finite(outcome))
+    ), by = .(treatment_order, event_time)]
+    combined <- merge(
+      combined, pair_support,
+      by = c("treatment_order", "event_time"), all = FALSE
+    )
+    combined <- combined[pair_supported]
+    combined[, c("role_count", "pair_supported") := NULL]
+  }
   panel_parts[[length(panel_parts) + 1L]] <- combined
 }
 if (!length(panel_parts)) {
   stop("No treated/control outcome panels could be read for the matched queue")
 }
 panel <- rbindlist(panel_parts, use.names = TRUE, fill = TRUE)
-# The opening month/year is a partial-exposure boundary and is not a model
-# period.  The anticipation window is also excluded from this parallel-trends
-# sample. The first complete month/year after opening is event_time = 1.
+# Keep the real opening period (event_time=0). Under the monthly robustness
+# specification, the periods after REFERENCE and before zero are visible
+# anticipation effects but are excluded from the clean-lead joint test.
 panel <- panel[
-  event_time != 0L &
-    event_time >= min_pre &
-    event_time <= max_post &
-    (event_time <= clean_pre_end_event_time | event_time >= 1L)
+  event_time >= min_pre & event_time <= max_post
 ]
 panel <- panel[is.finite(outcome)]
 if (!nrow(panel)) {
@@ -267,7 +300,7 @@ if (is.null(fit)) {
 }
 
 # ---- Joint parallel-trends Wald test (all pre-period betas = 0) ---------
-  pre_terms <- coef_table[event_time < 0L & event_time != reference_event_time]$term
+pre_terms <- coef_table[event_time < reference_event_time]$term
 wald <- NULL
 wald_city <- NULL
 if (length(pre_terms) > 0L && !is.null(fit)) {
@@ -359,7 +392,7 @@ if (file.exists(attributes_path)) {
     coef_stratum[, stratum := stratum_name]
     coef_stratum[, n_treated_events := strat_events]
     pre_terms_stratum <- coef_stratum[
-      event_time < 0L & event_time != reference_event_time
+      event_time < reference_event_time
     ]$term
     wald_stratum <- NULL
     if (length(pre_terms_stratum) > 0L) {
@@ -466,7 +499,7 @@ tryCatch(
     # figure; the full coefficient table is archived above for audit.
     sunab_window <- sunab_coef[event_time %in% seq.int(min_pre, max_post)]
     pre_terms_sa <- sunab_window[
-      event_time < 0L & event_time != reference_event_time
+      event_time < reference_event_time
     ]$term
     if (length(pre_terms_sa) > 0L) {
       sunab_wald <- tryCatch(

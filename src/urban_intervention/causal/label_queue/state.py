@@ -49,7 +49,7 @@ def specification_fingerprint(row: pd.Series) -> str:
         else "r-reference"
     )
     return (
-        f"main_a6_r1km__a{settings.anticipation_months}__w{settings.label_window}"
+        f"main_a6_r1km__a{settings.anticipation_months}__w{settings.label_window if str(row.outcome_family) == 'housing' else 1}"
         f"__price_{effective_price_measure(row)}__tx{settings.transaction_count_threshold}"
         f"__backend_{backend}"
         f"__xgsc{settings.max_gsc_cross_city_donors}s{settings.gsc_donor_sampling_seed}"

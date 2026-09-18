@@ -160,17 +160,19 @@ PanelMatch 作为**独立稳健性估计器**运行，不参与逐网格标签�
 
 #### 月度变量（housing, viirs）
 
-36 个干净预处理月分为三个不重叠的 12 月块：
+Python/GPU 正式控制设计的 Phase 1 特征窗口为以 `-7` 结束的 36 个干净预处理月，
+两类月度变量使用不同表示：
 
-```text
-time_id 1-12  → lag3（最早 12 月，训练）
-time_id 13-24 → lag2（中间 12 月，训练）
-time_id 25-36 → lag1（最近 12 月，holdout）
-```
+- housing：36 个月分为三个不重叠的 12 月块，每块对有限月值求均值；
+  `lag3`（最早 12 月）和 `lag2`（中间 12 月）训练，`lag1`（最近 12 月）holdout；
+  允许月份稀疏（`minimum_observations = 1`）。
+- VIIRS：保留 36 个逐月 `asinh` 值（`viirs_avg_asinh__pre_m01..36`），不做块均值；
+  `pre_m01..24` 训练，`pre_m25..36` holdout。
 
-每块内对有限月值求均值。housing 允许月份稀疏（`minimum_observations = 1`），VIIRS 要求更完整支持（`minimum_observations = 12`）。
+R 参考实现（`grid_control_design_lib.R`）对月度变量统一使用 12 个月块均值，
+VIIRS 要求更完整的块内支持（`minimum_observations = 12`）；R 仅用于参考和资格比较。
 
-特征命名：`{variable}__lag{1|2|3}`
+特征命名：housing 为 `{variable}__lag{1|2|3}`，VIIRS 为 `{outcome}__pre_m{01..36}`。
 
 #### 年度变量（poi, population）
 
@@ -294,25 +296,24 @@ donor 纳入要求处理前路径完整（`pre_finite = TRUE` 且 `pre_periods =
 
 #### 月度 GSC
 
+月度估计面板使用与结果族主规格一致的事件日历（`anticipation_months=a`）：
+
 ```text
-opening_month          → 排除（部分暴露月）
-opening_month - 1 ~ -6 → 排除（anticipation window）
-opening_month - 7 ~ -42 → 干净预处理期（36 个月）
-opening_month + 1 ~ +24 → 处理后期
+-(a+1)-35 ~ -(a+1)      → 干净预处理期（36 个月，末期为参考期）
+-(a+1)+1 ~ 0            → treated 起始段，真实开通月 t=0 包含在估计面板中
++1 ~ +24                → 正向处理期
 ```
+
+主规格 `a=0`：clean pre `-36:-1`，参考期 `-1`，`t=0` 估计、保存并绘制。
+`anticipation_months=6` 稳健性规格：clean pre `-42:-7`，参考期 `-7`，`-6:-1`
+进入面板但只作为可能的提前反应报告，不进入 clean-pre 检验。
 
 VIIRS 受数据起点限制：`pre_months >= 2012-01-01`。
 
 #### 年度 GSC
 
-```text
-opening_year           → 排除（过渡年）
-opening_year - 1       → annual_anticipation_years=0 时保留；=1 时排除
-opening_year - 2 ~ -3  → 预处理期
-opening_year + 1 ~ +3  → 处理后期
-```
-
-`annual_anticipation_years` 是项目对 DDR-004 anticipation 合同在年粒度上的近似实现，不修改 gsynth 算法本身。
+年度估计面板包含开通年 `t=0` 与 `+1..+3`，统一省略参考年 `-1`；预处理期使用所有
+可用的开通前年份，年度控制特征使用开通年前第 1-3 年。
 
 ### 6.4 两步估计
 

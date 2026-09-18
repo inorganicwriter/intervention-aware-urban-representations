@@ -5,23 +5,29 @@ staging outputs, curated features, research labels, and final panels.
 
 ```text
 data/
-├── catalog/             # Sources, dataset registry, schemas, snapshots, migrations
-├── reference/           # Boundaries and stable grid definitions
-├── raw/                 # Immutable source material and acquisition records
-├── staging/             # Parsed or cleaned data awaiting publication checks
-├── curated/             # Canonical covariates with stable keys and documented semantics
-├── labels/              # Outcomes separated by price type and source
-└── panels/              # Versioned analysis-ready datasets
+├── active/              # Current frozen research assets and production queues
+│   ├── catalog/         # Sources, dataset registry, schemas, resolutions
+│   ├── reference/       # Boundaries, stable grids and resolved station events
+│   ├── curated/         # Canonical covariates (VIIRS, POI, population, Sentinel-2)
+│   ├── causal/          # Treatment list, donor universe, control inputs and queues
+│   ├── labels/          # Outcomes separated by price type and source
+│   └── panels/          # Versioned analysis-ready datasets
+└── archive/             # Immutable source material and rebuildable staging
+    ├── raw/             # Append-only source files and acquisition records
+    └── staging/         # Parsed or cleaned intermediates awaiting publication checks
 ```
 
 ## Layer contract
 
-- `raw`: append-only; acquisition code adds files while the existing history remains unchanged.
-- `staging`: source-specific schemas are allowed and outputs are replaceable.
-- `reference`: stable spatial definitions; canonical CRS is EPSG:4326.
-- `curated`: published features; declared primary keys must be unique.
-- `labels`: outcomes retain source and observation semantics.
-- `panels`: versioned joins of reference, curated, treatment and label assets.
+- `active/`: published, frozen research assets; production queues live here and
+  are single-writer resources.
+- `archive/raw`: append-only; acquisition code adds files while the existing
+  history remains unchanged.
+- `archive/staging`: source-specific schemas are allowed and outputs are replaceable.
+- `active/reference`: stable spatial definitions; canonical CRS is EPSG:4326.
+- `active/curated`: published features; declared primary keys must be unique.
+- `active/labels`: outcomes retain source and observation semantics.
+- `active/panels`: versioned joins of reference, curated, treatment and label assets.
 - `.runtime`: browser profiles and logs; these files belong to the execution environment.
 
 Raw transit files use a source-first layout:

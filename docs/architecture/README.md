@@ -1,7 +1,7 @@
 # Architecture
 
 - [`research_architecture.md`](research_architecture.md)：反事实标签层与表示学习层的研究边界。
-- [`data_layout.md`](data_layout.md)：`raw`、`staging`、`curated`、`labels`、`panels` 和 `causal` 的数据职责。
+- [`data_layout.md`](data_layout.md)：`active` / `archive` 分层以及 reference、curated、labels、panels 和 causal 的数据职责。
 - [`code_standards.md`](code_standards.md)：代码放置、数据合同、可复现性和生产安全规则。
 
 项目总览、运行边界和文档权威层级统一维护在根目录的

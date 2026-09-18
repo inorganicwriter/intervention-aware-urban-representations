@@ -28,11 +28,13 @@ intervention-conditioned urban representation。
         ↓
 固定 5,048 个处理网格与空间合格 donor universe
         ↓
-只使用处理前信息的控制设计
-        ↓
-单一匹配控制
-        ↓ 质量检查未通过
+只使用处理前信息的控制设计（M=5 候选 + 静态精炼）
+        ↓ 门禁未通过
 Xu generalized synthetic control
+        ↓ 拟合/支持失败
+矩阵补全（MC）
+        ↓ 三轮仍失败
+skipped
         ↓
 观测轨迹 - 反事实轨迹
         ↓
@@ -50,7 +52,8 @@ Response Artifact（标签、质量、缺失掩码、不确定性）
 - `data/active/labels/`：观测结果变量；
 - `outputs/`：审计、模型对象和响应标签结果；
 - `src/urban_intervention/`：可复用 Python 实现；
-- `scripts/causal_r/`：正式计量估计器和队列入口；
+- `scripts/causal_r/`：R 参考估计器、数据构造以及部署/编排包装入口；正式估计器位于
+  `src/urban_intervention/causal/gpu/` 与 `scripts/causal_python/`；
 - `tests/`：数据合同、信息边界和估计器门禁。
 
 ## 5. 固定研究约束

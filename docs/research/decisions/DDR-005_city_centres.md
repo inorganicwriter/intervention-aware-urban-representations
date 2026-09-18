@@ -4,6 +4,8 @@
 
 日期：2026-08-05
 
+实现修订：2026-09-19（澄清中心距离特征进入控制设计静态精炼）
+
 ## 1. 目的
 
 为训练前数据集提供"到城市中心距离"与"到最近副中心距离"特征所需的冻结中心坐标。
@@ -61,9 +63,9 @@ data/active/reference/city_centers_sensitivity.csv     参数变体中心漂移
 outputs/figures/centers/{city}_centres.png      密度面 + 中心审计图
 ```
 
-## 4. 关键结果（2026-08-05，44 城）
+## 4. 关键结果（2026-08-05，44 城；中心数按 `city_centers.csv` 于 2026-09-19 复核）
 
-- 290 个中心（44 主中心 + 246 副中心），每城主中心地理合理性人工抽查通过
+- 392 个中心（44 主中心 + 348 副中心），每城主中心地理合理性人工抽查通过
   （北京国贸、上海人民广场、广州越秀、深圳福田、西安钟楼、重庆解放碑等）；
 - 敏感性：主中心在带宽变体下 92% 漂移 ≤2km，其余参数 100% ≤2km；
   副中心集合随带宽变化（敏感性表如实报告）；
@@ -80,6 +82,9 @@ outputs/figures/centers/{city}_centres.png      密度面 + 中心审计图
 
 ## 6. 下游使用
 
-- 注册表只供训练前特征构造（`build_station_context_features.py`）使用；
-- 不进入控制匹配（匹配设计冻结，DDR-003/004 不变）；
+- 注册表生成 `data/active/curated/location_features/` 的 `dist_main_km`、
+  `dist_nearest_subcentre_km`、`dist_nearest_centre_km`，并供训练前特征构造使用；
+- 这些列在 Python/GPU 控制设计中以 `loc_*` 前缀进入第二阶段静态精炼（M5 候选之后的
+  static refine），属于冻结匹配设计的一部分（DDR-003/004 口径不变）；
+- 它们不参与共同支持、holdout 或 placebo 门禁；
 - 后续特征：`dist_main_center_km`、`dist_nearest_subcenter_km`（haversine）。

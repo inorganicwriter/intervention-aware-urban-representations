@@ -29,7 +29,7 @@ version are carried into every label and manifest.
 - The 3.77-million-unit all-city universe is reduced before any outcome is
   read by a fixed-seed stable-hash sample (default 5,000 donors). The cap and
   seed are part of the specification fingerprint; post-treatment outcomes
--  cannot affect selection. Report cap sensitivity for cross-city extensions.
+  cannot affect selection. Report cap sensitivity for cross-city extensions.
 - Production stops when fitting or formal inference is incomplete.
 - R parity is used for software qualification. It does not select a second
   estimate after results are observed.
@@ -77,13 +77,17 @@ python scripts/causal_gpu/export_matching_qualification_set.py \
 python scripts/causal_gpu/run_shadow_queue.py \
   --formal-qualification --estimators matching,gsc,mc \
   --max-tasks-per-estimator 3 \
-  --gpu-ids 0,1,2,3 --retry \
+  --gpu-ids 0,1,2,3 --retry --rebuild-python-contracts \
   --output-root outputs/complete_estimators/gpu_formal_qualification
 
 python scripts/causal_gpu/audit_formal_qualification.py \
   --root outputs/complete_estimators/gpu_formal_qualification \
   --output outputs/causal_gpu/formal_qualification.json
 ```
+
+`--rebuild-python-contracts` is required whenever estimator or contract source
+changed; without it the queue reuses existing native tuning contracts and can
+issue a receipt against stale folds.
 
 The Matching references include both design-stage selections and final
 fixed-control label paths. Production rejects a missing, ineligible, expired or
@@ -127,9 +131,11 @@ fit.
 The Python-native CV contract is the formal tuning contract. Qualification and
 production both load its persisted folds, grid and panel hash. R labels remain
 the reference for point-path and inference parity. MC jackknife pseudo-values
-use the finite donor-omission refits at each period. A missing treated
-post-period remains unavailable and does not enter the minimum-refit gate for
-the other publishable periods.
+use the total number of leave-one-out refits in the multiplier
+(`p = N_total * theta_hat - (N_total - 1) * theta_j`, matching
+`fect::jackknifed`) and the per-period finite refit count only as the variance
+divisor. A missing treated post-period remains unavailable and does not enter
+the minimum-refit gate for the other publishable periods.
 
 Housing transaction support is configurable without changing the default:
 

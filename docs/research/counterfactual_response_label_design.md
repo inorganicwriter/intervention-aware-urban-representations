@@ -169,17 +169,20 @@ POI 既可作为处理前状态变量，也可作为结果族。作为结果族�
 - 每个目标只使用其实际具有合法处理前支持的变量族；
 - 变量族和特征列必须在匹配前冻结并写入 manifest。
 
-### 7.2 月度变量的三个处理前年块
+### 7.2 月度变量的处理前窗口
 
-36 个干净处理前月划为三个不重叠的 12 个月块：
+Phase 1 控制特征窗口为以 `-7` 结束的 36 个干净处理前月（六个月设计缓冲）。housing 与
+VIIRS 在 Python/GPU 正式路径中使用不同表示：
 
-- `lag1`：最近的 12 个干净月，作为 holdout；
-- `lag2`：中间 12 个月，用于控制搜索；
-- `lag3`：最早 12 个月，用于控制搜索。
+- housing：36 个月划为三个不重叠的 12 个月块；`lag1`（最近的 12 个月）作为 holdout，
+  `lag2`（中间 12 个月）和 `lag3`（最早 12 个月）用于控制搜索。每个块对有限月值求
+  均值，允许月份稀疏，但每个要求的块至少需要一个合法观测。
+- VIIRS：保留 36 个逐月 `asinh` 观测值，不做块均值；`pre_m01..24` 用于控制搜索，
+  `pre_m25..36` 作为 holdout。逐月序列不能被压缩为三个块均值，否则会丢失等级动态。
 
-每个变量在每个块内对有限月值求均值。房价允许月份稀疏，但每个要求的块至少需要一个合法
-观测；VIIRS 应具有更完整的月度支持。三个块共同表示处理前水平和走势，覆盖房价交易
-月份稀疏的情况。
+R 参考实现（`grid_control_design_lib.R`）对月度变量统一使用 12 个月块均值，
+VIIRS 要求更完整的块内支持；R 仅用于参考和资格比较。两种表示的列名和来源记录写入
+control-design manifest，不得在正式发布中混用。
 
 ### 7.3 年度变量
 
@@ -398,7 +401,8 @@ L[i,k,h] = Y[i,k,h] - Y_hat_0[i,k,h]
 - `pre_rmspe`；
 - `placebo_percentile`；
 - `standard_error` / 区间（方法可识别时）；
-- `quality_grade`；
+- `quality_grade`（设计路径等级）；
+- `label_grade`（仅在标签可用时继承 `quality_grade`，否则为 `unavailable`）；
 - `label_available`；
 - `failure_reason`。
 
@@ -415,7 +419,9 @@ L[i,k,h] = Y[i,k,h] - Y_hat_0[i,k,h]
 - `competing_intervention_contamination`；
 - `estimator_runtime_error`（仅用于真正程序错误；经济学和数据原因使用对应的结构化代码）。
 
-匹配和 GSC 均失败后进入 MC；MC 仍失败时才舍弃该网格在该结果族和事件期的标签，不生成 0 标签。
+匹配和 GSC 均失败后进入 MC；MC 仍失败时才舍弃该网格在该结果族和事件期的标签，不生成 0
+标签。例外：结构性支持失败（例如处理后支持期不足、VIIRS 缓存或结果面板缺失）会直接
+标记为 `skipped` 并记录结构化原因，不进入 MC，以免对无法识别的目标执行无意义回退。
 
 ## 13. 输出数据结构
 
@@ -452,22 +458,31 @@ treatment_order × outcome_family × outcome × event_time × specification_id
 
 ### 14.1 单一控制搜索队列
 
-每个处理网格只出现一次，共 5,048 行。合法状态：
+每个处理网格只出现一次，共 5,048 行。合法状态（与 `control_design_queue.csv` 一致）：
 
 ```text
 pending
-→ matching_running
-→ matched_control
-或 gsc_required
-或 skipped
+→ running
+→ matched
+或 gsc_pending
+或 not_matched（仅跨城扩展）
+或 error
 ```
 
-### 14.2 结果族/GSC 队列
+正式发布只接受 `matched` 和 `gsc_pending` 两种终态。
 
-仅 `gsc_required` 的处理网格按结果族展开。合法状态：
+### 14.2 结果族队列
+
+结果族队列包含全部 5,048 个处理网格 × 4 个结果族 = 20,192 行，不只为
+`gsc_pending` 网格展开：匹配成功的网格生成 matched 标签，其余按六轮路由继续。合法状态：
 
 ```text
-gsc_pending → gsc_running → gsc_labelled 或 skipped
+pending → matching_running → matched_labelled / gsc_pending / skipped
+gsc_pending → gsc_running → gsc_labelled / mc_pending / skipped
+mc_pending → mc_running → mc_labelled / cross_matching_running
+cross_matching_running → matched_labelled（跨城控制）/ cross_gsc_running
+cross_gsc_running → gsc_labelled / cross_mc_running
+cross_mc_running → mc_labelled / skipped
 ```
 
 ### 14.3 事务规则
@@ -480,8 +495,8 @@ gsc_pending → gsc_running → gsc_labelled 或 skipped
 - 不允许长批次只在最后一次性落盘。
 
 当前代码已经使用 5,048 行 `control_design_queue.csv` 先冻结每个处理网格的物理控制身份；
-只有未通过单一控制质量门禁的网格才标记为 `gsc_pending`，再由结果族队列运行 GSC。匹配
-控制不再随结果变量重复搜索。
+未通过单一控制质量门禁的网格标记为 `gsc_pending`。结果族队列随后对每个网格按其控制
+状态计算 matched 标签或继续 GSC/MC 路由；匹配控制身份不再随结果变量重复搜索。
 
 ## 15. 正式执行顺序
 
@@ -490,7 +505,7 @@ gsc_pending → gsc_running → gsc_labelled 或 skipped
 3. 构造每个处理网格的处理前变量签名；
 4. 运行全部单一控制匹配，不读取处理后结果；
 5. 冻结通过质量门禁的控制设计；
-6. 将失败目标标记为 `gsc_required`；
+6. 将失败目标标记为 `gsc_pending`；
 7. 按结果变量运行正式 Xu-GSC；
 8. 冻结 matched/GSC 反事实；
 9. 读取处理后结果并生成 Response Artifact；

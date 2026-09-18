@@ -30,7 +30,9 @@
   - `L_rep`：InfoNCE（正样本权重 = 响应相似度）+ 嵌入距离 MSE（`rep_alpha` 混合）；
     self-logit 与无足够共同观测的 pair 均从目标中排除，跨 outcome family 只对可比较
     family 求平均；
-  - `L_pred`：逐 cell 预测 MSE，按 `1/SE²` 加权（使用标签的 `standard_error`）。
+  - `L_pred`：逐 cell 预测 MSE，按 `1/SE²` 加权（使用标签的 `standard_error`）；
+    matched 标签按设计没有 SE，缺失时用该结果族内的中位精度补齐（`_precision_weights`），
+    避免整类标签被近似忽略。
 - **算法优化选项**（均默认关闭或保持原语义，可单独消融）：
   - `--no-se-shrinkage`（默认开）：对比损失中响应相似度按标签可靠性 `1/(1+SE²)` 收缩，
     高噪声配对降权（measurement-error 衰减）；SE 缺失/恒定时退化为原损失。
@@ -55,7 +57,7 @@
 | `permutation` | 响应打乱 100/200 次的 p 值 | 关联是否优于随机 |
 | `raw_feature_baseline` | 原始特征直接检索 | 模型是否胜过"直接用特征" |
 | `probe` | 训练池拟合的线性探针 → 目标池 RMSE（嵌入 vs 原始特征） | 迁移能力 |
-| `baselines`（test 池） | 随机投影 / PCA（无监督）/ 冻结 DINOv2 / **外观自编码器**（与主模型同结构、无响应监督训练） | 模型是否胜过机会水平与外观-only 基线 |
+| `baselines`（test 池） | 随机投影 / PCA（无监督；中心与基在训练池拟合后投影 test 池）/ 冻结 DINOv2 / **外观自编码器**（继承主模型 `hidden_dims/embedding_dim`，无响应监督训练） | 模型是否胜过机会水平与外观-only 基线 |
 | `transfer.per_city` | 每个未见城市的 `nn_corr@k` | 迁移是否在各城市一致 |
 | `transfer.few_shot_probe` | **逐目标城市**抽取 4/8/16/32 个网格的探针 RMSE 曲线（多 seed 均值 ± std） | 少量标签下的城内适应速度，各目标城市分别计算 |
 | `transfer.cross_validated_probe` | 目标池 disjoint-fold 交叉验证探针 RMSE | 有监督适配上限；不在拟合样本上回报 RMSE |
@@ -100,4 +102,6 @@ conda run -n mit urban-summarize-runs outputs/representation/main `
 
 - 表示学习**只读** Response Artifact 发布产物与训练前数据集；不参与队列、不写因果产物。
 - 训练掩码由发布者决定（`final_training_mask`），训练器不做推断。
-- 因果标签的质量等级（`quality_grade`）进入 sample_index，可作可视化着色，不作为训练监督。
+- sample_index 的 `quality_grade` 优先取 Response Artifact 的 `label_grade`（未获得
+  标签的行已掩为 `unavailable`），仅在缺少该列时回退到设计等级 `quality_grade`；
+  它可作可视化着色，不作为训练监督。

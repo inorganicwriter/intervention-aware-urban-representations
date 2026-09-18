@@ -50,7 +50,7 @@
 | 核范数目标 | \(\min_L |\Omega|^{-1}\sum_{(i,t)\in\Omega}(Y_{it}-L_{it})^2+\lambda\|L\|_*\) | [3.7](econometric_methods.md#37-mc-的低秩结构) |
 | MC 标签 | \(L_{i,t}=Y_{i,t}-\widehat L_{i,t}\) | [6.1](econometric_methods.md#61-矩阵结构) |
 | CV 误差 | \(MSPE(\lambda)=|S|^{-1}\sum_{(i,t)\in S}[Y_{it}-\widehat Y_{it}(\lambda)]^2\) | [6.2](econometric_methods.md#62-lambda-交叉验证) |
-| Jackknife 伪值 | \(p_t^{(-j)}=N\widehat τ_t-(N-1)\widehat τ_t^{(-j)}\) | [6.3](econometric_methods.md#63-mc-标签和-jackknife) |
+| Jackknife 伪值 | \(p_t^{(-j)}=N_{total}\widehat τ_t-(N_{total}-1)\widehat τ_t^{(-j)}\) | [6.3](econometric_methods.md#63-mc-标签和-jackknife) |
 | Jackknife 标准误 | \(SE_t^{JK}=\sqrt{var(p_t^{(-j)})/n_{valid,t}}\) | [6.3](econometric_methods.md#63-mc-标签和-jackknife) |
 
 代码入口：[`src/urban_intervention/causal/gpu/matrix_completion.py`](../../src/urban_intervention/causal/gpu/matrix_completion.py)。
@@ -60,7 +60,7 @@
 | 对象 | 公式 | 详细章节 |
 |---|---|---|
 | TWFE 事件研究 | \(Y_{it}=\alpha_i+\gamma_t+\sum_{h\ne h_0}\beta_h[Treated_i\times1(event\_time=h)]+\epsilon_{it}\) | [7.1](econometric_methods.md#71-匹配样本上的-twfe) |
-| 清洁 pre 原假设 | \(H_0:\beta_h=0\) for every clean \(h<0,h\ne h_0\) | [7.3](econometric_methods.md#73-平行趋势联合-wald-检验) |
+| 清洁 pre 原假设 | \(H_0:\beta_h=0\) for every \(h\) in the prespecified recent clean-pre window（最近 5 期，最后一期为参考） | [7.3](econometric_methods.md#73-平行趋势联合-wald-检验) |
 | Wald/F 统计量 | \(F=q^{-1}\widehat\beta_{pre}'\widehat V_{pre}^{-1}\widehat\beta_{pre}\) | [7.3](econometric_methods.md#73-平行趋势联合-wald-检验) |
 | 聚类协方差 | \(\widehat V=correction(X'X)^{-1}[\sum_gX_g'e_ge_g'X_g](X'X)^{-1}\) | [7.4](econometric_methods.md#74-聚类协方差) |
 | GSC/MC pooled gap | \(\widehat μ_h=N_h^{-1}\sum_i gap_{i,h}\) | [7.6](econometric_methods.md#76-gsc-和-mc-的事件路径诊断) |

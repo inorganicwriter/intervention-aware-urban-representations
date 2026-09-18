@@ -28,11 +28,13 @@ python scripts/causal_r/run_robustness_checks.py --spatial-exclusion
 
 ## 2. Anticipation 窗口
 
-主规格为 6 个月，敏感性规格为 0 个月和 12 个月。
+主规格为 0 个月（省略参考期 `event_time=-1`）；housing/VIIRS 的 6 个月 anticipation
+是独立稳健性规格（省略 `t=-7`，`-6:-1` 作为可能的提前反应报告）；12 个月为附加
+敏感性规格。三套规格分别拟合、分别保存，不能与主结果混合。
 
 ```bash
 python scripts/causal_python/run_causal_label_queue.py \
-  --start-order 1 --max-tasks 1 --anticipation-months 0
+  --start-order 1 --max-tasks 1 --anticipation-months 6
 python scripts/causal_python/run_causal_label_queue.py \
   --start-order 1 --max-tasks 1 --anticipation-months 12
 ```

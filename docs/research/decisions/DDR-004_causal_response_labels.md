@@ -4,7 +4,7 @@
 
 日期：2026-07-23
 
-实现修订：2026-09-04
+实现修订：2026-09-04；2026-09-19（队列状态与质量排序澄清）
 
 ## 1. 目标
 
@@ -24,9 +24,9 @@
   `anticipation_months = 0`。
 - housing/VIIRS 另做独立月度稳健性：省略 `event_time = -7`，把 `-6:-1`
   显示为可能的提前反应，clean-pre 检验只使用 `event_time < -7`。
-- 月度主处理前窗口为参考期之前的 36 个模型期；正式路径包含 `t=0` 与 1-24 月，
-  正向标签重点汇总 1、3、6、12、18、24 月。主规格使用原始逐月
-  `observation_window = 1`。
+- 月度主处理前窗口为参考期及其之前的 36 个模型期（主规格 `-36:-1`）；正式路径
+  包含 `t=0` 与 1-24 月，正向标签重点汇总 1、3、6、12、18、24 月。主规格使用原始
+  逐月 `observation_window = 1`。
 - 年度路径包含开通年 `event_time = 0` 与 1-3 年，并统一省略 `event_time = -1`；
   `annual_anticipation_years = 0`。
 - anticipation 或 observation window 改变时必须重新拟合并写入独立 queue、task root、
@@ -93,8 +93,16 @@ generalized synthetic control：
 `pending → matching_running → gsc_pending → gsc_running → (GSC fail) → mc_pending → mc_running → mc_labelled`；或  
 `… → skipped`（匹配、GSC 与 MC 均失败并记录结构化原因）。
 
-MC 回退仅在 GSC 失败后触发，不参与匹配失败后的直接路由。MC 标签的质量等级低于
-matched 和 GSC，在训练 mask 中可选排除。
+同城三轮回退失败后，跨城扩展按 `cross_matching_running → cross_gsc_running →
+cross_mc_running` 继续，跨城 matched 标签记为 `matched_labelled`。
+
+MC 回退仅在 GSC 失败后触发，不参与匹配失败后的直接路由；结构性支持失败（如处理后
+支持不足或结果面板缺失）直接记为 `skipped`，不进入 MC。
+
+质量等级采用同城优先排序：在同一 donor scope 内 MC 低于 matched 和 GSC；但任一
+same-city 路径（含 MC）高于任一 cross-city 路径，且 `mc_*_pass` 高于
+`mc_*_minimal_pre_support`。质量等级只用于报告和样本索引分层，训练掩码由
+`label_available`、生产合格性和不确定性支持共同决定。
 
 队列和结果必须通过临时文件原子替换；每一任务目录必须包含 manifest。重新运行已完成任务
 时复用现有结果，保持记录一致。生产队列只有在合成真值、处理后泄漏、事件时间、真实数据、失败

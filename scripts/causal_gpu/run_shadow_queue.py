@@ -444,6 +444,13 @@ def main() -> int:
         print(f"Discovered {len(tasks)} task(s)")
         return 0
     if not tasks:
+        # An empty queue is only a failure when nothing was ever completed:
+        # an idempotent re-run where every task is already cached is success.
+        if args.output_root.exists() and any(
+            args.output_root.rglob("manifest.json")
+        ):
+            print("All discovered GPU tasks are already cached; nothing to run.")
+            return 0
         print("No runnable GPU tasks were discovered; export R contracts first.")
         return 1
     results = run_gpu_tasks(

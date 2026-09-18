@@ -93,6 +93,15 @@ def main() -> int:
         help="Optional isolated Matching task artifact root.",
     )
     parser.add_argument("--no-figures", action="store_true")
+    parser.add_argument(
+        "--allow-partial",
+        action="store_true",
+        help=(
+            "Exit 0 when a component reports no_data (bounded tests/demos). "
+            "Without this flag an incomplete GSC/MC or Matching component fails "
+            "the process instead of only writing suite_status.csv."
+        ),
+    )
     args = parser.parse_args()
     if args.reference_event_time >= 0:
         parser.error("--reference-event-time must be negative")
@@ -247,6 +256,8 @@ def main() -> int:
             "details": f"{len(combined) // 4} outcome figures",
         }
     )
+    if args.no_figures:
+        statuses[-1]["status"] = "skipped_by_flag"
     args.output_directory.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(coverage_rows).to_csv(
         args.output_directory / "sample_aggregation_coverage.csv",
@@ -267,6 +278,20 @@ def main() -> int:
     status.to_csv(args.output_directory / "suite_status.csv", index=False, encoding="utf-8-sig")
     completed = int(status["status"].eq("completed").sum())
     print(f"Completed {completed}/{len(status)} Python event-study components")
+    acceptable = status["status"].isin({"completed", "skipped_by_flag"})
+    if not args.allow_partial and not acceptable.all():
+        incomplete = status.loc[
+            ~acceptable, ["component", "status"]
+        ]
+        details = ", ".join(
+            f"{row.component}={row.status}" for row in incomplete.itertuples()
+        )
+        print(
+            f"ERROR: incomplete event-study components: {details}; "
+            "rerun with --allow-partial for bounded tests",
+            file=sys.stderr,
+        )
+        return 1
     return int(completed == 0)
 
 

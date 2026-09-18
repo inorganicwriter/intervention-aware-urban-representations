@@ -58,6 +58,9 @@ from urban_intervention.data.paths import (  # noqa: E402
 )
 from urban_intervention.utils import atomic_write_csv  # noqa: E402
 
+# Standalone runs default to the isolated Python root.  The label queue passes
+# its own resolved staging root explicitly through
+# MIT_CAUSAL_ESTIMATOR_OUTPUT_ROOT so the writer and the reader always agree.
 OUTPUT_ESTIMATOR_ROOT = Path(
     os.environ.get(
         "MIT_CAUSAL_ESTIMATOR_OUTPUT_ROOT",

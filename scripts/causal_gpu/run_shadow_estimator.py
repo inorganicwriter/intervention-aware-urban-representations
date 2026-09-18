@@ -83,7 +83,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> None:
+def main() -> int:
     args = parse_args()
     if args.tuning == "gpu" and (args.max_iter != 5000 or args.tol != 1e-5):
         raise ValueError("strict GPU tuning requires the frozen fect max_iter=5000 and tol=1e-5")
@@ -292,7 +292,15 @@ def main() -> None:
         encoding="utf-8",
     )
     print(json.dumps(manifest, ensure_ascii=False))
+    # A blocked point/inference parity is a failure for the caller, not only a
+    # manifest field.  Queue runners rely on the exit code.
+    return (
+        0
+        if manifest["promotion_status"]
+        == "eligible_for_stratified_qualification_audit"
+        else 1
+    )
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

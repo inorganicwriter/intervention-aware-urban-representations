@@ -164,7 +164,7 @@ def run_cross_city_matching(
                 "record_status": str(record.get("status")),
             },
         )
-    details = {
+    details: dict[str, object] = {
         "control_unit_key": str(record.get("control_unit_key")),
         "donor_scope": "all_city_standardized",
         "control_record": str(record_path.relative_to(ROOT)),
@@ -315,12 +315,12 @@ def run_frozen_control(
             [],
             {"reason": "fixed_control_manifest_or_labels_missing", "log": completed_log},
         )
-    manifest_values = read_estimator_manifest(estimator_manifest)
+    manifest_values = read_estimator_manifest(estimator_manifest)  # type: ignore[assignment]
     if (
         manifest_values.get("run_id") != run_id
         or manifest_values.get("estimator") != "frozen_matched_change"
         or manifest_values.get("run_mode") != settings.run_mode
-        or manifest_values.get("production_eligible", "").upper()
+        or manifest_values.get("production_eligible", "").upper()  # type: ignore[attr-defined]
         != ("TRUE" if settings.run_mode == "production" else "FALSE")
         or manifest_values.get("treatment_order") != str(int(row.treatment_order))
         or manifest_values.get("outcome_family") != family

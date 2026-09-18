@@ -18,7 +18,7 @@ from urban_intervention.causal.label_queue import orchestrator as modular_orches
 ROOT = Path(__file__).resolve().parents[2]
 ORIGINAL_PATH = ROOT / "scripts" / "causal_python" / "run_causal_label_queue.py"
 MODULAR_PATH = ROOT / "scripts" / "causal_python" / "run_causal_label_queue_modular.py"
-ORIGINAL_NORMALIZED_SHA256 = "6baec07857d17f44b4c6df9aff1d96cb49dcf4cc71e821a6aa88c9cabbabe4ee"
+ORIGINAL_NORMALIZED_SHA256 = "1f4aec686907c6c010510536aaca95233569ba6b55458a7f00763779f97d86a3"
 
 SPEC = importlib.util.spec_from_file_location("frozen_causal_label_queue", ORIGINAL_PATH)
 assert SPEC is not None and SPEC.loader is not None
@@ -243,10 +243,16 @@ def test_modular_cli_configures_shared_runtime_and_dispatches_dry_run(
     monkeypatch.setattr(modular_cli, "read_family_queue", lambda _path: queue)
     monkeypatch.setattr(modular_cli, "read_control_queue", lambda _path: controls)
     monkeypatch.setattr(modular_cli.pq, "read_table", lambda _path: _Table())
+    invalidation_calls: list[int] = []
+
+    def _record_invalidation(_queue, _orders):
+        invalidation_calls.append(1)
+        return 0
+
     monkeypatch.setattr(
         modular_cli,
         "invalidate_stale_terminal_tasks",
-        lambda _queue, _orders: 0,
+        _record_invalidation,
     )
     monkeypatch.setattr(
         modular_cli,
@@ -273,6 +279,7 @@ def test_modular_cli_configures_shared_runtime_and_dispatches_dry_run(
     )
 
     assert modular_cli.main() == 0
+    assert invalidation_calls == []
     assert len(observed) == 1
     assert observed[0][0][4] is True
     assert modular.settings.estimator_backend == "python_gpu"

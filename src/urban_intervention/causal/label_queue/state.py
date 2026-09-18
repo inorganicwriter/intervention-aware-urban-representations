@@ -186,7 +186,7 @@ def run(
             )
         else:
             with suppress(ProcessLookupError):
-                os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                os.killpg(os.getpgid(process.pid), signal.SIGTERM)  # type: ignore[attr-defined]
         stdout, _ = process.communicate()
         output = (stdout or "") + f"\nR subprocess timed out after {settings.r_timeout_seconds}s\n"
         if exc.stdout:

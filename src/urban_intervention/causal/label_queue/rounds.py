@@ -315,8 +315,13 @@ def run_global_round(
         _cross_city_matching(queue, index, row, control_queue, control_queue_path)
     elif round_name == "cross_city_gsc":
         _cross_city_gsc(queue, index, row)
-    else:
+    elif round_name == "cross_city_mc":
         _cross_city_mc(queue, index, row)
+    else:
+        # Fail closed: silently running a different estimator than the caller
+        # requested would corrupt the routing contract.  Rounds 1 and 2 are
+        # owned by process_one and must never reach this function.
+        raise ValueError(f"run_global_round does not own Round {round_name!r}")
 
 
 __all__ = [

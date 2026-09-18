@@ -13,6 +13,7 @@ from scripts.causal_r.run_parallel_production import (
     initialize_isolated_queues,
     isolated_queue_paths,
     phase2_round_specs,
+    phase3_merge_shards,
     shard_queue_path,
     validate_resume_checkpoint,
 )
@@ -374,3 +375,83 @@ def test_isolated_robustness_queues_reset_analysis_state_but_keep_controls(
     assert pd.read_csv(isolated[1]).loc[0, "status"] == "matched"
     assert pd.read_csv(isolated[2]).loc[0, "status"] == "pending"
     assert isolated[0].name == "outcome_family_work_queue_robust_m7.csv"
+
+
+def test_isolated_queue_force_reset_rebuilds_namespace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    family = tmp_path / "outcome_family_work_queue.csv"
+    control = tmp_path / "control_design_queue.csv"
+    unit = tmp_path / "counterfactual_work_queue.csv"
+    pd.DataFrame(
+        {
+            "treatment_order": [1],
+            "outcome_family": ["viirs"],
+            "status": ["pending"],
+            "selected_method": [pd.NA],
+            "failure_reason": [pd.NA],
+        }
+    ).to_csv(family, index=False)
+    pd.DataFrame({"treatment_order": [1], "status": ["matched"]}).to_csv(control, index=False)
+    pd.DataFrame({"treatment_order": [1], "status": ["pending"]}).to_csv(unit, index=False)
+    monkeypatch.setattr(production, "OUTCOME_FAMILY_QUEUE", family)
+    monkeypatch.setattr(production, "CONTROL_DESIGN_QUEUE", control)
+    monkeypatch.setattr(production, "COUNTERFACTUAL_QUEUE", unit)
+
+    isolated = isolated_queue_paths("robust_m7")
+    initialize_isolated_queues(*isolated)
+    stale = pd.read_csv(isolated[0])
+    stale["status"] = "gsc_labelled"
+    stale.to_csv(isolated[0], index=False)
+
+    # Without force the namespace resume must preserve prior progress.
+    initialize_isolated_queues(*isolated)
+    assert pd.read_csv(isolated[0]).loc[0, "status"] == "gsc_labelled"
+
+    # An explicit reset must rebuild the namespace from the canonical queues.
+    initialize_isolated_queues(*isolated, force=True)
+    assert pd.read_csv(isolated[0]).loc[0, "status"] == "pending"
+    assert pd.read_csv(isolated[1]).loc[0, "status"] == "matched"
+
+
+def test_phase3_dry_run_leaves_master_and_shards_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    treatments = pd.DataFrame({"treatment_order": [1, 2]})
+    treatment_path = tmp_path / "treatments.parquet"
+    treatments.to_parquet(treatment_path, index=False)
+    monkeypatch.setattr(production, "TREATMENT_UNIT_LIST", treatment_path)
+
+    family = tmp_path / "family.csv"
+    control = tmp_path / "control.csv"
+    unit = tmp_path / "unit.csv"
+    pd.DataFrame(
+        {
+            "treatment_order": [1, 2],
+            "outcome_family": ["population", "population"],
+            "status": ["matched_labelled", "skipped"],
+        }
+    ).to_csv(family, index=False)
+    pd.DataFrame({"treatment_order": [1, 2], "status": ["matched", "gsc_pending"]}).to_csv(
+        control, index=False
+    )
+    pd.DataFrame({"treatment_order": [1, 2], "status": ["labelled", "pending"]}).to_csv(
+        unit, index=False
+    )
+    master_before = family.read_bytes()
+    shard_paths = []
+    for master in (family, control, unit):
+        for shard_id in range(2):
+            shard_path = shard_queue_path(master, shard_id)
+            shard_path.write_bytes(master.read_bytes())
+            shard_paths.append(shard_path)
+
+    phase3_merge_shards(
+        shard_count=2,
+        run_mode="production",
+        queue_paths=(family, control, unit),
+        dry_run=True,
+    )
+
+    assert family.read_bytes() == master_before
+    assert all(shard_path.exists() for shard_path in shard_paths)

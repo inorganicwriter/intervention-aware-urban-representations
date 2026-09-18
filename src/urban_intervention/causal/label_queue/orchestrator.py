@@ -147,11 +147,20 @@ def run_mc_stage(
     directory = task_directory(int(row.treatment_order), str(row.outcome_family))
     stage = str(row.status)
     gsc_attempt_path = directory / "gsc_attempt.json"
+    same_mc_attempt_path = directory / "same_city_mc_attempt.json"
     cross_gsc_attempt_path = directory / "cross_city_gsc_attempt.json"
     gsc_details: dict[str, object] = (
         json.loads(gsc_attempt_path.read_text(encoding="utf-8"))
         if gsc_attempt_path.exists()
         else {"reason": "gsc_failure_details_unavailable"}
+    )
+    # A resume that starts in the cross-city stage must not forget the
+    # already-executed same-city MC round; without the persisted attempt the
+    # failure manifest would claim ``same_city_mc_not_run``.
+    same_mc_details: dict[str, object] = (
+        json.loads(same_mc_attempt_path.read_text(encoding="utf-8"))
+        if same_mc_attempt_path.exists()
+        else {"reason": "same_city_mc_not_run"}
     )
 
     if classify_gsc_failure(gsc_details):
@@ -159,7 +168,6 @@ def run_mc_stage(
         return
 
     same_mc_ok = False
-    same_mc_details: dict[str, object] = {"reason": "same_city_mc_not_run"}
     cross_gsc_ok = False
     cross_gsc_labels: list[pd.DataFrame] = []
     cross_gsc_details: dict[str, object] = {"reason": "cross_city_gsc_not_run"}
@@ -182,6 +190,12 @@ def run_mc_stage(
             ]
             atomic_csv(queue, settings.family_queue)
             return
+        # Persist the failed same-city MC attempt before any cross-city work so
+        # a resume or a later failure manifest still reports what actually ran.
+        atomic_json(
+            {"schema": "same_city_mc_failure", **same_mc_details},
+            same_mc_attempt_path,
+        )
 
     # Round 4: cross-city matching
     if stage not in {"cross_gsc_running", "cross_mc_running"}:
@@ -320,11 +334,11 @@ def process_one(
     control_queue_path: Path = CONTROL_QUEUE,
 ) -> None:
     row = queue.loc[index].copy()
-    if recover_completed_task(queue, index, control_queue=control_queue):
-        return
-    signature = family_signature(row, support)
-    control = control_for_order(int(row.treatment_order), control_queue)
+    # A dry run is read-only: it must not recover completed tasks, invalidate
+    # stale qualification artifacts or rewrite the queue CSV.
     if dry_run:
+        signature = family_signature(row, support)
+        control = control_for_order(int(row.treatment_order), control_queue)
         print(
             {
                 "order": int(row.treatment_order),
@@ -335,6 +349,10 @@ def process_one(
             }
         )
         return
+    if recover_completed_task(queue, index, control_queue=control_queue):
+        return
+    signature = family_signature(row, support)
+    control = control_for_order(int(row.treatment_order), control_queue)
     if str(control.status) not in {"matched", "gsc_pending"}:
         raise RuntimeError(
             f"Control design for treatment {int(row.treatment_order)} is {control.status}; "
@@ -367,7 +385,7 @@ def process_one(
         atomic_csv(queue, settings.family_queue)
         if row.outcome_family == "viirs":
             if not viirs_has_min_preperiods(str(row.opening_month)):
-                gsc_ok, gsc_labels, gsc_details = (
+                gsc_ok, gsc_labels, gsc_details = (  # type: ignore[var-annotated]
                     False,
                     [],
                     {"reason": "viirs_insufficient_clean_pre_periods_for_gsc"},
@@ -382,23 +400,23 @@ def process_one(
                     )
                 else:
                     # Round 2: same-city GSC only (cross-city GSC is round 5).
-                    gsc_ok, gsc_labels, gsc_details = run_gsc_scope(row, "same_city")
+                    gsc_ok, gsc_labels, gsc_details = run_gsc_scope(row, "same_city")  # type: ignore[assignment]
         else:
-            gsc_ok, gsc_labels, gsc_details = run_gsc_scope(row, "same_city")
+            gsc_ok, gsc_labels, gsc_details = run_gsc_scope(row, "same_city")  # type: ignore[assignment]
         if gsc_ok:
             selected_method = str(gsc_details["selected_method"])
-            write_task(row, gsc_labels, "gsc_labelled", selected_method, gsc_details)
+            write_task(row, gsc_labels, "gsc_labelled", selected_method, gsc_details)  # type: ignore[arg-type]
             queue.loc[index, ["status", "selected_method", "failure_reason"]] = [
                 "gsc_labelled",
                 selected_method,
                 pd.NA,
             ]
         else:
-            if classify_gsc_failure(gsc_details):
-                skip_after_structural_gsc_failure(queue, index, row, gsc_details)
+            if classify_gsc_failure(gsc_details):  # type: ignore[arg-type]
+                skip_after_structural_gsc_failure(queue, index, row, gsc_details)  # type: ignore[arg-type]
             else:
-                begin_mc_stage(queue, index, row, gsc_details)
-            if not classify_gsc_failure(gsc_details) and phase != "gsc":
+                begin_mc_stage(queue, index, row, gsc_details)  # type: ignore[arg-type]
+            if not classify_gsc_failure(gsc_details) and phase != "gsc":  # type: ignore[arg-type]
                 run_mc_stage(queue, index, row, control_queue, control_queue_path)
         if gsc_ok:
             atomic_csv(queue, settings.family_queue)
@@ -458,23 +476,23 @@ def process_one(
                 )
             else:
                 # Round 2: same-city GSC only.
-                gsc_ok, gsc_labels, gsc_details = run_gsc_scope(row, "same_city")
+                gsc_ok, gsc_labels, gsc_details = run_gsc_scope(row, "same_city")  # type: ignore[assignment]
     else:
-        gsc_ok, gsc_labels, gsc_details = run_gsc_scope(row, "same_city")
+        gsc_ok, gsc_labels, gsc_details = run_gsc_scope(row, "same_city")  # type: ignore[assignment]
     if gsc_ok:
         selected_method = str(gsc_details["selected_method"])
-        write_task(row, gsc_labels, "gsc_labelled", selected_method, gsc_details)
+        write_task(row, gsc_labels, "gsc_labelled", selected_method, gsc_details)  # type: ignore[arg-type]
         queue.loc[index, ["status", "selected_method", "failure_reason"]] = [
             "gsc_labelled",
             selected_method,
             pd.NA,
         ]
     else:
-        if classify_gsc_failure(gsc_details):
-            skip_after_structural_gsc_failure(queue, index, row, gsc_details)
+        if classify_gsc_failure(gsc_details):  # type: ignore[arg-type]
+            skip_after_structural_gsc_failure(queue, index, row, gsc_details)  # type: ignore[arg-type]
         else:
-            begin_mc_stage(queue, index, row, gsc_details)
-        if not classify_gsc_failure(gsc_details) and phase != "gsc":
+            begin_mc_stage(queue, index, row, gsc_details)  # type: ignore[arg-type]
+        if not classify_gsc_failure(gsc_details) and phase != "gsc":  # type: ignore[arg-type]
             run_mc_stage(queue, index, row, control_queue, control_queue_path)
     if gsc_ok:
         atomic_csv(queue, settings.family_queue)

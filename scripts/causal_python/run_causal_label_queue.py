@@ -845,7 +845,7 @@ def run_cross_city_matching(
                 "record_status": str(record.get("status")),
             },
         )
-    details = {
+    details: dict[str, object] = {
         "control_unit_key": str(record.get("control_unit_key")),
         "donor_scope": "all_city_standardized",
         "control_record": str(record_path.relative_to(ROOT)),
@@ -1118,6 +1118,10 @@ def python_estimator_command(
     environment = {
         "MIT_CAUSAL_RUN_ID": run_id,
         "MIT_SPECIFICATION_FINGERPRINT": specification_fingerprint(row),
+        # Tell the estimator exactly where this queue will look for its
+        # artifacts.  Without this a direct queue run reads ``STAGING`` while
+        # the estimator's standalone default writes the isolated Python root.
+        "MIT_CAUSAL_ESTIMATOR_OUTPUT_ROOT": str(STAGING),
     }
     prevalidated_sha256 = str(
         _QUALIFICATION_PROOF.get("formal_qualification_receipt_sha256", "")
@@ -2032,11 +2036,17 @@ def run_mc_stage(
     directory = task_directory(int(row.treatment_order), str(row.outcome_family))
     stage = str(row.status)
     gsc_attempt_path = directory / "gsc_attempt.json"
+    same_mc_attempt_path = directory / "same_city_mc_attempt.json"
     cross_gsc_attempt_path = directory / "cross_city_gsc_attempt.json"
     gsc_details: dict[str, object] = (
         json.loads(gsc_attempt_path.read_text(encoding="utf-8"))
         if gsc_attempt_path.exists()
         else {"reason": "gsc_failure_details_unavailable"}
+    )
+    same_mc_details: dict[str, object] = (
+        json.loads(same_mc_attempt_path.read_text(encoding="utf-8"))
+        if same_mc_attempt_path.exists()
+        else {"reason": "same_city_mc_not_run"}
     )
 
     if classify_gsc_failure(gsc_details):
@@ -2044,7 +2054,6 @@ def run_mc_stage(
         return
 
     same_mc_ok = False
-    same_mc_details: dict[str, object] = {"reason": "same_city_mc_not_run"}
     cross_gsc_ok = False
     cross_gsc_labels: list[pd.DataFrame] = []
     cross_gsc_details: dict[str, object] = {"reason": "cross_city_gsc_not_run"}
@@ -2067,6 +2076,10 @@ def run_mc_stage(
             ]
             atomic_csv(queue, FAMILY_QUEUE)
             return
+        atomic_json(
+            {"schema": "same_city_mc_failure", **same_mc_details},
+            same_mc_attempt_path,
+        )
 
     # Round 4: cross-city matching
     if stage not in {"cross_gsc_running", "cross_mc_running"}:
@@ -2202,11 +2215,11 @@ def process_one(
     control_queue_path: Path = CONTROL_QUEUE,
 ) -> None:
     row = queue.loc[index].copy()
-    if recover_completed_task(queue, index, control_queue=control_queue):
-        return
-    signature = family_signature(row, support)
-    control = control_for_order(int(row.treatment_order), control_queue)
+    # A dry run is read-only: it must not recover completed tasks, invalidate
+    # stale qualification artifacts or rewrite the queue CSV.
     if dry_run:
+        signature = family_signature(row, support)
+        control = control_for_order(int(row.treatment_order), control_queue)
         print(
             {
                 "order": int(row.treatment_order),
@@ -2217,6 +2230,10 @@ def process_one(
             }
         )
         return
+    if recover_completed_task(queue, index, control_queue=control_queue):
+        return
+    signature = family_signature(row, support)
+    control = control_for_order(int(row.treatment_order), control_queue)
     if str(control.status) not in {"matched", "gsc_pending"}:
         raise RuntimeError(
             f"Control design for treatment {int(row.treatment_order)} is {control.status}; "
@@ -2695,7 +2712,13 @@ def main() -> int:
         if orders_set is not None
         else set(queue["treatment_order"].astype(int))
     )
-    invalidated = invalidate_stale_terminal_tasks(queue, selected_orders_for_invalidation)
+    # A dry run must never rewrite the queue.  Specification invalidation is a
+    # mutating repair and therefore only runs for real executions.
+    invalidated = (
+        0
+        if args.dry_run
+        else invalidate_stale_terminal_tasks(queue, selected_orders_for_invalidation)
+    )
     if invalidated:
         print(f"Invalidated {invalidated} terminal tasks from a different specification")
     eligible = eligible_indices(

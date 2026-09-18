@@ -163,7 +163,7 @@ def validate_task_labels(row: pd.Series, labels: pd.DataFrame) -> None:
 def validate_task_manifest(row: pd.Series, payload: dict[str, object], labels_path: Path) -> None:
     if payload.get("schema") != "causal_response_labels_v1":
         raise ValueError("Completed task has an unknown manifest schema")
-    if int(payload.get("treatment_order", -1)) != int(row.treatment_order):
+    if int(payload.get("treatment_order", -1)) != int(row.treatment_order):  # type: ignore[call-overload]
         raise ValueError("Completed task manifest treatment_order disagrees with queue")
     if str(payload.get("outcome_family")) != str(row.outcome_family):
         raise ValueError("Completed task manifest outcome_family disagrees with queue")

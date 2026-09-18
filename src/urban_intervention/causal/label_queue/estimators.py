@@ -90,6 +90,10 @@ def python_estimator_command(
     environment = {
         "MIT_CAUSAL_RUN_ID": run_id,
         "MIT_SPECIFICATION_FINGERPRINT": specification_fingerprint(row),
+        # Tell the estimator exactly where this queue will look for its
+        # artifacts.  Without this a direct queue run reads ``STAGING`` while
+        # the estimator's standalone default writes the isolated Python root.
+        "MIT_CAUSAL_ESTIMATOR_OUTPUT_ROOT": str(STAGING),
     }
     prevalidated_sha256 = str(
         settings.qualification_proof.get("formal_qualification_receipt_sha256", "")

@@ -376,7 +376,13 @@ def main() -> int:
         if orders_set is not None
         else set(queue["treatment_order"].astype(int))
     )
-    invalidated = invalidate_stale_terminal_tasks(queue, selected_orders_for_invalidation)
+    # A dry run must never rewrite the queue.  Specification invalidation is a
+    # mutating repair and therefore only runs for real executions.
+    invalidated = (
+        0
+        if args.dry_run
+        else invalidate_stale_terminal_tasks(queue, selected_orders_for_invalidation)
+    )
     if invalidated:
         print(f"Invalidated {invalidated} terminal tasks from a different specification")
     eligible = eligible_indices(

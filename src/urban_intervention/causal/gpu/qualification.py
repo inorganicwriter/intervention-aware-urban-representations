@@ -246,7 +246,7 @@ def validate_formal_qualification_receipt(
     if not isinstance(qualified_environment, dict):
         raise ValueError("formal qualification receipt lacks its numerical environment")
     if verify_bound_sources:
-        audited_sources: list[Path] = []
+        audited_sources: list[str | Path] = []
         for item in audited:
             assert isinstance(item, dict)
             source = Path(str(item.get("path", "")))

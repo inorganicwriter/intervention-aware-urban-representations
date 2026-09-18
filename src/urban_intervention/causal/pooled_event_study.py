@@ -61,7 +61,14 @@ def _read_manifest(path: Path) -> dict[str, str]:
 
 
 def _manifest_anticipation_months(manifest: Mapping[str, object]) -> int | None:
-    """Read anticipation from structured metadata, then the full fingerprint."""
+    """Read anticipation from the specification fingerprint, then metadata.
+
+    The fingerprint is part of the hash-validated specification contract; the
+    top-level field can be stale after a re-run and must not override it.
+    """
+    match = re.search(r"__a(\d+)(?:__|$)", str(manifest.get("specification_fingerprint", "")))
+    if match:
+        return int(match.group(1))
     raw = manifest.get("anticipation_months")
     try:
         if raw not in (None, ""):
@@ -70,8 +77,7 @@ def _manifest_anticipation_months(manifest: Mapping[str, object]) -> int | None:
                 return value
     except (TypeError, ValueError):
         pass
-    match = re.search(r"__a(\d+)(?:__|$)", str(manifest.get("specification_fingerprint", "")))
-    return int(match.group(1)) if match else None
+    return None
 
 
 def _canonical_reference_event_time(
@@ -175,6 +181,7 @@ def read_production_effect_paths(
         "inference_draws_hash_mismatch",
         "inference_draws_unreadable",
         "inference_draws_misaligned",
+        "missing_period_column",
         "reference_specification_mismatch",
         "reference_period_missing",
     )
@@ -323,6 +330,9 @@ def read_production_effect_paths(
                 draw_frame = pd.read_parquet(draws_path)
             except (OSError, ValueError):
                 admission["inference_draws_unreadable"] += 1
+                continue
+            if "period" not in part.columns:
+                admission["missing_period_column"] += 1
                 continue
             expected_columns = [str(value) for value in part["period"]]
             draw_columns = [str(value) for value in draw_frame.columns if value != "replicate"]

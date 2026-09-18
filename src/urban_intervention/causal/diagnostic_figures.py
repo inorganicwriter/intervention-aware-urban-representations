@@ -155,6 +155,8 @@ def _pooled_pretrend_p(
     outcome: str,
     method: str,
     donor_scope: str,
+    observation_window: object = None,
+    reference_event_time: object = None,
 ) -> object:
     tests = pooled.city_pretrend
     hit = tests.loc[
@@ -163,6 +165,12 @@ def _pooled_pretrend_p(
         & tests["method"].eq(method)
         & tests["donor_scope"].eq(donor_scope)
     ]
+    # Several observation windows can share one outcome/method/scope key; the
+    # first row is not necessarily the window this figure is plotting.
+    if observation_window is not None and "observation_window" in hit.columns:
+        hit = hit.loc[hit["observation_window"].eq(observation_window)]
+    if reference_event_time is not None and "reference_event_time" in hit.columns:
+        hit = hit.loc[hit["reference_event_time"].eq(reference_event_time)]
     return hit["p_value"].iloc[0] if len(hit) else np.nan
 
 
@@ -512,6 +520,16 @@ def write_pooled_outcome_event_studies(
                     outcome=outcome,
                     method=str(method),
                     donor_scope=donor_scope,
+                    observation_window=(
+                        part["observation_window"].iloc[0]
+                        if "observation_window" in part.columns and len(part)
+                        else None
+                    ),
+                    reference_event_time=(
+                        part["reference_event_time"].iloc[0]
+                        if "reference_event_time" in part.columns and len(part)
+                        else None
+                    ),
                 )
                 city_count = int(pd.to_numeric(part["n_cities"], errors="coerce").max())
                 axis.text(
@@ -533,8 +551,9 @@ def write_pooled_outcome_event_studies(
                 axis.set_ylim(lower - 0.08 * span, upper + 0.08 * span)
         x_values = [0]
         for key in ("common_pre_min", "common_pre_max", "common_post_min", "common_post_max"):
-            if common[key] is not None:
-                x_values.append(int(common[key]))
+            value = common[key]
+            if value is not None:
+                x_values.append(int(value))
         x_min, x_max = min(x_values), max(x_values)
         padding = max((x_max - x_min) * 0.02, 0.5)
         for axis in axes:

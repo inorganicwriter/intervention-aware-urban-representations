@@ -136,12 +136,12 @@ def build_python_contract(
     # The native manifest is written last; resolve the explicit native names
     # directly so an existing R reference contract remains untouched.
     native_paths = (
-        (directory / "gsc_cv_folds.python.parquet",)
+        [directory / "gsc_cv_folds.python.parquet"]
         if estimator == "gsc"
-        else (
+        else [
             directory / "mc_cv_folds.python.parquet",
             directory / "mc_lambda_grid.python.csv",
-        )
+        ]
     )
     outputs.extend(native_paths)
     existing = [path for path in outputs if path.exists()]

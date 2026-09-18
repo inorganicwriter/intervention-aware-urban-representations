@@ -486,7 +486,7 @@ def _monthly_pair_panel(
 
     def reader(city: str) -> pd.DataFrame:
         if family == "housing":
-            return read_monthly_housing(root, city, price_measure)
+            return read_monthly_housing(root, city, price_measure)  # type: ignore[arg-type]
         selected_periods = (
             periods
             if periods is not None
@@ -656,6 +656,28 @@ def build_matching_event_study_panel(
             payload = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
+        # A hash-consistent manifest copied into another task directory would
+        # otherwise pair one treatment's grid with another treatment's control.
+        # Legacy fixtures may omit identity fields; only present, conflicting
+        # values are rejected.
+        recorded_order = payload.get("treatment_order")
+        recorded_family = payload.get("outcome_family")
+        if recorded_order is not None and int(recorded_order) != order:
+            continue
+        if recorded_family is not None and str(recorded_family) != outcome_family:
+            continue
+        identity_conflict = False
+        for column in ("city_key", "grid_id", "station_event_id", "opening_month"):
+            if column not in candidate:
+                continue
+            recorded = payload.get(column)
+            if recorded is None:
+                continue
+            if str(recorded) != str(candidate.get(column)):
+                identity_conflict = True
+                break
+        if identity_conflict:
+            continue
         details = payload.get("details")
         manifest_specification = str(payload.get("specification_fingerprint") or "")
         if not manifest_specification:
@@ -726,6 +748,16 @@ def build_matching_event_study_panel(
         candidate["specification_fingerprint"] = manifest_specification
         accepted.append(candidate)
     matched = pd.DataFrame(accepted)
+    if not matched.empty:
+        # Different specifications (price measure, anticipation, window,
+        # threshold, backend) are not comparable and must never be stacked
+        # into one TWFE regression by the default fail-open admission.
+        admitted = sorted(set(matched["specification_fingerprint"].astype(str)))
+        if len(admitted) > 1:
+            raise ValueError(
+                "event-study admission mixed multiple specification "
+                f"fingerprints: {admitted}; pass an exact --specification-fingerprint"
+            )
     parts: list[pd.DataFrame] = []
     for row in matched.to_dict("records"):
         record = pd.Series(row)

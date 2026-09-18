@@ -399,3 +399,57 @@ def test_event_study_builder_filters_manifests_by_full_specification_fingerprint
     )
 
     assert set(panel["treatment_order"]) == {1}
+
+
+def test_event_study_builder_rejects_mixed_specifications(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    controls = pd.DataFrame(
+        {
+            "treatment_order": [1, 2],
+            "status": ["matched", "matched"],
+            "control_unit_key": ["alpha::c1", "alpha::c2"],
+        }
+    )
+    families = pd.DataFrame(
+        {
+            "treatment_order": [1, 2],
+            "city_key": ["alpha", "alpha"],
+            "grid_id": ["t1", "t2"],
+            "opening_month": ["2020-01", "2020-01"],
+            "outcome_family": ["population", "population"],
+            "status": ["matched_labelled", "matched_labelled"],
+        }
+    )
+    for order, fingerprint in ((1, "spec-a"), (2, "spec-b")):
+        task = tmp_path / "tasks" / f"{order:05d}" / "population"
+        task.mkdir(parents=True)
+        labels = pd.DataFrame({"estimator_backend": ["r_reference"]})
+        labels.to_parquet(task / "labels.parquet", index=False)
+        manifest = {
+            "schema": "causal_response_labels",
+            "status": "matched_labelled",
+            "method": "frozen_matched_change_12m_baseline",
+            "outcome_family": "population",
+            "run_mode": "production",
+            "production_eligible": True,
+            "labels_sha256": event_study.file_sha256(task / "labels.parquet"),
+            "specification_fingerprint": fingerprint,
+            "price_measure": "median",
+            "details": {
+                "donor_scope": "same_city",
+                "control_unit_key": f"alpha::c{order}",
+            },
+        }
+        (task / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="mixed multiple specification"):
+        event_study.build_matching_event_study_panel(
+            "population",
+            root=tmp_path,
+            control_queue=controls,
+            family_queue=families,
+            task_root=tmp_path / "tasks",
+            min_pre=-1,
+            max_post=1,
+        )

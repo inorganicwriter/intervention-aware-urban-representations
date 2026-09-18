@@ -164,6 +164,14 @@ def test_response_artifact_preserves_expected_failures_and_quality(tmp_path: Pat
     assert gsc.uncertainty_available.all()
     assert set(matched.quality_grade) == {"matched_same_city_pass"}
     assert set(gsc.quality_grade) == {"gsc_same_city_pass"}
+    # The label control_unit_key must survive the control-queue merge; a
+    # regression here renames it to control_unit_key_x/_y.
+    assert "control_unit_key" in artifact.columns
+    assert "control_unit_key_x" not in artifact.columns
+    assert "control_unit_key_y" not in artifact.columns
+    assert set(matched.control_unit_key.astype(str)) == {"alpha::c1"}
+    assert set(matched.label_grade) == {"matched_same_city_pass"}
+    assert set(unavailable.label_grade) == {"unavailable"}
     assert not unavailable.training_mask.any()
     assert not unavailable.main_training_mask.any()
     assert not unavailable.cross_city_extension_mask.any()

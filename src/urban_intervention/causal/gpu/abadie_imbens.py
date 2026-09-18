@@ -231,7 +231,7 @@ def _bias_regression(
         coefficients = np.linalg.pinv(adjusted) @ right
     if not np.all(np.isfinite(coefficients)):
         raise RuntimeError("unable to calculate the formal matching bias adjustment")
-    return coefficients[1:]
+    return np.asarray(coefficients[1:], dtype=np.float64)
 
 
 def _conditional_variances(

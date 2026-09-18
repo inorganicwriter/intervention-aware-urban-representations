@@ -385,6 +385,40 @@ def normalize_from_train(
     return result, parameters
 
 
+def _best_quality_grade(targets: pd.DataFrame) -> pd.DataFrame:
+    """Return one quality grade per treatment, preferring available labels.
+
+    Same-city-first ordering (matched > GSC > MC within each scope; any
+    same-city path ranks above any cross-city path).  ``mc_*_pass`` requires
+    more than one pre-treatment support period and is stronger evidence than
+    ``mc_*_minimal_pre_support`` (min.T0=1), so the pass grade ranks above the
+    minimal-support grade.  When the Response Artifact provides
+    ``label_grade``, unavailable labels are never selected.
+    """
+    grade_rank = {
+        "matched_same_city_pass": 8,
+        "gsc_same_city_pass": 7,
+        "mc_same_city_pass": 6,
+        "mc_same_city_minimal_pre_support": 5,
+        "matched_cross_city_pass": 4,
+        "gsc_cross_city_pass": 3,
+        "mc_cross_city_pass": 2,
+        "mc_cross_city_minimal_pre_support": 1,
+        "pending": 0,
+    }
+    grade_column = "label_grade" if "label_grade" in targets.columns else "quality_grade"
+    ranked = targets.copy()
+    ranked["_grade_rank"] = ranked[grade_column].map(grade_rank).fillna(0).astype(int)
+    best = (
+        ranked.sort_values("_grade_rank", ascending=False)
+        .groupby("treatment_order", as_index=False)
+        .first()
+    )
+    return best[["treatment_order", grade_column]].rename(
+        columns={grade_column: "quality_grade"}
+    )
+
+
 def publish_pretraining_dataset(
     response_release: Path,
     treatments_path: Path,
@@ -457,27 +491,7 @@ def publish_pretraining_dataset(
         training_mask=("training_mask", "max"),
         final_training_mask=("final_training_mask", "max"),
     )
-    # Same-city-first ordering, mirroring the Response Artifact quality
-    # grades (matched > GSC > MC within each scope; any same-city path ranks
-    # above any cross-city path).  Grades absent from the map (e.g. GSC,
-    # minimal-pre-support MC, unavailable) sort below all ranked grades.
-    grade_rank = {
-        "matched_same_city_pass": 8,
-        "gsc_same_city_pass": 7,
-        "mc_same_city_minimal_pre_support": 6,
-        "mc_same_city_pass": 5,
-        "matched_cross_city_pass": 4,
-        "gsc_cross_city_pass": 3,
-        "mc_cross_city_minimal_pre_support": 2,
-        "mc_cross_city_pass": 1,
-        "pending": 0,
-    }
-    targets["_grade_rank"] = targets["quality_grade"].map(grade_rank).fillna(0).astype(int)
-    best_grade = (
-        targets.sort_values("_grade_rank", ascending=False)
-        .groupby("treatment_order", as_index=False)
-        .first()[["treatment_order", "quality_grade"]]
-    )
+    best_grade = _best_quality_grade(targets)
     sample_index = (
         features[["treatment_order", "split", "feature_training_mask"]]
         .merge(unit_level, on="treatment_order", how="left")

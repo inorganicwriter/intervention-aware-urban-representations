@@ -428,9 +428,11 @@ manifest。处理单元的处理后结果在 CV 和拟合前统一替换为仅�
 
 20 个候选值包含 19 个递减的正 lambda 和 `lambda=0` 端点。Python 生产与资格验证
 读取同一份持久化 folds 和 lambda grid。R 参考选择阶段使用并行 CV 路径评估完整网格。
-jackknife 删除处理单元自身的无效遗漏列。每个时期以该时期有限的 donor omission refit
-数量构造伪值和标准误。处理后原始结果缺失的时期保持不可用，其余可用时期独立执行
-最少有效 refit 门禁。
+jackknife 删除处理单元自身的无效遗漏列。伪值使用完整 refit 总数构造
+（`pseudo = N_total * theta_hat - (N_total - 1) * theta_j`），标准误按该时期有限的
+donor omission refit 数量标准化（`se = sqrt(var(pseudo) / n_finite)`），与
+`fect::jackknifed` 和 `.estimand_att_event_time_jackknife` 的实现一致。处理后原始
+结果缺失的时期保持不可用，其余可用时期独立执行最少有效 refit 门禁。
 
 ## 9. 已知局限
 

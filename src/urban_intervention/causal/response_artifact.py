@@ -865,7 +865,26 @@ def build_response_frame(
             "failure_reason": "control_failure_reason",
         }
     )
+    # The label table already carries ``control_unit_key`` and
+    # ``implementation_version``.  Any remaining overlap with the control
+    # queue must be namespaced explicitly; otherwise pandas renames both
+    # sides to ``_x``/``_y`` and silently destroys the contracted columns.
+    overlapping = [
+        column
+        for column in controls.columns
+        if column != "treatment_order" and column in artifact.columns
+    ]
+    controls = controls.rename(
+        columns={column: f"control_queue_{column}" for column in overlapping}
+    )
     artifact = artifact.merge(controls, on="treatment_order", how="left", validate="many_to_one")
+    ambiguous = [column for column in artifact.columns if column.endswith(("_x", "_y"))]
+    if ambiguous:
+        raise ValueError(
+            f"Control merge produced ambiguous columns: {sorted(ambiguous)}"
+        )
+    if "control_unit_key" not in artifact.columns:
+        raise ValueError("Control merge dropped the label control_unit_key column")
 
     artifact["label_available"] = (
         artifact["label_available"].astype("boolean").fillna(False).astype(bool)
@@ -925,6 +944,7 @@ def build_response_frame(
     artifact["quality_grade"] = np.select(
         [
             matched & same_city,
+
             gsc & artifact["method"].astype("string").str.contains("same_city", na=False),
             mc
             & mc_minimal_pre_support
@@ -950,6 +970,13 @@ def build_response_frame(
             "unavailable",
         ],
         default="pending",
+    )
+    # ``quality_grade`` describes the admitted design path; it is assigned
+    # even when the target period has no label.  ``label_grade`` additionally
+    # requires an available label so downstream summaries and pretraining
+    # sample indices never report an unavailable observation as a pass.
+    artifact["label_grade"] = artifact["quality_grade"].where(
+        artifact["label_available"], "unavailable"
     )
     artifact["training_distance_ratio"] = _safe_ratio(
         artifact.get("training_distance"), artifact.get("training_distance_threshold")
@@ -1013,6 +1040,7 @@ def build_response_frame(
         ),
         "task_status_counts": family_queue["status"].value_counts(dropna=False).to_dict(),
         "quality_grade_counts": artifact["quality_grade"].value_counts(dropna=False).to_dict(),
+        "label_grade_counts": artifact["label_grade"].value_counts(dropna=False).to_dict(),
         "specification_fingerprints": sorted(
             set(artifact["specification_fingerprint"].dropna().astype(str))
         ),

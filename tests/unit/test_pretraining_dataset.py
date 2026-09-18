@@ -9,12 +9,55 @@ import pytest
 
 from urban_intervention.causal.pretraining_dataset import (
     IDENTITY_COLUMNS,
+    _best_quality_grade,
     build_pretreatment_features,
     deterministic_city_splits,
     publish_pretraining_dataset,
     validate_response_treatment_binding,
 )
 from urban_intervention.causal.response_artifact import sha256_file
+
+
+def test_best_quality_grade_prefers_full_support_mc_and_available_labels() -> None:
+    targets = pd.DataFrame(
+        {
+            "treatment_order": [1, 1, 2, 2, 3, 3],
+            "quality_grade": [
+                "mc_same_city_minimal_pre_support",
+                "mc_same_city_pass",
+                "matched_same_city_pass",
+                "mc_same_city_pass",
+                "mc_cross_city_minimal_pre_support",
+                "mc_cross_city_pass",
+            ],
+            "label_grade": [
+                "mc_same_city_minimal_pre_support",
+                "mc_same_city_pass",
+                "unavailable",
+                "mc_same_city_pass",
+                "mc_cross_city_minimal_pre_support",
+                "mc_cross_city_pass",
+            ],
+        }
+    )
+    best = _best_quality_grade(targets).set_index("treatment_order")["quality_grade"]
+    # Full-support MC outranks minimal-support MC.
+    assert best.loc[1] == "mc_same_city_pass"
+    # An unavailable matched label must not outrank an available MC label.
+    assert best.loc[2] == "mc_same_city_pass"
+    # Cross-city ordering still prefers full support.
+    assert best.loc[3] == "mc_cross_city_pass"
+
+
+def test_best_quality_grade_falls_back_without_label_grade_column() -> None:
+    targets = pd.DataFrame(
+        {
+            "treatment_order": [1, 1],
+            "quality_grade": ["mc_same_city_pass", "gsc_same_city_pass"],
+        }
+    )
+    best = _best_quality_grade(targets).set_index("treatment_order")["quality_grade"]
+    assert best.loc[1] == "gsc_same_city_pass"
 
 
 def _write_sources(root: Path, treatments: pd.DataFrame) -> None:

@@ -4,8 +4,19 @@ import numpy as np
 
 from urban_intervention.causal.gpu.inference import (
     inference_from_standard_error,
+    jackknife_standard_error,
     normal_inference_from_replicates,
 )
+
+
+def test_jackknife_standard_error_uses_total_refits_for_pseudo_values() -> None:
+    # fect uses the total refit count (nboots / dim(y)[2]) in the pseudo-value
+    # multiplier and the finite count only in the variance divisor.
+    point = np.array([2.0, 2.0])
+    draws = np.array([[0.0, 1.0], [2.0, np.nan], [4.0, 3.0]])
+    standard_error, valid = jackknife_standard_error(point, draws)
+    np.testing.assert_array_equal(valid, [3, 2])
+    np.testing.assert_allclose(standard_error, [np.sqrt(16.0 / 3.0), 2.0])
 
 
 def test_normal_inference_records_period_specific_valid_repetitions() -> None:

@@ -40,7 +40,7 @@ working copy，本地冻结目录保持只读。
 | Sentinel-2 | n = 3.84M × m = 11（2014-2024） | Landsat 8 / Sentinel-2（GEE） | https://developers.google.com/earth-engine/datasets/catalog/COPERNICUS_S2_SR_HARMONIZED |
 | 人口 | n = 3.84M × m = 15（2010-2024） | WorldPop（GEE 2010-14 + R2024B 2015-24） | https://data.worldpop.org |
 | POI | n = 3.84M × m = 13（2012-2024） | 高德 POI 历史归档 | https://lbs.amap.com |
-| 房价月度 | n ≈ 3.84M × m = 156（每城 236,278 网格-月） | 链家/安居客/wayback 等 4 源 | 见 `docs/data/housing_data_catalog.md` |
+| 房价月度 | 3.84M 网格 × 156 月 → 1,187,043 个唯一 500m 网格-月（5,924,124 源观测） | 链家/安居客/wayback 等 4 源 | 见 `docs/data/housing_data_catalog.md` |
 | 房价季度/年度 | 每城 99,779 / 35,843 | 同上聚合 | 同上 |
 | 路网 | n = 3,839,581（2026 截面） | OSM | https://www.openstreetmap.org |
 | 区位特征 | n = 3,839,581（静态） | 中心识别（McMillen 2001，composite） | 无 |

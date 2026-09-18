@@ -13,7 +13,7 @@
 |---|---|---|
 | CPU | ≥ 32 核 | 数据读取、面板构建与 VIIRS 缓存校验 |
 | 内存 | ≥ 64 GB | PanelMatch 16k+ donor 基准单任务 >10 分钟 |
-| 磁盘 | ≥ 120 GB | `data/` 约 17 GB + VIIRS 原始月度数据 + outputs |
+| 磁盘 | ≥ 120 GB | `data/` 全量约 92 GB（含可重建的 archive/raw 约 60 GB）；必须传输的 active 子集约 11 GB，另需 outputs 空间 |
 | GPU | 4 × RTX 4090 | 因果估计默认一张卡一个 Python 进程；训练另行调度 |
 | OS | Linux (Ubuntu 22.04+) | Python 3.11；R 仅作参考验证 |
 
@@ -185,6 +185,9 @@ conda run -n mit python scripts/causal_r/run_parallel_production.py \
 - `4` 是四卡服务器的安全默认并行度：一张卡对应一个控制设计 worker 或标签分片。
 - 启动器要求 `shard-count <= GPU 数量`，让正式 bootstrap/jackknife 分配到独立显卡。
 - Phase 1 控制设计 → Phase 2 因果标签（分片并行，可断点续跑）→ Phase 3 合并回 master 队列。
+- Phase 2 可选 `--task-scheduling round_pool`（SQLite 严格屏障动态调度，要求
+  `--phase 2 --queue-phase all`，不能与 `--dry-run` 组合）；不指定时使用默认
+  `global_rounds`，两者任务产物一致。
 - 若副本中已有旧控制记录，先用 `--phase 1 --repair-stale-controls --estimator-backend python_gpu`；它只重算来源检查未通过的持久记录，已通过检查的 5,048 行继续复用。
 - 中途中断后重跑同命令（不带 `--reset-queues`）即可续跑；续跑沿用现有冻结队列。
 - GSC 控制面板秩选择和完全相同 MC 面板的 lambda 选择使用内容寻址缓存；配置、实现版本或决定调参的单元格变化会自动失效。

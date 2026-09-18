@@ -34,6 +34,8 @@
 - 因果标签队列：`scripts/causal_python/run_causal_label_queue.py`
 - 标签队列模块化入口：`scripts/causal_python/run_causal_label_queue_modular.py`（非生产入口）
 - 单任务 GSC/MC：`scripts/causal_python/run_formal_estimator.py`
+- SQLite 动态调度（可选）：`scripts/causal_python/run_round_pool.py`；
+  worker `run_round_pool_worker.py`；状态 `round_pool_status.py`
 - 三方法事件研究：`scripts/causal_python/run_all_method_event_study.py`
 - GPU 资格：`scripts/causal_gpu/run_shadow_queue.py`、`scripts/causal_gpu/audit_formal_qualification.py`
 - Response Artifact：`scripts/causal_r/build_response_artifact.py`

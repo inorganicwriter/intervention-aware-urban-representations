@@ -2,7 +2,7 @@
 
 **Version 1.1, July 2026**
 
-Historical housing price data for 42 Chinese metro cities (2012-2026), collected by archiving Wayback Machine snapshots of Lianjia, Beike, and Anjuke listing and transaction pages.
+Historical housing price data for 43 Chinese metro cities with parsed records (2012-2026) out of the 44-city project scope; collected by archiving Wayback Machine snapshots of Lianjia, Beike, and Anjuke listing and transaction pages. Changzhou has inventories but no parsed rows.
 
 ---
 

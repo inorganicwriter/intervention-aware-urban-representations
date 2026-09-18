@@ -104,6 +104,13 @@ OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
 
 四张 GPU 最多使用四个 shard。`global_rounds` 的顺序是：全部同城 Matching → 同城 GSC → 同城 MC → 跨城 Matching → 跨城 GSC → 跨城 MC。主规格必须显式写 `--anticipation-months 0 --window 1`。重复同一命令可从持久化 shard 续跑；不要为续跑添加 `--reset-queues`。
 
+可选的 `--task-scheduling round_pool` 使用 SQLite 状态库、严格六轮屏障和动态领任务，
+要求 `--phase 2 --queue-phase all`，不能与 `--dry-run` 组合。用 `--round-pool-db`
+和 `--round-pool-run-root` 指定状态库与私有队列目录，续跑传 `--round-pool-run-id`，
+硬失败任务用 `--requeue-failed` 重新入队；运行状态用
+`scripts/causal_python/round_pool_status.py --db ... --run-id ...` 查看。调度模式
+不改变估计合同，任务产物与 `global_rounds` 一致。
+
 实时监控：
 
 ```bash

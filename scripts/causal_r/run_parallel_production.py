@@ -134,13 +134,21 @@ def isolated_queue_paths(namespace: str | None) -> tuple[Path, Path, Path]:
 
 
 def initialize_isolated_queues(
-    family_queue: Path, control_queue: Path, unit_queue: Path
+    family_queue: Path, control_queue: Path, unit_queue: Path, *, force: bool = False
 ) -> None:
-    """Create pending analysis queues while preserving frozen Phase 1 controls."""
+    """Create pending analysis queues while preserving frozen Phase 1 controls.
+
+    ``force`` implements an explicit ``--reset-queues`` for an isolated queue
+    namespace; without it a namespace rebuild silently resumes the old files
+    because the canonical reset never touches namespace queues.
+    """
     targets = (family_queue, control_queue, unit_queue)
     canonical = (OUTCOME_FAMILY_QUEUE, CONTROL_DESIGN_QUEUE, COUNTERFACTUAL_QUEUE)
     if targets == canonical:
         return
+    if force:
+        for path in targets:
+            path.unlink(missing_ok=True)
     existing = [path.exists() for path in targets]
     if any(existing) and not all(existing):
         raise RuntimeError(
@@ -303,6 +311,10 @@ def phase2_causal_labels(
     transaction_count_threshold: int = 1,
     task_scheduling: str = "global_rounds",
     queue_paths: tuple[Path, Path, Path] | None = None,
+    round_pool_db: Path | None = None,
+    round_pool_run_root: Path | None = None,
+    round_pool_run_id: str | None = None,
+    queue_namespace: str | None = None,
 ) -> None:
     """Launch shard workers for the selected treatment-order sample."""
     print("=" * 60)
@@ -315,7 +327,7 @@ def phase2_causal_labels(
         else (OUTCOME_FAMILY_QUEUE, CONTROL_DESIGN_QUEUE, COUNTERFACTUAL_QUEUE)
     )
     initialize_isolated_queues(
-        master_family_base, master_control_base, master_unit_base
+        master_family_base, master_control_base, master_unit_base, force=reset_shards
     )
 
     # Validate control design is complete
@@ -364,6 +376,31 @@ def phase2_causal_labels(
             if not target.exists():
                 shutil.copy2(source, target)
     master_paths = [master_family, master_control, master_unit]
+    if task_scheduling == "round_pool":
+        if queue_phase != "all" or dry_run:
+            raise ValueError("round_pool requires --queue-phase all and cannot be a dry run")
+        phase2_round_pool(
+            shard_count=shard_count,
+            tasks_file=tasks_file,
+            orders_file=orders_file,
+            run_mode=run_mode,
+            price_measure=price_measure,
+            window=window,
+            anticipation_months=anticipation_months,
+            estimator_backend=estimator_backend,
+            gpu_ids=gpu_ids or [],
+            env=env,
+            qualification_receipt=qualification_receipt,
+            max_gsc_cross_city_donors=max_gsc_cross_city_donors,
+            gsc_donor_sampling_seed=gsc_donor_sampling_seed,
+            transaction_count_threshold=transaction_count_threshold,
+            master_paths=(master_family, master_control, master_unit),
+            round_pool_db=round_pool_db,
+            round_pool_run_root=round_pool_run_root,
+            round_pool_run_id=round_pool_run_id,
+            round_pool_queue_namespace=queue_namespace or "production",
+        )
+        return
     shard_paths = []
     for shard_id in range(shard_count):
         shard_paths.extend(shard_queue_path(master_path, shard_id) for master_path in master_paths)
@@ -511,6 +548,92 @@ def phase2_causal_labels(
     print(f"Phase 2 completed in {timedelta(seconds=int(elapsed))}")
 
 
+def phase2_round_pool(
+    *,
+    shard_count: int,
+    tasks_file: Path | None,
+    orders_file: Path | None,
+    run_mode: str,
+    price_measure: str,
+    window: int,
+    anticipation_months: int,
+    estimator_backend: str,
+    gpu_ids: list[str],
+    env: dict[str, str] | None,
+    qualification_receipt: Path | None,
+    max_gsc_cross_city_donors: int,
+    gsc_donor_sampling_seed: int,
+    transaction_count_threshold: int,
+    master_paths: tuple[Path, Path, Path],
+    round_pool_db: Path | None,
+    round_pool_run_root: Path | None,
+    round_pool_run_id: str | None,
+    round_pool_queue_namespace: str,
+) -> None:
+    """Run the SQLite-backed dynamic pool with strict Round barriers."""
+
+    family_queue, control_queue, unit_queue = master_paths
+    db_path = round_pool_db or (ROOT / "outputs" / "causal_labels" / "round_pool.sqlite")
+    run_root = round_pool_run_root or (ROOT / "outputs" / "causal_labels" / "round_pool_runs")
+    if not db_path.is_absolute():
+        db_path = ROOT / db_path
+    if not run_root.is_absolute():
+        run_root = ROOT / run_root
+    command = [
+        sys.executable,
+        str(ROOT / "scripts" / "causal_python" / "run_round_pool.py"),
+        "--db",
+        str(db_path.resolve()),
+        "--run-root",
+        str(run_root.resolve()),
+        "--family-queue",
+        str(family_queue.resolve()),
+        "--control-queue",
+        str(control_queue.resolve()),
+        "--unit-queue",
+        str(unit_queue.resolve()),
+        "--worker-count",
+        str(shard_count),
+        "--gpu-ids",
+        ",".join(gpu_ids),
+        "--run-mode",
+        run_mode,
+        "--queue-namespace",
+        round_pool_queue_namespace,
+        "--estimator-backend",
+        estimator_backend,
+        "--price-measure",
+        price_measure,
+        "--window",
+        str(window),
+        "--anticipation-months",
+        str(anticipation_months),
+        "--transaction-count-threshold",
+        str(transaction_count_threshold),
+        "--max-gsc-cross-city-donors",
+        str(max_gsc_cross_city_donors),
+        "--gsc-donor-sampling-seed",
+        str(gsc_donor_sampling_seed),
+    ]
+    if tasks_file is not None:
+        command.extend(["--tasks-file", str(tasks_file.resolve())])
+    if orders_file is not None:
+        command.extend(["--orders-file", str(orders_file.resolve())])
+    if qualification_receipt is not None:
+        command.extend(["--qualification-receipt", str(qualification_receipt.resolve())])
+    if round_pool_run_id is not None:
+        command.extend(["--run-id", round_pool_run_id])
+    child_env = (env or os.environ.copy()).copy()
+    child_env["PYTHONUNBUFFERED"] = "1"
+    child_env["MIT_PROJECT_ROOT"] = str(ROOT)
+    if VIIRS_RAW:
+        child_env["MIT_VIIRS_RAW"] = VIIRS_RAW
+    print(f"  Dynamic Round Pool database: {db_path.resolve()}")
+    result = subprocess.run(command, cwd=str(ROOT), env=child_env, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"Dynamic Round Pool failed with code {result.returncode}")
+
+
 def shard_order_range(all_orders: list[int], shard_id: int, shard_count: int) -> list[int]:
     """Orders owned by one shard, using the same split as run_causal_label_queue.py."""
     chunk_size = len(all_orders) // shard_count
@@ -567,6 +690,7 @@ def phase3_merge_shards(
     tasks_file: Path | None = None,
     run_mode: str = "production",
     queue_paths: tuple[Path, Path, Path] | None = None,
+    dry_run: bool = False,
 ) -> None:
     """Merge per-shard queue CSVs back to master and run sync_unit_queue."""
     print("=" * 60)
@@ -670,6 +794,14 @@ def phase3_merge_shards(
     n_terminal = report_family["status"].astype(str).isin(terminal).sum()
     n_total = len(report_family)
     print(f"  Terminal tasks: {n_terminal} / {n_total} ({100 * n_terminal / n_total:.1f}%)")
+
+    if dry_run:
+        print(
+            "  DRY RUN: would merge shard queues into "
+            f"{master_family}, {master_unit}, {master_control}; no files were written "
+            "and no shard queues were deleted."
+        )
+        return
 
     # Write merged master queues atomically so an interrupted merge never
     # leaves a truncated master file behind.
@@ -838,12 +970,27 @@ def main() -> int:
     )
     parser.add_argument(
         "--task-scheduling",
-        choices=("global_rounds", "task_cascade"),
+        choices=("global_rounds", "task_cascade", "round_pool"),
         default="global_rounds",
         help=(
             "Run all selected tasks through six global method/scope rounds "
-            "(default), or use the legacy one-task-at-a-time cascade."
+            "(default), use the legacy one-task-at-a-time cascade, or use "
+            "a SQLite-backed dynamically balanced pool with the same six barriers."
         ),
+    )
+    parser.add_argument(
+        "--round-pool-db",
+        type=Path,
+        help="SQLite state database for --task-scheduling round_pool; put this on local SSD when available.",
+    )
+    parser.add_argument(
+        "--round-pool-run-root",
+        type=Path,
+        help="Directory for private worker queue snapshots created by round_pool.",
+    )
+    parser.add_argument(
+        "--round-pool-run-id",
+        help="Resume an existing Round Pool run after verifying its identity.",
     )
     parser.add_argument(
         "--retry-matching",
@@ -885,6 +1032,12 @@ def main() -> int:
         parser.error("--queue-namespace requires --task-output-root")
     if args.queue_namespace is not None and (args.run_all or args.phase == 1):
         parser.error("--queue-namespace is only supported for isolated Phase 2/3 runs")
+    if args.task_scheduling == "round_pool" and (args.phase != 2 or args.run_all):
+        parser.error("--task-scheduling round_pool is currently only supported with --phase 2")
+    if args.task_scheduling == "round_pool" and args.queue_phase != "all":
+        parser.error("--task-scheduling round_pool requires --queue-phase all")
+    if args.task_scheduling == "round_pool" and args.dry_run:
+        parser.error("--task-scheduling round_pool cannot be combined with --dry-run")
     try:
         queue_paths = isolated_queue_paths(args.queue_namespace)
     except ValueError as exc:
@@ -1070,6 +1223,10 @@ def main() -> int:
                 transaction_count_threshold=args.transaction_count_threshold,
                 task_scheduling=args.task_scheduling,
                 queue_paths=queue_paths,
+                round_pool_db=args.round_pool_db,
+                round_pool_run_root=args.round_pool_run_root,
+                round_pool_run_id=args.round_pool_run_id,
+                queue_namespace=args.queue_namespace,
             )
         elif phase == 3:
             phase3_merge_shards(
@@ -1078,6 +1235,7 @@ def main() -> int:
                 tasks_file=tasks_file,
                 run_mode=args.run_mode,
                 queue_paths=queue_paths,
+                dry_run=args.dry_run,
             )
 
     elapsed = time.time() - start

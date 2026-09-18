@@ -354,6 +354,11 @@ class RepresentationDataset(torch.utils.data.Dataset[GridSample]):
         self._image_cache[order] = result
         return result
 
+    @property
+    def station_token_count(self) -> int:
+        """Number of units with a resolved station-conditioning token."""
+        return len(self._station_tokens)
+
     def __len__(self) -> int:
         return len(self._treatment_orders)
 

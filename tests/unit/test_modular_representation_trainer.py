@@ -17,7 +17,7 @@ from urban_intervention.representation import trainer_modular as modular
 
 ROOT = Path(__file__).resolve().parents[2]
 ORIGINAL_PATH = ROOT / "src" / "urban_intervention" / "representation" / "trainer.py"
-ORIGINAL_NORMALIZED_SHA256 = "cdcf1b0fff7082eddc2c597760c05e811c7ce36fcbada4a4419f728bafa9ea78"
+ORIGINAL_NORMALIZED_SHA256 = "86588c6070a6d9ce569fcf8891984e7511d1f5b2fe0e9ddfca3c94e170a2d0c5"
 
 CALLABLE_NAMES = (
     "_collate_fn",

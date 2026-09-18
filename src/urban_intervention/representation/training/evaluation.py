@@ -179,6 +179,12 @@ def build_evaluation_report(
                 n_perm=n_perm,
                 n_boot=n_boot,
                 seed=seed,
+                fit_features=(
+                    train_pool_for_baselines["features"]
+                    if train_pool_for_baselines is not None
+                    and train_pool_for_baselines["features"].shape[0] >= 2
+                    else None
+                ),
             )
             if (
                 train_pool_for_baselines is not None
@@ -192,6 +198,8 @@ def build_evaluation_report(
                     test_pool["responses"],
                     test_pool["masks"],
                     epochs=baseline_ae_epochs,
+                    hidden_dims=model.hidden_dims,
+                    embedding_dim=model.embedding_dim,
                     device=device,
                     k=k,
                     n_perm=n_perm,

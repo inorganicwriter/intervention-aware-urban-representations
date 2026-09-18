@@ -112,6 +112,17 @@ def train_representation(
         raise ValueError(
             "Every training/evaluation split needs at least 2 eligible units; " + details
         )
+    if conditioning in {"station", "opening_year_station"}:
+        if station_attributes_path is None:
+            raise ValueError(
+                "station conditioning requires --station-attributes / "
+                "station_attributes_path"
+            )
+        if train_ds.station_token_count == 0:
+            raise ValueError(
+                "station conditioning is enabled but no station attribute tokens were "
+                "loaded; check the station-attributes parquet coverage"
+            )
 
     from typing import Any
 
@@ -275,7 +286,7 @@ def train_representation(
             f"val loss {val_metrics['total']:.4f} "
             f"(rep {val_metrics['representation']:.4f}, "
             f"pred {val_metrics['prediction']:.4f}) | "
-            f"val nn_corr@5 {val_metrics.get('mean_nn_corr@k', 0):.4f} | "
+            f"val nn_corr@{eval_k} {val_metrics.get('mean_nn_corr@k', 0):.4f} | "
             f"lr {lr:.6f}{weight_note}",
             file=sys.stdout,
             flush=True,
@@ -289,7 +300,7 @@ def train_representation(
             "val_total": round(val_metrics["total"], 6),
             "val_rep": round(val_metrics["representation"], 6),
             "val_pred": round(val_metrics["prediction"], 6),
-            "val_nn_corr@5": val_metrics.get("mean_nn_corr@k", 0),
+            f"val_nn_corr@{eval_k}": val_metrics.get("mean_nn_corr@k", 0),
             "val_baseline_corr": val_metrics.get("baseline_corr", 0),
             "lr": lr,
         }

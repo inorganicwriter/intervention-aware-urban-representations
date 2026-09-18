@@ -164,6 +164,26 @@ class TestRunBaselines:
         assert "dinov2_images" not in report
 
 
+class TestPcaFitPool:
+    def test_external_fit_pool_is_recorded(self) -> None:
+        train_features, responses, masks = _pool(n=20, seed=5)
+        test_features, test_responses, test_masks = _pool(n=8, seed=6)
+        entry = pca_projection_baseline(
+            test_features,
+            test_responses,
+            test_masks,
+            k=4,
+            fit_features=train_features,
+        )
+        assert entry["fit_pool"] == "external"
+        assert entry["components"] > 0
+
+    def test_default_fit_pool_is_evaluation_pool(self) -> None:
+        features, responses, masks = _pool(n=8)
+        entry = pca_projection_baseline(features, responses, masks, k=4)
+        assert entry["fit_pool"] == "evaluation_pool"
+
+
 class TestHeadlineMetric:
     def test_extracts_nn_corr(self) -> None:
         features, responses, masks = _pool(n=12)

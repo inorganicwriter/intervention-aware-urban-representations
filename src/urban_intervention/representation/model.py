@@ -50,6 +50,7 @@ class ResponseEmbeddingModel(nn.Module):
         if conditioning not in {None, "opening_year", "station", "opening_year_station"}:
             raise ValueError(f"Unknown conditioning: {conditioning!r}")
         self.embedding_dim = embedding_dim
+        self.hidden_dims = tuple(hidden_dims)
         self.use_image_encoder = use_image_encoder
         self.image_pooling = image_pooling
         self.conditioning = conditioning
@@ -190,16 +191,20 @@ class ResponseEmbeddingModel(nn.Module):
         tab_emb = self.tab_encoder(features)
 
         if self.conditioning_embedding is not None or self.station_embedding is not None:
-            if conditioning_tokens is None and self.conditioning_embedding is not None:
-                raise ValueError("Model is conditioning-enabled but no conditioning tokens given")
-            if station_tokens is None and self.station_embedding is not None:
-                raise ValueError("Model is station-conditioning-enabled but no station tokens given")
             added = torch.zeros_like(tab_emb)
             if self.conditioning_embedding is not None:
+                if conditioning_tokens is None:
+                    raise ValueError(
+                        "Model is conditioning-enabled but no conditioning tokens given"
+                    )
                 added = added + self.conditioning_embedding(
                     conditioning_tokens.to(tab_emb.device)
                 )
             if self.station_embedding is not None:
+                if station_tokens is None:
+                    raise ValueError(
+                        "Model is station-conditioning-enabled but no station tokens given"
+                    )
                 added = added + self.station_embedding(station_tokens.to(tab_emb.device))
             tab_emb = functional.normalize(tab_emb + added, p=2, dim=1)
 

@@ -76,6 +76,14 @@ def _split_summary(name: str, evaluation: dict) -> dict:
     }
 
 
+def _nn_corr_history_key(epoch: dict | None) -> str | None:
+    """Return the run's ``val_nn_corr@k`` key instead of assuming k=5."""
+    if not epoch:
+        return None
+    keys = [str(key) for key in epoch if str(key).startswith("val_nn_corr@")]
+    return keys[0] if keys else None
+
+
 def build_model_card(run_dir: Path, out_path: Path | None = None) -> dict:
     """Compose the model card from an existing run directory."""
     run_dir = Path(run_dir)
@@ -92,6 +100,7 @@ def build_model_card(run_dir: Path, out_path: Path | None = None) -> dict:
     checkpoint = torch.load(run_dir / "best_model.pt", map_location="cpu", weights_only=True)
 
     best_epoch = min(history, key=lambda entry: entry["val_total"]) if history else None
+    nn_corr_key = _nn_corr_history_key(best_epoch)
     card: dict = {
         "schema": "urban_intervention_model_card",
         "dataset_id": config.get("dataset_id", ""),
@@ -114,7 +123,10 @@ def build_model_card(run_dir: Path, out_path: Path | None = None) -> dict:
             "epochs_logged": len(history),
             "best_epoch": best_epoch.get("epoch") if best_epoch else None,
             "best_val_total_loss": best_epoch.get("val_total") if best_epoch else None,
-            "best_val_nn_corr@5": best_epoch.get("val_nn_corr@5") if best_epoch else None,
+            "best_val_nn_corr": best_epoch.get(nn_corr_key)
+            if best_epoch and nn_corr_key
+            else None,
+            "nn_corr_metric": nn_corr_key or "val_nn_corr@5",
             "final_val_total_loss": history[-1].get("val_total") if history else None,
         },
         "test_metrics": test_metrics,
@@ -225,10 +237,11 @@ def _render_markdown(card: dict) -> str:
         f"response dim {splits.get('response_dim')}"
     )
     history = card.get("training_history", {})
+    nn_corr_metric = str(history.get("nn_corr_metric", "val_nn_corr@5")).removeprefix("val_")
     lines.append(
         "**History**: best epoch "
         f"{history.get('best_epoch')} (val total loss {history.get('best_val_total_loss')}, "
-        f"val nn_corr@5 {history.get('best_val_nn_corr@5')}); "
+        f"{nn_corr_metric} {history.get('best_val_nn_corr')}); "
         f"final val total loss {history.get('final_val_total_loss')}"
     )
     lines.append("")

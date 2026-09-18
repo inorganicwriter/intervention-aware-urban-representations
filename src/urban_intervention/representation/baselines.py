@@ -105,21 +105,30 @@ def pca_projection_baseline(
     n_boot: int = 200,
     seed: int = 42,
     components: int = DEFAULT_PROJECTION_DIM,
+    fit_features: torch.Tensor | None = None,
 ) -> dict[str, object]:
     """Centred SVD projection of the raw features (appearance-only geometry).
 
-    The SVD is fitted on this pool itself; it is unsupervised and never touches
-    response labels, so it stays an honest no-response baseline.
+    When ``fit_features`` is supplied, the centre and basis are estimated on
+    that pool (the training split) and only applied to ``features``; otherwise
+    the projection is fitted transductively on the evaluated pool itself.  The
+    baseline never touches response labels either way.
     """
     n = features.shape[0]
     if n < 2:
         return {"note": "pool smaller than 2 units", "n_units": n}
-    centered = features - features.mean(dim=0, keepdim=True)
-    _, _, vt = torch.linalg.svd(centered, full_matrices=False)
+    reference = features if fit_features is None else fit_features
+    if reference.shape[0] < 2:
+        return {"note": "fit pool smaller than 2 units", "n_units": n}
+    center = reference.mean(dim=0, keepdim=True)
+    centered_reference = reference - center
+    _, _, vt = torch.linalg.svd(centered_reference, full_matrices=False)
     basis = vt[: min(components, vt.shape[0])].T
+    centered = features - center
     embeddings = functional.normalize(centered @ basis, p=2, dim=1)
     entry = baseline_metric_entry(embeddings, responses, masks, k=k, n_perm=n_perm, n_boot=n_boot, seed=seed)
     entry["components"] = int(basis.shape[1])
+    entry["fit_pool"] = "external" if fit_features is not None else "evaluation_pool"
     return entry
 
 
@@ -204,18 +213,28 @@ def run_baselines(
     n_perm: int = 100,
     n_boot: int = 200,
     seed: int = 42,
+    fit_features: torch.Tensor | None = None,
 ) -> dict[str, object]:
     """Compute all baselines on one pool; returns a report section.
 
     ``image_batches`` is optional: the DINOv2 baseline is only included when
     image batches (with actual street-view tensors) are supplied.
+    ``fit_features`` is the train pool used to fit the PCA baseline so its
+    projection is not estimated on the evaluated (held-out) units.
     """
     baselines: dict[str, object] = {
         "random_projection": random_projection_baseline(
             features, responses, masks, k=k, n_perm=n_perm, n_boot=n_boot, seed=seed
         ),
         "pca_features": pca_projection_baseline(
-            features, responses, masks, k=k, n_perm=n_perm, n_boot=n_boot, seed=seed
+            features,
+            responses,
+            masks,
+            k=k,
+            n_perm=n_perm,
+            n_boot=n_boot,
+            seed=seed,
+            fit_features=fit_features,
         ),
     }
     if image_batches is not None:

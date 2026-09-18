@@ -11,6 +11,7 @@ from urban_intervention.representation.dataset import RepresentationDataset, col
 from urban_intervention.representation.encoder import TabularEncoder
 from urban_intervention.representation.loss import (
     _pairwise_response_similarity,
+    _precision_weights,
     combined_representation_loss,
     embedding_distance_loss,
     prediction_loss,
@@ -18,6 +19,22 @@ from urban_intervention.representation.loss import (
     total_loss,
 )
 from urban_intervention.representation.model import MultiHeadPredictor, ResponseEmbeddingModel
+
+
+def test_precision_weights_impute_missing_se_at_family_median() -> None:
+    se = torch.tensor([0.05, float("nan"), 0.1, 0.2])
+    weights = _precision_weights(se)
+    expected_reference = 0.1  # median of the valid [0.05, 0.1, 0.2]
+    assert torch.isfinite(weights).all()
+    assert torch.allclose(
+        weights[1], torch.tensor(1.0 / (expected_reference**2 + 1e-8)), rtol=1e-5
+    )
+    assert torch.allclose(weights[0], torch.tensor(1.0 / (0.05**2 + 1e-8)), rtol=1e-5)
+
+
+def test_precision_weights_all_missing_fall_back_to_unit_weights() -> None:
+    weights = _precision_weights(torch.tensor([float("nan"), float("inf")]))
+    assert torch.allclose(weights, torch.ones(2), rtol=1e-5)
 
 
 class TestTabularEncoder:

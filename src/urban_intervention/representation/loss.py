@@ -203,6 +203,23 @@ def combined_representation_loss(
     return alpha * l_alignment + (1 - alpha) * l_distance
 
 
+def _precision_weights(se_values: torch.Tensor) -> torch.Tensor:
+    """Return 1/SE² precision weights with missing SE imputed at the median.
+
+    Matched labels carry no standard error by design.  A literal weight of 1.0
+    would give them ~1/SE² (hundreds of times) less influence than GSC/MC
+    cells; using the family's median observed precision keeps the weighting
+    scale-consistent across methods.
+    """
+    valid = torch.isfinite(se_values) & (se_values > 0)
+    if valid.any():
+        reference = se_values[valid].median()
+        se_values = torch.where(valid, se_values, reference)
+    else:
+        se_values = torch.ones_like(se_values)
+    return 1.0 / (se_values**2 + 1e-8)
+
+
 def prediction_loss(
     predictions: dict[str, torch.Tensor],
     responses: torch.Tensor,
@@ -223,14 +240,9 @@ def prediction_loss(
             continue
 
         diff = pred[mask] - target[mask]
-        if se is None:
-            weight = torch.ones_like(diff)
-        else:
-            se_w = se[mask]
-            se_w = torch.where(
-                torch.isfinite(se_w) & (se_w > 0), se_w, torch.ones_like(se_w)
-            )
-            weight = 1.0 / (se_w**2 + 1e-8)
+        weight = (
+            torch.ones_like(diff) if se is None else _precision_weights(se[mask])
+        )
         total += (weight * diff**2).sum() / weight.sum()
         count += 1
 

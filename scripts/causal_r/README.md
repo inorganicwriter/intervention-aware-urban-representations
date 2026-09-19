@@ -238,10 +238,13 @@ formal training.
 
 GSC and MC task outputs keep negative `event_time` rows (pre-period
 counterfactual gaps); these are the per-grid event-study coefficients. Their
-monthly values use actual calendar offsets: under the main specification the
-clean pre-period is `-42:-7`, while anticipation `-6:-1` is excluded. The
-label queue publishes only post horizons, so the event-study aggregator reads
-the estimator staging directly:
+monthly values use actual calendar offsets: under the main specification
+(`anticipation_months=0`) the clean pre-period is `-36:-1` with omitted
+reference `-1`, and `t=0` is retained as the real impact period. The separate
+`anticipation_months=6` robustness run uses clean pre `-42:-7`, reference `-7`
+and reports `-6:-1` as possible anticipation. The label queue publishes only
+post horizons, so the event-study aggregator reads the estimator staging
+directly:
 
 ```powershell
 & $rscript scripts/causal_r/run_event_study_aggregation.R

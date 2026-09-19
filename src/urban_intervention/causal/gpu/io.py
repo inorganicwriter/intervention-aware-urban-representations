@@ -351,7 +351,7 @@ def compare_inference_paths(
     *,
     relative_rmse_tolerance: float,
     minimum_ci_zero_agreement: float = 0.9,
-) -> tuple[pd.DataFrame, dict[str, float | bool | int]]:
+) -> tuple[pd.DataFrame, dict[str, object]]:
     """Compare formal SE paths and 95% zero-coverage decisions to R labels."""
     if relative_rmse_tolerance <= 0 or not 0 < minimum_ci_zero_agreement <= 1:
         raise ValueError("invalid inference parity tolerances")
@@ -394,7 +394,7 @@ def compare_inference_paths(
     comparison["inference_comparable"] = finite
     comparable = comparison.loc[finite].copy()
     if len(comparable) < 2:
-        metrics: dict[str, float | bool | int] = {
+        metrics: dict[str, object] = {
             "periods": len(comparison),
             "comparable_periods": len(comparable),
             "standard_error_relative_rmse": float("nan"),

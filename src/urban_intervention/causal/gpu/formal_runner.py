@@ -138,6 +138,16 @@ def _resolve_panel_metadata(
     metadata.setdefault(
         "frequency", "monthly" if request.outcome_family in {"housing", "viirs"} else "annual"
     )
+    if str(metadata["frequency"]) == "monthly" and "anticipation_months" not in metadata:
+        # Defaulting to zero would silently move the omitted reference period
+        # from -7 to -1 and leak six anticipation months into the clean-pre
+        # window.  The panel builder always records this field, so a missing
+        # value means the caller supplied an incomplete metadata contract.
+        raise ValueError(
+            "monthly panel metadata lacks anticipation_months; refusing to assume "
+            "anticipation=0 for the clean-pre window"
+        )
+    metadata.setdefault("anticipation_months", 0)
     metadata.setdefault("opening_period_excluded", request.opening_month)
     metadata.setdefault("target_effect_scale_to_original_units", 1.0)
     metadata.setdefault("target_center_to_original_units", 0.0)
@@ -418,13 +428,13 @@ def _validate_production_estimator_config(
                 "max_iter=5000, tol=1e-5 and minimum_valid_fraction>=0.9"
             )
         return
-    config = mc_config or MatrixCompletionConfig(inference="jackknife")
+    mc_resolved = mc_config or MatrixCompletionConfig(inference="jackknife")
     if (
-        config.inference != "jackknife"
-        or not config.batch_inference
-        or config.max_iter != 5000
-        or not math.isclose(config.tol, 1e-5, rel_tol=0.0, abs_tol=1e-15)
-        or config.minimum_valid_fraction < 0.9
+        mc_resolved.inference != "jackknife"
+        or not mc_resolved.batch_inference
+        or mc_resolved.max_iter != 5000
+        or not math.isclose(mc_resolved.tol, 1e-5, rel_tol=0.0, abs_tol=1e-15)
+        or mc_resolved.minimum_valid_fraction < 0.9
     ):
         raise ValueError(
             "production MC requires batched unit jackknife, max_iter=5000, "

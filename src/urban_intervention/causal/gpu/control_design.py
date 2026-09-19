@@ -663,7 +663,7 @@ def design_grid_control(
             root=root,
             target_feature_data=target_features,
             donor_universe=donor_universe,
-            progress=lambda details: report(**details),
+            progress=lambda details: report(**details),  # type: ignore[arg-type]
         )
         report(
             "matching",

@@ -87,7 +87,11 @@ python scripts/causal_gpu/audit_formal_qualification.py \
 
 `--rebuild-python-contracts` is required whenever estimator or contract source
 changed; without it the queue reuses existing native tuning contracts and can
-issue a receipt against stale folds.
+issue a receipt against stale folds. When the qualification-bound estimator
+sources are unchanged and the stored shadow manifests still pass their
+source-fingerprint checks, re-running `audit_formal_qualification.py` over the
+existing root is sufficient: do not pass `--rebuild-python-contracts`, because
+rebuilt contracts change the bound input hashes and force full parity re-runs.
 
 The Matching references include both design-stage selections and final
 fixed-control label paths. Production rejects a missing, ineligible, expired or

@@ -102,9 +102,11 @@ multiple independent writers.
 
 ## Work required before formal production
 
-1. Re-run three Matching, three GSC and three MC parity tasks on the RTX 4090
-   server for the current source tree and issue the environment-bound
-   qualification receipt.
+1. Confirm the environment-bound qualification receipt. If the
+   qualification-bound GPU estimator sources still match the signed revision
+   and the stored shadow manifests pass, re-auditing the existing root
+   (`audit_formal_qualification.py`) is enough; re-run the three Matching,
+   three GSC and three MC parity tasks only when a bound source changed.
 2. Repair any stale Phase 1 control records in the server working copy with
    `--repair-stale-controls`, then run the server dry-run and bounded test.
 3. Run the 5,048-grid Phase 2 label queue (20,192 family-level tasks).
@@ -143,11 +145,14 @@ the same source tree and numerical environment. Qualification does not run the
 5,048-row production queue. Production begins after qualification and the
 server dry run both succeed.
 
-The current source tree changed estimator and inference sources on 2026-09-19
-(MC jackknife parity, event-study admission, artifact schema and queue safety).
-Any receipt issued before that change is stale by construction and must be
-regenerated; cached Python task artifacts bound to an old receipt are
-invalidated and recomputed rather than silently reused.
+The qualification-bound GPU estimator sources (`estimator_source_files` plus
+`gpu/workers.py`) are kept at the signed revision. The 2026-09-19 maintenance
+changes are confined to non-bound layers (queue safety, Response Artifact
+publishing, event-study admission, pretraining index, representation and
+docs), so an environment-bound receipt issued for the signed revision remains
+reusable and can be re-audited from the stored shadow manifests. If a bound
+source changes later, re-run the three Matching, three GSC and three MC parity
+tasks before using the receipt.
 
 ## Representation output contract
 

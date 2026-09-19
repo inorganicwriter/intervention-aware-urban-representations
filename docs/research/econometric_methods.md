@@ -592,22 +592,19 @@ MC 标签为：
 L_i,t = Y_i,t - Y_hat_i,t(0)
 ```
 
-正式 MC 使用单位 leave-one-out jackknife。对每个 donor 单位 `j` 删除该单位，固定已经选择的 \(\lambda\)，重新拟合 MC 并得到目标效应路径 \(\widehat\tau_t^{(-j)}\)；处理目标本身保留在每次拟合中。令 `N_total` 为 leave-one-out 重拟合总数（等于 donor 单位数），伪值为：
+正式 MC 使用单位 leave-one-out jackknife。对每个 donor 单位 `j` 删除该单位，固定已经选择的 \(\lambda\)，重新拟合 MC 并得到目标效应路径 \(\widehat\tau_t^{(-j)}\)。令总单位数为 `N`，伪值为：
 
 ```text
-p_t^(-j) = N_total * τ_hat_t - (N_total - 1) * τ_hat_t^(-j)
+p_t^(-j) = N * τ_hat_t - (N - 1) * τ_hat_t^(-j)
 ```
 
-jackknife 标准误为有效伪值的样本方差除以该期的有效重拟合数量：
+jackknife 标准误为有效伪值的样本方差除以有效数量：
 
 ```text
 SE_t^JK = sqrt(var({p_t^(-j)}) / n_valid,t)
 ```
 
-伪值乘数始终使用总重拟合数，只有方差除数使用当期有限重拟合数；这与
-`fect::jackknifed` 和 `.estimand_att_event_time_jackknife` 的实现一致。某期
-leave-one-out 重拟合缺失时该期仍可使用其余有限伪值，但乘数不随之缩小。有效重拟合
-数量和失败原因写入推断记录。
+当前实现使用 (N-1) 个 donor 删除重拟合，处理目标本身保留在每次拟合中。有效重拟合数量和失败原因写入推断记录。
 
 ### 6.4 MC 诊断
 

@@ -156,25 +156,21 @@ def jackknife_standard_error(
 ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.int64]]:
     """Return fect-equivalent unit-jackknife SEs and valid refit counts.
 
-    The pseudo-value multiplier always uses the *total* number of refits
-    (``fect::jackknifed`` uses ``N <- dim(y)[2]`` and
-    ``.estimand_att_event_time_jackknife`` uses ``nboots``), while the
-    variance is scaled by the number of finite refits at that period
-    (``vn = N - n_missing``).  Substituting the finite count in the multiplier
-    (as an earlier version did) deviates from the R reference whenever a
-    leave-one-out refit is missing at a period.
+    ``fect`` removes an invalid leave-one-out column before constructing
+    pseudo-values.  Consequently, each period must use the number of finite
+    refits for that period as ``N``.  Counting an omitted treated unit whose
+    refit is undefined inflates the standard error.
     """
     point = np.asarray(estimate, dtype=np.float64)
     draws = np.asarray(leave_one_out_estimates, dtype=np.float64)
     if point.ndim != 1 or draws.ndim != 2 or draws.shape[1] != point.size:
         raise ValueError("leave-one-out estimates must be refits by periods")
-    total = int(draws.shape[0])
     valid = np.sum(np.isfinite(draws), axis=0).astype(np.int64)
     standard_error = np.full(point.shape, np.nan, dtype=np.float64)
     for period in np.flatnonzero(np.isfinite(point) & (valid >= 2)):
         local = draws[np.isfinite(draws[:, period]), period]
         count = local.size
-        pseudo_values = point[period] * total - local * (total - 1)
+        pseudo_values = point[period] * count - local * (count - 1)
         standard_error[period] = float(
             np.sqrt(np.var(pseudo_values, ddof=1) / count)
         )

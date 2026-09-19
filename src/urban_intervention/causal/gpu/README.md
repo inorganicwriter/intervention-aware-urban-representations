@@ -131,11 +131,9 @@ fit.
 The Python-native CV contract is the formal tuning contract. Qualification and
 production both load its persisted folds, grid and panel hash. R labels remain
 the reference for point-path and inference parity. MC jackknife pseudo-values
-use the total number of leave-one-out refits in the multiplier
-(`p = N_total * theta_hat - (N_total - 1) * theta_j`, matching
-`fect::jackknifed`) and the per-period finite refit count only as the variance
-divisor. A missing treated post-period remains unavailable and does not enter
-the minimum-refit gate for the other publishable periods.
+use the finite donor-omission refits at each period. A missing treated
+post-period remains unavailable and does not enter the minimum-refit gate for
+the other publishable periods.
 
 Housing transaction support is configurable without changing the default:
 

@@ -50,7 +50,7 @@
 | 核范数目标 | \(\min_L |\Omega|^{-1}\sum_{(i,t)\in\Omega}(Y_{it}-L_{it})^2+\lambda\|L\|_*\) | [3.7](econometric_methods.md#37-mc-的低秩结构) |
 | MC 标签 | \(L_{i,t}=Y_{i,t}-\widehat L_{i,t}\) | [6.1](econometric_methods.md#61-矩阵结构) |
 | CV 误差 | \(MSPE(\lambda)=|S|^{-1}\sum_{(i,t)\in S}[Y_{it}-\widehat Y_{it}(\lambda)]^2\) | [6.2](econometric_methods.md#62-lambda-交叉验证) |
-| Jackknife 伪值 | \(p_t^{(-j)}=N_{total}\widehat τ_t-(N_{total}-1)\widehat τ_t^{(-j)}\) | [6.3](econometric_methods.md#63-mc-标签和-jackknife) |
+| Jackknife 伪值 | \(p_t^{(-j)}=N\widehat τ_t-(N-1)\widehat τ_t^{(-j)}\) | [6.3](econometric_methods.md#63-mc-标签和-jackknife) |
 | Jackknife 标准误 | \(SE_t^{JK}=\sqrt{var(p_t^{(-j)})/n_{valid,t}}\) | [6.3](econometric_methods.md#63-mc-标签和-jackknife) |
 
 代码入口：[`src/urban_intervention/causal/gpu/matrix_completion.py`](../../src/urban_intervention/causal/gpu/matrix_completion.py)。

@@ -145,14 +145,22 @@ the same source tree and numerical environment. Qualification does not run the
 5,048-row production queue. Production begins after qualification and the
 server dry run both succeed.
 
-The qualification-bound GPU estimator sources (`estimator_source_files` plus
-`gpu/workers.py`) are kept at the signed revision. The 2026-09-19 maintenance
-changes are confined to non-bound layers (queue safety, Response Artifact
-publishing, event-study admission, pretraining index, representation and
-docs), so an environment-bound receipt issued for the signed revision remains
-reusable and can be re-audited from the stored shadow manifests. If a bound
-source changes later, re-run the three Matching, three GSC and three MC parity
-tasks before using the receipt.
+A reviewed, non-numerical change to qualification-bound sources (comments,
+typing, error paths) can reuse an existing eligible receipt through an
+attested drift waiver:
+
+```bash
+python scripts/causal_gpu/issue_qualification_waiver.py \
+  --receipt outputs/causal_gpu/formal_qualification.json \
+  --reason "<reviewed diff summary>" --confirm-no-numerical-change
+```
+
+Production passes it with `--qualification-waiver <path>` (or
+`MIT_CAUSAL_QUALIFICATION_WAIVER`). The waiver binds the receipt digest, the
+current estimator fingerprints and every bound source hash, and never
+overrides parity, quality, convergence, environment or bound-input gates. Any
+change that can affect estimator numerics still requires re-running the three
+Matching, three GSC and three MC parity tasks.
 
 ## Representation output contract
 

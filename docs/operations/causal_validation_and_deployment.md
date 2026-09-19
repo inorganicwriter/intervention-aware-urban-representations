@@ -62,7 +62,19 @@ test -d outputs/viirs_monthly && echo 'VIIRS cache present'
 
 ## 4. 形式资格与代码指纹
 
-若 Matching、GSC 或 MC 任一资格绑定源码发生变化，必须重跑对应的 3 个 parity 任务。绑定范围是三个方法各自的 `estimator_source_files`（含公共文件）加上 `gpu/workers.py`；只改该范围之外的代码（队列安全、Response Artifact 发布、事件研究 admission、表示学习、文档）不需要重跑 parity，直接对已有 shadow 根目录重新运行 `audit_formal_qualification.py` 即可。当前 Matching/VIIRS 处理前特征与控制设计代码发生变化时，至少重跑 Matching；为避免遗漏，发布前推荐三方法一起跑：
+若 Matching、GSC 或 MC 任一资格绑定源码发生变化，必须重跑对应的 3 个 parity 任务。绑定范围是三个方法各自的 `estimator_source_files`（含公共文件）加上 `gpu/workers.py`；只改该范围之外的代码（队列安全、Response Artifact 发布、事件研究 admission、表示学习、文档）不需要重跑 parity，直接对已有 shadow 根目录重新运行 `audit_formal_qualification.py` 即可。
+
+绑定范围内的改动若经复核确认不涉及估计数值（注释、类型注解、纯错误路径），可以签发 Drift Waiver 复用现有凭证：
+
+```bash
+python scripts/causal_gpu/issue_qualification_waiver.py \
+  --receipt outputs/causal_gpu/formal_qualification.json \
+  --reason "<reviewed diff summary>" --confirm-no-numerical-change
+```
+
+生产运行时加 `--qualification-waiver outputs/causal_gpu/qualification_drift_waiver.json`（或设置 `MIT_CAUSAL_QUALIFICATION_WAIVER`）。Waiver 绑定凭证摘要、当前估计器指纹和全部绑定源码哈希；parity、质量、收敛、数值环境和绑定输入任一不合格时，签发脚本会拒绝，不能用 waiver 绕过。任何可能影响估计数值的改动仍必须重跑对应 parity。
+
+当前 Matching/VIIRS 处理前特征与控制设计代码发生变化时，至少重跑 Matching；为避免遗漏，发布前推荐三方法一起跑：
 
 ```bash
 python scripts/causal_gpu/run_shadow_queue.py --formal-qualification --estimators matching,gsc,mc --max-tasks-per-estimator 3 --gpu-ids 0,1,2,3 --retry --rebuild-python-contracts --output-root outputs/complete_estimators/gpu_formal_qualification

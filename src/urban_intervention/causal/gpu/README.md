@@ -93,6 +93,28 @@ source-fingerprint checks, re-running `audit_formal_qualification.py` over the
 existing root is sufficient: do not pass `--rebuild-python-contracts`, because
 rebuilt contracts change the bound input hashes and force full parity re-runs.
 
+## Qualification drift waiver
+
+Small, reviewed changes to qualification-bound sources (comments, typing,
+error paths) do not have to force a full 3+3+3 parity re-run. Issue an
+attested waiver against an existing eligible receipt:
+
+```bash
+python scripts/causal_gpu/issue_qualification_waiver.py \
+  --receipt outputs/causal_gpu/formal_qualification.json \
+  --reason "<reviewed diff summary>" --confirm-no-numerical-change
+```
+
+Production consumes it with `--qualification-waiver <path>` (or
+`MIT_CAUSAL_QUALIFICATION_WAIVER`). The waiver binds the receipt digest, the
+current estimator fingerprints and the current hash of every bound source, and
+records the changed files plus the operator reason. It never overrides parity,
+quality, convergence, environment or bound-input gates: if any of those fail,
+the issuer refuses and the receipt is unusable until they pass again. The
+waiver digest is written into every task manifest produced under it. Rebuild
+the qualification receipt from fresh parity tasks when a change can affect
+estimator numerics.
+
 The Matching references include both design-stage selections and final
 fixed-control label paths. Production rejects a missing, ineligible, expired or
 subsequently modified qualification source. Each shard performs the full

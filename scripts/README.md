@@ -37,7 +37,8 @@
 - SQLite 动态调度（可选）：`scripts/causal_python/run_round_pool.py`；
   worker `run_round_pool_worker.py`；状态 `round_pool_status.py`
 - 三方法事件研究：`scripts/causal_python/run_all_method_event_study.py`
-- GPU 资格：`scripts/causal_gpu/run_shadow_queue.py`、`scripts/causal_gpu/audit_formal_qualification.py`
+- GPU 资格：`scripts/causal_gpu/run_shadow_queue.py`、`scripts/causal_gpu/audit_formal_qualification.py`、
+  `scripts/causal_gpu/issue_qualification_waiver.py`（仅用于复核为非数值改动的 Drift Waiver）
 - Response Artifact：`scripts/causal_r/build_response_artifact.py`
 - 训练前数据集：`scripts/causal_r/build_pretraining_dataset.py`
 

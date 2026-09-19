@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from collections import Counter
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -23,12 +25,117 @@ from .provenance import (
 )
 
 QUALIFICATION_SCHEMA = "causal_gpu_formal_qualification_environment_bound"
+WAIVER_SCHEMA = "causal_gpu_qualification_drift_waiver"
+WAIVER_ATTESTATION = "operator_reviewed_no_numerical_change"
+WAIVER_ENV_VAR = "MIT_CAUSAL_QUALIFICATION_WAIVER"
+
+
+def _waiver_source_hashes(waiver: Mapping[str, Any] | None) -> Mapping[str, Any]:
+    if not isinstance(waiver, Mapping):
+        return {}
+    mapping = waiver.get("source_sha256")
+    return mapping if isinstance(mapping, Mapping) else {}
+
+
+def _waiver_covers_estimator_code(
+    waiver: Mapping[str, Any] | None, estimator: str
+) -> bool:
+    if not isinstance(waiver, Mapping):
+        return False
+    fingerprints = waiver.get("code_fingerprints")
+    return isinstance(fingerprints, Mapping) and fingerprints.get(
+        estimator
+    ) == estimator_code_fingerprint(estimator)
+
+
+def _waiver_covers_source_records(
+    waiver: Mapping[str, Any] | None, records: object
+) -> bool:
+    """Return True only if every drifted record is covered by the waiver.
+
+    Unchanged records do not need an entry.  Changed or missing records must
+    match the waiver's recorded current hash exactly.
+    """
+    if not isinstance(waiver, Mapping) or not isinstance(records, list) or not records:
+        return False
+    mapping = _waiver_source_hashes(waiver)
+    if not mapping:
+        return False
+    for record in records:
+        if not isinstance(record, Mapping):
+            return False
+        path = Path(str(record.get("path", "")))
+        try:
+            resolved = str(path.resolve())
+        except OSError:
+            return False
+        expected = mapping.get(resolved)
+        if expected is None:
+            if path.is_file() and str(record.get("sha256", "")) == file_sha256(path):
+                continue
+            return False
+        if not path.is_file() or file_sha256(path) != str(expected):
+            return False
+    return True
+
+
+def _waiver_covers_estimator_sources(
+    waiver: Mapping[str, Any] | None, estimator: str
+) -> bool:
+    mapping = _waiver_source_hashes(waiver)
+    if not mapping:
+        return False
+    for path in estimator_source_files(estimator):
+        if mapping.get(str(path.resolve())) != file_sha256(path):
+            return False
+    return True
+
+
+def load_qualification_waiver(
+    path: str | Path,
+    *,
+    receipt_path: str | Path,
+    receipt_sha256: str,
+) -> dict[str, Any]:
+    """Load and validate an operator-attested source-drift waiver.
+
+    A waiver never overrides parity, quality, convergence or environment
+    gates.  It only lets an otherwise eligible receipt survive changes to the
+    qualification-bound source files that the operator has reviewed as
+    non-numerical.
+    """
+    waiver_path = Path(path).resolve()
+    if not waiver_path.is_file():
+        raise ValueError(f"qualification waiver is unavailable: {waiver_path}")
+    try:
+        payload = json.loads(waiver_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"unreadable qualification waiver {waiver_path}: {exc}") from exc
+    if payload.get("schema") != WAIVER_SCHEMA:
+        raise ValueError("qualification waiver has an unknown schema")
+    if Path(str(payload.get("receipt_path", ""))).resolve() != Path(receipt_path).resolve():
+        raise ValueError("qualification waiver is bound to a different receipt")
+    if str(payload.get("receipt_sha256", "")) != receipt_sha256:
+        raise ValueError("qualification waiver was issued for a different receipt revision")
+    if payload.get("attestation") != WAIVER_ATTESTATION:
+        raise ValueError("qualification waiver lacks the required operator attestation")
+    if not str(payload.get("reason", "")).strip():
+        raise ValueError("qualification waiver lacks a reason")
+    if not isinstance(payload.get("code_fingerprints"), dict):
+        raise ValueError("qualification waiver lacks estimator code fingerprints")
+    if not _waiver_source_hashes(payload):
+        raise ValueError("qualification waiver lacks bound source hashes")
+    resolved = dict(payload)
+    resolved["_path"] = str(waiver_path)
+    resolved["_sha256"] = file_sha256(waiver_path)
+    return resolved
 
 
 def audit_shadow_manifests(
-    paths: list[str | Path],
+    paths: Sequence[str | Path],
     *,
     minimum_parity_tasks: int = 3,
+    waiver: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Audit artifacts without mutating or promoting any result."""
     reasons: list[str] = []
@@ -54,9 +161,11 @@ def audit_shadow_manifests(
             item_reasons.append("stale schema")
         if payload.get("implementation_version") != GPU_IMPLEMENTATION_VERSION:
             item_reasons.append("stale implementation")
-        if estimator in required_sources and payload.get(
-            "code_fingerprint"
-        ) != estimator_code_fingerprint(estimator):
+        if (
+            estimator in required_sources
+            and payload.get("code_fingerprint") != estimator_code_fingerprint(estimator)
+            and not _waiver_covers_estimator_code(waiver, estimator)
+        ):
             item_reasons.append("estimator source fingerprint differs from current code")
         if payload.get("formal_eligible") is not False:
             item_reasons.append("shadow manifest makes an invalid formal claim")
@@ -133,8 +242,12 @@ def audit_shadow_manifests(
             ):
                 item_reasons.append("R/Python final matching-label parity is unavailable or failed")
         source_fingerprints = payload.get("source_fingerprints")
+        source_waived = False
         if not fingerprints_match(source_fingerprints, verify_content=True):
-            item_reasons.append("source fingerprints are missing or stale")
+            if _waiver_covers_source_records(waiver, source_fingerprints):
+                source_waived = True
+            else:
+                item_reasons.append("source fingerprints are missing or stale")
         elif estimator in required_sources:
             source_records = {
                 str(Path(str(record.get("path", ""))).resolve()): str(
@@ -155,9 +268,12 @@ def audit_shadow_manifests(
                 for path in estimator_source_files(estimator)
             }
             if any(source_records.get(path) != digest for path, digest in current_sources.items()):
-                item_reasons.append(
-                    "qualified estimator sources do not match the current source tree"
-                )
+                if _waiver_covers_estimator_sources(waiver, estimator):
+                    source_waived = True
+                else:
+                    item_reasons.append(
+                        "qualified estimator sources do not match the current source tree"
+                    )
         inference = payload.get("inference", {})
         if estimator in {"gsc", "mc"} and (
             not isinstance(inference, dict)
@@ -174,6 +290,7 @@ def audit_shadow_manifests(
                 "code_fingerprint": payload.get("code_fingerprint"),
                 "passed": not item_reasons,
                 "reasons": item_reasons,
+                "source_waived": bool(source_waived),
             }
         )
     for estimator in ("matching", "gsc", "mc"):
@@ -193,6 +310,10 @@ def audit_shadow_manifests(
         "qualified_environment": qualified_environment,
         "audited": audited,
         "reasons": reasons,
+        "source_waiver": (
+            str(waiver.get("_path", "")) if isinstance(waiver, Mapping) else ""
+        ),
+        "source_waived_tasks": sum(1 for item in audited if item["source_waived"]),
     }
 
 
@@ -201,6 +322,7 @@ def validate_formal_qualification_receipt(
     *,
     verify_bound_sources: bool = True,
     expected_sha256: str | None = None,
+    waiver_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Validate a receipt, optionally re-auditing its bound large artifacts.
 
@@ -222,9 +344,27 @@ def validate_formal_qualification_receipt(
         raise ValueError("formal qualification receipt targets a stale implementation")
     if payload.get("shadow_implementation_version") != GPU_IMPLEMENTATION_VERSION:
         raise ValueError("formal qualification receipt targets a stale shadow contract")
+    resolved_waiver_path = waiver_path
+    if resolved_waiver_path is None:
+        environment_waiver = os.environ.get(WAIVER_ENV_VAR, "").strip()
+        if environment_waiver:
+            resolved_waiver_path = environment_waiver
+    waiver: dict[str, Any] | None = None
+    if resolved_waiver_path is not None:
+        waiver = load_qualification_waiver(
+            resolved_waiver_path,
+            receipt_path=receipt,
+            receipt_sha256=receipt_sha256,
+        )
     current_code_fingerprints = all_estimator_code_fingerprints()
     if payload.get("code_fingerprints") != current_code_fingerprints:
-        raise ValueError("formal qualification receipt targets different estimator source code")
+        waiver_fingerprints = (
+            dict(waiver.get("code_fingerprints", {})) if waiver is not None else {}
+        )
+        if waiver is None or waiver_fingerprints != current_code_fingerprints:
+            raise ValueError(
+                "formal qualification receipt targets different estimator source code"
+            )
     if payload.get("eligible") is not True or payload.get("reasons"):
         raise ValueError("formal qualification receipt is not eligible")
     counts = payload.get("counts")
@@ -261,7 +401,7 @@ def validate_formal_qualification_receipt(
                 raise ValueError(f"qualified source manifest is unreadable: {source}") from exc
             audited_sources.append(source)
         current_audit = audit_shadow_manifests(
-            audited_sources, minimum_parity_tasks=minimum
+            audited_sources, minimum_parity_tasks=minimum, waiver=waiver
         )
         if current_audit.get("eligible") is not True:
             raise ValueError(
@@ -280,5 +420,10 @@ def validate_formal_qualification_receipt(
         "formal_qualification_code_fingerprints": current_code_fingerprints,
         "formal_qualification_source_audit": (
             "full_at_worker_start" if verify_bound_sources else "receipt_digest_prevalidated"
+        ),
+        "formal_qualification_waiver": str(waiver["_path"]) if waiver else "",
+        "formal_qualification_waiver_sha256": str(waiver["_sha256"]) if waiver else "",
+        "formal_qualification_waiver_reason": (
+            str(waiver.get("reason", "")) if waiver else ""
         ),
     }

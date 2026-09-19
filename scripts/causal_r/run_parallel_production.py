@@ -868,6 +868,20 @@ def main() -> int:
         help="Eligible R/Python parity audit receipt required for production Python labels.",
     )
     parser.add_argument(
+        "--qualification-waiver",
+        type=Path,
+        default=(
+            Path(os.environ["MIT_CAUSAL_QUALIFICATION_WAIVER"])
+            if os.environ.get("MIT_CAUSAL_QUALIFICATION_WAIVER")
+            else None
+        ),
+        help=(
+            "Operator-attested drift waiver for qualification-bound source changes "
+            "reviewed as non-numerical; issue it with "
+            "scripts/causal_gpu/issue_qualification_waiver.py."
+        ),
+    )
+    parser.add_argument(
         "--resume-prevalidated-qualification",
         action="store_true",
         help=(
@@ -1067,6 +1081,15 @@ def main() -> int:
     qualification_receipt = args.qualification_receipt
     if qualification_receipt is not None:
         qualification_receipt = qualification_receipt.resolve()
+    qualification_waiver = args.qualification_waiver
+    if qualification_waiver is not None:
+        qualification_waiver = qualification_waiver.resolve()
+        os.environ["MIT_CAUSAL_QUALIFICATION_WAIVER"] = str(qualification_waiver)
+        print(
+            "WARNING: reusing the qualification receipt with a drift waiver; "
+            "the reviewed source changes must not alter estimator numerics "
+            f"({qualification_waiver})"
+        )
     qualification_proof: dict[str, object] = {}
     if args.resume_prevalidated_qualification:
         if args.reset_queues or args.task_scheduling != "global_rounds":
@@ -1092,6 +1115,7 @@ def main() -> int:
         qualification_proof = validate_formal_qualification_receipt(
             qualification_receipt,
             verify_bound_sources=not args.resume_prevalidated_qualification,
+            waiver_path=qualification_waiver,
         )
     elif args.resume_prevalidated_qualification:
         parser.error(

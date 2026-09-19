@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -56,8 +55,8 @@ def stable_covariance_inverse(
 
 
 def _topk_mahalanobis(
-    targets: npt.NDArray[np.floating[Any]],
-    donors: npt.NDArray[np.floating[Any]],
+    targets: npt.NDArray[np.float64],
+    donors: npt.NDArray[np.float64],
     inverse: npt.NDArray[np.float64],
     *,
     k: int,
@@ -138,7 +137,7 @@ def _topk_mahalanobis(
     return index_np, distance_np
 
 
-def _active_columns(matrix: npt.NDArray[np.floating[Any]]) -> npt.NDArray[np.bool_]:
+def _active_columns(matrix: npt.NDArray[np.float64]) -> npt.NDArray[np.bool_]:
     standard_deviation = np.std(matrix, axis=0, ddof=1)
     return np.isfinite(standard_deviation) & (
         standard_deviation > np.sqrt(np.finfo(np.float64).eps)
@@ -146,8 +145,8 @@ def _active_columns(matrix: npt.NDArray[np.floating[Any]]) -> npt.NDArray[np.boo
 
 
 def _static_choice(
-    target: npt.NDArray[np.floating[Any]],
-    donors: npt.NDArray[np.floating[Any]],
+    target: npt.NDArray[np.float64],
+    donors: npt.NDArray[np.float64],
     candidates: npt.NDArray[np.int64],
     inverse: npt.NDArray[np.float64] | None,
 ) -> int:
@@ -159,9 +158,9 @@ def _static_choice(
 
 
 def _placebo_calibration(
-    training: npt.NDArray[np.floating[Any]],
-    holdout: npt.NDArray[np.floating[Any]],
-    static: npt.NDArray[np.floating[Any]] | None,
+    training: npt.NDArray[np.float64],
+    holdout: npt.NDArray[np.float64],
+    static: npt.NDArray[np.float64] | None,
     *,
     config: MatchingConfig,
     runtime: TorchRuntime,

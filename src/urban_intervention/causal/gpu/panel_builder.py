@@ -405,12 +405,7 @@ def read_outcomes_for_request(
                 continue
             part.rename(columns={"year": "period"}, inplace=True)
             parts.append(part)
-    if not parts:
-        # Return the contracted schema instead of a zero-column frame so the
-        # callers' support checks raise their structured "insufficient
-        # periods" errors rather than a KeyError on ``outcomes["period"]``.
-        return pd.DataFrame(columns=["city_key", "grid_id", "period", request.outcome])
-    return pd.concat(parts, ignore_index=True)
+    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
 
 
 def _sample_sd(values: pd.Series) -> float:

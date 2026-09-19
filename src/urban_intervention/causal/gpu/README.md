@@ -13,7 +13,7 @@ R estimator processes.
 | Matching control design | pre-treatment feature construction, robust city scaling, chunked GPU Mahalanobis search, static refinement and placebo/holdout gates | design-stage diagnostics |
 | Matching ATT | `Matching::Match`-compatible ATT with replacement, bias correction and Abadie and Imbens analytic variance | analytic AI standard error |
 | GSC | rolling rank CV, two-way interactive fixed effects, deterministic GPU SVD/EM, same-city and standardized all-city donors | 200-repetition two-stage parametric bootstrap (`auto`: empirical or AR errors) |
-| MC | rolling lambda CV, two-way fixed effects and nuclear-norm completion | unit jackknife matching `fect::jackknifed` pseudo-values |
+| MC | rolling lambda CV, two-way fixed effects and nuclear-norm completion | unit jackknife with per-period finite-refit pseudo-values; identical to the R reference whenever every donor refit is valid |
 
 The Python panel builder also freezes the clean-pre, anticipation, opening-impact
 and post-period calendars. Housing transaction support,
@@ -131,9 +131,13 @@ fit.
 The Python-native CV contract is the formal tuning contract. Qualification and
 production both load its persisted folds, grid and panel hash. R labels remain
 the reference for point-path and inference parity. MC jackknife pseudo-values
-use the finite donor-omission refits at each period. A missing treated
-post-period remains unavailable and does not enter the minimum-refit gate for
-the other publishable periods.
+use the finite donor-omission refits at each period. This convention is
+numerically identical to the R reference whenever every donor refit is valid
+at a period, which held for all stored MC outputs and for all three
+qualification tasks; it can differ only for a period with a missing refit, and
+that case is carried explicitly in `valid_inference_repetitions`. A missing
+treated post-period remains unavailable and does not enter the minimum-refit
+gate for the other publishable periods.
 
 Housing transaction support is configurable without changing the default:
 

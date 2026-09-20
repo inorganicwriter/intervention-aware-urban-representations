@@ -97,6 +97,30 @@ def test_hard_failed_task_can_be_requeued(tmp_path):
     assert pool.counts("run-test") == {"completed": 1}
 
 
+def test_empty_later_rounds_open_when_tasks_advance(tmp_path):
+    pool = RoundPool(tmp_path / "pool.sqlite")
+    pool.create_run(
+        identity(),
+        [{"treatment_order": 1, "outcome_family": "population", "status": "pending"}],
+    )
+    states = {row["name"]: row["state"] for row in pool.round_states("run-test")}
+    assert states["same_city_matching"] == "open"
+    # Rounds that start empty must remain openable while the run executes.
+    assert states["same_city_gsc"] == "pending"
+    assert states["cross_city_mc"] == "pending"
+
+    lease = pool.claim_next("run-test", "same_city_matching", "w0")
+    assert lease is not None
+    assert pool.finish("run-test", lease, "w0", queue_status="gsc_pending")
+    assert pool.close_round_if_drained("run-test", "same_city_matching")
+
+    states = {row["name"]: row["state"] for row in pool.round_states("run-test")}
+    assert states["same_city_gsc"] == "open"
+    gsc = pool.claim_next("run-test", "same_city_gsc", "w1")
+    assert gsc is not None
+    assert gsc.treatment_order == 1
+
+
 def test_stale_lease_cannot_commit_after_expiry_and_reclaim(tmp_path):
     pool = RoundPool(tmp_path / "pool.sqlite", lease_seconds=0.01)
     pool.create_run(identity(), [{"treatment_order": 1, "outcome_family": "population", "status": "pending"}])

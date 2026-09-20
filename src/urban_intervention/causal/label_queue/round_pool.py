@@ -278,10 +278,16 @@ class RoundPool:
                     ),
                 )
                 for ordinal, name in enumerate(ROUND_NAMES):
-                    has_tasks = round_has_tasks[name]
-                    state = "closed" if not has_tasks or ordinal < (first_open_ordinal or 0) else "pending"
-                    if first_open_ordinal == ordinal:
+                    # Rounds after the first open one must stay ``pending`` even
+                    # when they start empty: tasks advance into them while the
+                    # run is executing, and ``close_round_if_drained`` can only
+                    # open a round whose state is ``pending``.
+                    if first_open_ordinal is None or ordinal < first_open_ordinal:
+                        state = "closed"
+                    elif ordinal == first_open_ordinal:
                         state = "open"
+                    else:
+                        state = "pending"
                     db.execute(
                         "INSERT INTO rounds (run_id, ordinal, name, state, opened_at) VALUES (?, ?, ?, ?, ?)",
                         (identity.run_id, ordinal, name, state, now if state == "open" else None),

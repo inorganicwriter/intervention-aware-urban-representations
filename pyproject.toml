@@ -9,6 +9,7 @@ description = "Intervention-aware urban research data pipelines"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "matplotlib>=3.8",
   "numpy>=2.0",
   "pandas>=2.2",
   "pyarrow>=17.0",

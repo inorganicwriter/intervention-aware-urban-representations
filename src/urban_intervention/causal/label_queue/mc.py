@@ -38,6 +38,27 @@ from .state import (
 atomic_json = partial(atomic_write_json, default=str)
 
 
+def has_sufficient_pre_observation(raw: pd.DataFrame) -> bool:
+    """Return True when an available target row carries a clean pre-period anchor.
+
+    The release contract rejects MC labels whose clean pre window has no
+    observed outcome for the treated unit: without one anchor the matrix
+    completion counterfactual is not identified for that unit, and the
+    pre-RMSPE / pre-trend diagnostics are built from imputed values only.
+    """
+    available = raw.get("label_available")
+    if available is None:
+        return False
+    selected = raw.loc[available.fillna(False).astype(bool)]
+    if selected.empty:
+        return False
+    values = pd.to_numeric(
+        selected.get("pre_observed_periods", pd.Series(pd.NA, index=selected.index)),
+        errors="coerce",
+    )
+    return bool(values.ge(1).any())
+
+
 def mc_output(row: pd.Series, outcome: str, donor_scope: str = "same_city") -> Path:
     cohort = (
         str(row.opening_month)
@@ -153,6 +174,9 @@ def run_python_mc_scope(
             continue
         if raw.empty or not bool(raw["label_available"].fillna(False).any()):
             failures[outcome] = "python_mc_has_no_available_target_horizon"
+            continue
+        if not has_sufficient_pre_observation(raw):
+            failures[outcome] = "python_mc_insufficient_pre_observation"
             continue
         labels.append(normalized_python_labels(raw, row, selected_method))
         manifests.append(
@@ -349,6 +373,9 @@ def run_mc_scope(
         )
         if actual_horizons != expected_horizons:
             outcome_failures[outcome] = "mc_outcome_horizon_grid_incomplete"
+            continue
+        if not has_sufficient_pre_observation(raw):
+            outcome_failures[outcome] = "mc_insufficient_pre_observation"
             continue
         normalized = pd.DataFrame(
             {

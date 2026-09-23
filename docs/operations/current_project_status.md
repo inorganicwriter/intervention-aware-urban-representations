@@ -134,7 +134,11 @@ validator rejects any remaining stale records.
 
 GSC production inference uses 200 parametric bootstrap replications. MC uses
 fixed-lambda unit jackknife inference; its `nboots=200` field is compatibility
-metadata.
+metadata. MC labels additionally require at least one observed clean
+pre-treatment period: outcomes without one are failed by the label queue
+(`mc_insufficient_pre_observation` / `python_mc_insufficient_pre_observation`)
+so the routing falls through instead of publishing an unanchored
+counterfactual, and the Response Artifact rejects any remaining such rows.
 
 ## GPU estimator qualification status
 

@@ -39,6 +39,9 @@ from urban_intervention.causal.gpu.fixed_control import fixed_control_labels  # 
 from urban_intervention.causal.gpu.qualification import (  # noqa: E402
     validate_formal_qualification_receipt,
 )
+from urban_intervention.causal.label_queue.mc import (  # noqa: E402
+    has_sufficient_pre_observation,
+)
 from urban_intervention.causal.setup_inputs import (  # noqa: E402
     validate_frozen_formal_matching_spec,
 )
@@ -1692,6 +1695,9 @@ def run_python_mc_scope(
         if raw.empty or not bool(raw["label_available"].fillna(False).any()):
             failures[outcome] = "python_mc_has_no_available_target_horizon"
             continue
+        if not has_sufficient_pre_observation(raw):
+            failures[outcome] = "python_mc_insufficient_pre_observation"
+            continue
         labels.append(normalized_python_labels(raw, row, selected_method))
         manifests.append(
             {
@@ -1877,6 +1883,9 @@ def run_mc_scope(
         actual_horizons = set(pd.to_numeric(raw["event_time"], errors="coerce").dropna().astype(int))
         if actual_horizons != expected_horizons:
             outcome_failures[outcome] = "mc_outcome_horizon_grid_incomplete"
+            continue
+        if not has_sufficient_pre_observation(raw):
+            outcome_failures[outcome] = "mc_insufficient_pre_observation"
             continue
         normalized = pd.DataFrame(
             {

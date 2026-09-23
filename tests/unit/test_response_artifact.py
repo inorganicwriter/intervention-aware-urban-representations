@@ -7,13 +7,23 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from urban_intervention.causal.gpu.provenance import all_estimator_code_fingerprints
+from urban_intervention.causal.gpu.provenance import (
+    all_estimator_code_fingerprints,
+    estimator_source_files,
+)
+from urban_intervention.causal.gpu.qualification import (
+    WAIVER_ATTESTATION as QUALIFICATION_WAIVER_ATTESTATION,
+)
+from urban_intervention.causal.gpu.qualification import (
+    WAIVER_SCHEMA as QUALIFICATION_WAIVER_SCHEMA,
+)
 from urban_intervention.causal.response_artifact import (
     ArtifactInputs,
     bound_receipt_code_fingerprints,
     build_response_frame,
     collect_task_products,
     git_state,
+    load_release_qualification_waiver,
     publish_response_artifact,
     qualification_drift_covers_task,
     require_reproducible_code_state,
@@ -508,3 +518,37 @@ def test_qualification_drift_accepts_receipt_revision_tasks(tmp_path: Path) -> N
         {**waiver, "receipt_sha256": "sha256:" + "1" * 64}
     ) is None
     assert bound_receipt_code_fingerprints({**waiver, "receipt_path": str(tmp_path / "missing.json")}) is None
+
+
+def test_release_qualification_waiver_loader_checks_current_tree(tmp_path: Path) -> None:
+    bound = {
+        str(source.resolve()): sha256_file(source)
+        for estimator in ("matching", "gsc", "mc")
+        for source in estimator_source_files(estimator)
+    }
+    workers = Path(estimator_source_files("matching")[0]).parent / "workers.py"
+    if workers.is_file():
+        bound[str(workers.resolve())] = sha256_file(workers)
+    payload = {
+        "schema": QUALIFICATION_WAIVER_SCHEMA,
+        "attestation": QUALIFICATION_WAIVER_ATTESTATION,
+        "reason": "reviewed",
+        "code_fingerprints": all_estimator_code_fingerprints(),
+        "source_sha256": bound,
+    }
+    waiver_path = tmp_path / "qualification_drift_waiver.json"
+    waiver_path.write_text(json.dumps(payload), encoding="utf-8")
+    loaded = load_release_qualification_waiver(waiver_path)
+    assert loaded["_sha256"] == sha256_file(waiver_path)
+
+    stale = dict(payload, code_fingerprints={"matching": "sha256:old"})
+    waiver_path.write_text(json.dumps(stale), encoding="utf-8")
+    with pytest.raises(ValueError, match="different estimator source revision"):
+        load_release_qualification_waiver(waiver_path)
+
+    drifted = {**bound, next(iter(bound)): "sha256:" + "0" * 64}
+    waiver_path.write_text(
+        json.dumps(dict(payload, source_sha256=drifted)), encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="no longer matches the estimator source tree"):
+        load_release_qualification_waiver(waiver_path)

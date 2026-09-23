@@ -94,17 +94,15 @@ def _waiver_covers_estimator_sources(
 def load_qualification_waiver(
     path: str | Path,
     *,
-    receipt_path: str | Path | None = None,
-    receipt_sha256: str | None = None,
+    receipt_path: str | Path,
+    receipt_sha256: str,
 ) -> dict[str, Any]:
     """Load and validate an operator-attested source-drift waiver.
 
     A waiver never overrides parity, quality, convergence or environment
     gates.  It only lets an otherwise eligible receipt survive changes to the
     qualification-bound source files that the operator has reviewed as
-    non-numerical.  Pass ``receipt_path``/``receipt_sha256`` to bind the waiver
-    to one receipt at load time; release-side consumers may load it unbound and
-    verify the binding against each task manifest instead.
+    non-numerical.
     """
     waiver_path = Path(path).resolve()
     if not waiver_path.is_file():
@@ -115,11 +113,9 @@ def load_qualification_waiver(
         raise ValueError(f"unreadable qualification waiver {waiver_path}: {exc}") from exc
     if payload.get("schema") != WAIVER_SCHEMA:
         raise ValueError("qualification waiver has an unknown schema")
-    if receipt_path is not None and Path(
-        str(payload.get("receipt_path", ""))
-    ).resolve() != Path(receipt_path).resolve():
+    if Path(str(payload.get("receipt_path", ""))).resolve() != Path(receipt_path).resolve():
         raise ValueError("qualification waiver is bound to a different receipt")
-    if receipt_sha256 is not None and str(payload.get("receipt_sha256", "")) != receipt_sha256:
+    if str(payload.get("receipt_sha256", "")) != receipt_sha256:
         raise ValueError("qualification waiver was issued for a different receipt revision")
     if payload.get("attestation") != WAIVER_ATTESTATION:
         raise ValueError("qualification waiver lacks the required operator attestation")

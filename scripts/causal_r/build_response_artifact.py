@@ -19,11 +19,9 @@ from urban_intervention.causal.gpu.control_design_waiver import (  # noqa: E402
 from urban_intervention.causal.gpu.qualification import (  # noqa: E402
     WAIVER_ENV_VAR as QUALIFICATION_WAIVER_ENV_VAR,
 )
-from urban_intervention.causal.gpu.qualification import (  # noqa: E402
-    load_qualification_waiver,
-)
 from urban_intervention.causal.response_artifact import (  # noqa: E402
     ArtifactInputs,
+    load_release_qualification_waiver,
     publish_response_artifact,
 )
 from urban_intervention.data.paths import (  # noqa: E402
@@ -100,7 +98,7 @@ def main() -> int:
         if environment_qualification:
             qualification_waiver_path = Path(environment_qualification)
     qualification_waiver = (
-        load_qualification_waiver(qualification_waiver_path)
+        load_release_qualification_waiver(qualification_waiver_path)
         if qualification_waiver_path is not None
         else None
     )

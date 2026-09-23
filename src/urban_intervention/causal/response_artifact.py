@@ -32,6 +32,14 @@ from urban_intervention.causal.gpu.control_design_waiver import (
 from urban_intervention.causal.gpu.provenance import (
     all_estimator_code_fingerprints,
     estimator_code_fingerprint,
+    estimator_source_files,
+    file_sha256,
+)
+from urban_intervention.causal.gpu.qualification import (
+    WAIVER_ATTESTATION as QUALIFICATION_WAIVER_ATTESTATION,
+)
+from urban_intervention.causal.gpu.qualification import (
+    WAIVER_SCHEMA as QUALIFICATION_WAIVER_SCHEMA,
 )
 from urban_intervention.causal.schemas import (
     CAUSAL_RESPONSE_LABELS_SCHEMA,
@@ -405,6 +413,54 @@ def validate_control_design_provenance(
                     f"Control record {order} uses stale matching method; expected {expected_method}"
                 )
     return record_paths
+
+
+def load_release_qualification_waiver(path: str | Path) -> dict[str, Any]:
+    """Load a drift waiver for release-side task-proof acceptance.
+
+    The production loader binds a waiver to one receipt; a release covers many
+    tasks and verifies that binding against each task manifest instead.  The
+    waiver must still describe the current estimator source tree, otherwise the
+    attested drift no longer covers the code that would run today.
+    """
+    waiver_path = Path(path).resolve()
+    if not waiver_path.is_file():
+        raise ValueError(f"qualification waiver is unavailable: {waiver_path}")
+    try:
+        payload = json.loads(waiver_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"unreadable qualification waiver {waiver_path}: {exc}") from exc
+    if payload.get("schema") != QUALIFICATION_WAIVER_SCHEMA:
+        raise ValueError("qualification waiver has an unknown schema")
+    if payload.get("attestation") != QUALIFICATION_WAIVER_ATTESTATION:
+        raise ValueError("qualification waiver lacks the required operator attestation")
+    if not str(payload.get("reason", "")).strip():
+        raise ValueError("qualification waiver lacks a reason")
+    if payload.get("code_fingerprints") != all_estimator_code_fingerprints():
+        raise ValueError(
+            "qualification waiver was issued for a different estimator source revision"
+        )
+    bound = payload.get("source_sha256")
+    if not isinstance(bound, Mapping) or not bound:
+        raise ValueError("qualification waiver lacks bound source hashes")
+    source_files = [
+        source
+        for estimator in ("matching", "gsc", "mc")
+        for source in estimator_source_files(estimator)
+    ]
+    workers = Path(estimator_source_files("matching")[0]).parent / "workers.py"
+    if workers.is_file():
+        source_files.append(workers)
+    for source in source_files:
+        source_path = str(source.resolve())
+        if not source.is_file() or str(bound.get(source_path, "")) != file_sha256(source):
+            raise ValueError(
+                "qualification waiver no longer matches the estimator source tree"
+            )
+    resolved = dict(payload)
+    resolved["_path"] = str(waiver_path)
+    resolved["_sha256"] = file_sha256(waiver_path)
+    return resolved
 
 
 def bound_receipt_code_fingerprints(

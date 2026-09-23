@@ -125,6 +125,33 @@ the numerical environment that passed parity. The qualification run performs nat
 labels; a manually changed manifest boolean does not satisfy the checks. Preview runs
 do not require a receipt.
 
+## Control-design drift waiver
+
+Control records store the matching source fingerprint that produced them. A
+production tree assembled from reviewed local patches can carry a stored
+fingerprint that no longer matches the current tree even though the numerical
+control design is unchanged. Strict Response Artifact publication accepts such
+records only through an operator-attested spot-check waiver:
+
+```bash
+# recompute a sample into an isolated root; no production record is touched
+python scripts/causal_python/run_control_design_batch.py \
+  --orders 1,2,...,12 --task-root outputs/control_design/spot_check --device cuda:0
+
+python scripts/causal_gpu/issue_control_design_waiver.py \
+  --reason "<reviewed production patch summary>" --confirm-spot-check
+```
+
+The issuer refuses unless every sampled order recomputes field-identical
+(`status`, control identity, matched distances and holdout gaps) and the sample
+covers at least 12 orders. The waiver binds the current matching fingerprint,
+the current hash of every matching-bound source, the accepted record
+fingerprints and the spot-check evidence. Publish with
+`--control-design-waiver <path>` (or `MIT_CAUSAL_CONTROL_DESIGN_WAIVER`). The
+waiver only bypasses the fingerprint equality check; schema, backend, leakage,
+queue-status and selected-method checks still fail the release independently.
+Any later edit to a matching-bound source invalidates the waiver.
+
 R is therefore retained only for the one-time reference/qualification stage.
 Once an eligible receipt has been issued, the production Matching/GSC/MC queue
 and the all-method event-study aggregation do not invoke R.

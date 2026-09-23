@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -11,6 +12,10 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
+from urban_intervention.causal.gpu.control_design_waiver import (  # noqa: E402
+    CONTROL_DESIGN_WAIVER_ENV_VAR,
+    load_control_design_waiver,
+)
 from urban_intervention.causal.response_artifact import (  # noqa: E402
     ArtifactInputs,
     publish_response_artifact,
@@ -54,9 +59,25 @@ def main() -> int:
             "canary release to those exact independently sampled tasks."
         ),
     )
+    parser.add_argument(
+        "--control-design-waiver",
+        type=Path,
+        help=(
+            "Operator-attested spot-check waiver for control records whose stored "
+            "matching fingerprint differs from the current source tree."
+        ),
+    )
     args = parser.parse_args()
     if args.orders_file is not None and args.tasks_file is not None:
         parser.error("--orders-file and --tasks-file are mutually exclusive")
+    waiver_path = args.control_design_waiver
+    if waiver_path is None:
+        environment_waiver = os.environ.get(CONTROL_DESIGN_WAIVER_ENV_VAR, "").strip()
+        if environment_waiver:
+            waiver_path = Path(environment_waiver)
+    control_design_waiver = (
+        load_control_design_waiver(waiver_path) if waiver_path is not None else None
+    )
     treatment_orders = None
     task_keys = None
     if args.orders_file is not None:
@@ -91,6 +112,7 @@ def main() -> int:
         target_support=FORMAL_TARGET_SUPPORT,
         treatment_orders=treatment_orders,
         task_keys=task_keys,
+        control_design_waiver=control_design_waiver,
     )
     destination = publish_response_artifact(
         inputs,

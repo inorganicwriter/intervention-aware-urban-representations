@@ -8,7 +8,7 @@ import os
 import platform
 import subprocess
 import sys
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -24,6 +24,9 @@ from urban_intervention.causal.gpu.contracts import (
     CONTROL_DESIGN_SCHEMA,
     CONTROL_DESIGN_VIIRS_CACHE_CONTRACT,
     FORMAL_IMPLEMENTATION_VERSION,
+)
+from urban_intervention.causal.gpu.control_design_waiver import (
+    waiver_accepts_record_fingerprint,
 )
 from urban_intervention.causal.gpu.provenance import (
     all_estimator_code_fingerprints,
@@ -151,6 +154,7 @@ class ArtifactInputs:
     treatment_orders: tuple[int, ...] | None = None
     task_keys: tuple[tuple[int, str], ...] | None = None
     control_task_root: Path | None = None
+    control_design_waiver: Mapping[str, object] | None = None
 
 
 from urban_intervention.utils import sha256_file  # noqa: E402
@@ -319,8 +323,14 @@ def validate_control_design_provenance(
     *,
     control_task_root: Path | None = None,
     expected_backend: str | None = None,
+    drift_waiver: Mapping[str, object] | None = None,
 ) -> list[Path]:
-    """Reject stale control records before they can enter a formal release."""
+    """Reject stale control records before they can enter a formal release.
+
+    ``drift_waiver`` only bypasses the source-fingerprint equality check for
+    explicitly covered record fingerprints; every schema, contract, backend,
+    leakage, queue-status and method check still applies.
+    """
     required_queue = {"treatment_order", "status"}
     missing_queue = required_queue - set(control_queue.columns)
     if missing_queue:
@@ -366,12 +376,15 @@ def validate_control_design_provenance(
                 f"Control record {order} has unsupported backend/version "
                 f"({actual_backend}, {actual_version})"
             )
-        if matching_backend == "python_gpu" and str(
-            record.get("code_fingerprint", "")
-        ) != estimator_code_fingerprint("matching"):
-            raise ValueError(
-                f"Control record {order} uses stale matching source code"
+        if (
+            matching_backend == "python_gpu"
+            and str(record.get("code_fingerprint", ""))
+            != estimator_code_fingerprint("matching")
+            and not waiver_accepts_record_fingerprint(
+                drift_waiver, record.get("code_fingerprint", "")
             )
+        ):
+            raise ValueError(f"Control record {order} uses stale matching source code")
         if expected_backend is not None and matching_backend != expected_backend:
             raise ValueError(
                 f"Control record {order} backend {matching_backend} disagrees with "
@@ -803,6 +816,7 @@ def build_response_frame(
         control_record_paths = validate_control_design_provenance(
             control_queue,
             control_task_root=inputs.control_task_root,
+            drift_waiver=inputs.control_design_waiver,
         )
 
     skeleton = expected_label_skeleton(treatments, specification_id)
@@ -1151,6 +1165,19 @@ def publish_response_artifact(
             },
             "quality_summary_sha256": sha256_file(staging / "quality_summary.csv"),
         }
+        if inputs.control_design_waiver is not None:
+            waiver = inputs.control_design_waiver
+            accepted = waiver.get("accepted_code_fingerprints")
+            spot_check = waiver.get("spot_check")
+            manifest["control_design_drift_waiver"] = {
+                "path": str(waiver.get("_path", "")),
+                "sha256": str(waiver.get("_sha256", "")),
+                "reason": str(waiver.get("reason", "")),
+                "accepted_code_fingerprints": (
+                    [str(value) for value in accepted] if isinstance(accepted, list) else []
+                ),
+                "spot_check": dict(spot_check) if isinstance(spot_check, Mapping) else {},
+            }
         (staging / "manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2, default=str) + "\n",
             encoding="utf-8",

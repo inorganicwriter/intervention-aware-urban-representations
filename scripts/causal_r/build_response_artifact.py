@@ -16,6 +16,12 @@ from urban_intervention.causal.gpu.control_design_waiver import (  # noqa: E402
     CONTROL_DESIGN_WAIVER_ENV_VAR,
     load_control_design_waiver,
 )
+from urban_intervention.causal.gpu.qualification import (  # noqa: E402
+    WAIVER_ENV_VAR as QUALIFICATION_WAIVER_ENV_VAR,
+)
+from urban_intervention.causal.gpu.qualification import (  # noqa: E402
+    load_qualification_waiver,
+)
 from urban_intervention.causal.response_artifact import (  # noqa: E402
     ArtifactInputs,
     publish_response_artifact,
@@ -67,6 +73,14 @@ def main() -> int:
             "matching fingerprint differs from the current source tree."
         ),
     )
+    parser.add_argument(
+        "--qualification-waiver",
+        type=Path,
+        help=(
+            "Operator-attested drift waiver letting receipt-revision tasks keep "
+            "their formal qualification proof in the release."
+        ),
+    )
     args = parser.parse_args()
     if args.orders_file is not None and args.tasks_file is not None:
         parser.error("--orders-file and --tasks-file are mutually exclusive")
@@ -77,6 +91,18 @@ def main() -> int:
             waiver_path = Path(environment_waiver)
     control_design_waiver = (
         load_control_design_waiver(waiver_path) if waiver_path is not None else None
+    )
+    qualification_waiver_path = args.qualification_waiver
+    if qualification_waiver_path is None:
+        environment_qualification = os.environ.get(
+            QUALIFICATION_WAIVER_ENV_VAR, ""
+        ).strip()
+        if environment_qualification:
+            qualification_waiver_path = Path(environment_qualification)
+    qualification_waiver = (
+        load_qualification_waiver(qualification_waiver_path)
+        if qualification_waiver_path is not None
+        else None
     )
     treatment_orders = None
     task_keys = None
@@ -113,6 +139,7 @@ def main() -> int:
         treatment_orders=treatment_orders,
         task_keys=task_keys,
         control_design_waiver=control_design_waiver,
+        qualification_waiver=qualification_waiver,
     )
     destination = publish_response_artifact(
         inputs,

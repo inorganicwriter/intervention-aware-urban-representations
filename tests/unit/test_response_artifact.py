@@ -10,10 +10,12 @@ import pytest
 from urban_intervention.causal.gpu.provenance import all_estimator_code_fingerprints
 from urban_intervention.causal.response_artifact import (
     ArtifactInputs,
+    bound_receipt_code_fingerprints,
     build_response_frame,
     collect_task_products,
     git_state,
     publish_response_artifact,
+    qualification_drift_covers_task,
     require_reproducible_code_state,
     sha256_file,
     validate_control_design_provenance,
@@ -463,3 +465,46 @@ def test_source_tree_hash_is_a_known_version_without_git(tmp_path: Path) -> None
     assert state["source"] == "source_tree_sha256"
     assert str(state["commit"]).startswith("tree-sha256:")
     require_reproducible_code_state(state)
+
+
+def test_qualification_drift_accepts_receipt_revision_tasks(tmp_path: Path) -> None:
+    fingerprints = {
+        "matching": "sha256:receipt-matching",
+        "gsc": "sha256:receipt-gsc",
+        "mc": "sha256:receipt-mc",
+    }
+    receipt_path = tmp_path / "qualification.json"
+    receipt_path.write_text(
+        json.dumps({"code_fingerprints": fingerprints}), encoding="utf-8"
+    )
+    receipt_sha256 = sha256_file(receipt_path)
+    waiver = {
+        "receipt_path": str(receipt_path),
+        "receipt_sha256": receipt_sha256,
+        "code_fingerprints": {"matching": "sha256:current"},
+    }
+    bound = bound_receipt_code_fingerprints(waiver)
+    assert bound == fingerprints
+
+    details = {
+        "formal_qualification_receipt_sha256": receipt_sha256,
+        "formal_qualification_code_fingerprints": fingerprints,
+    }
+    assert qualification_drift_covers_task(details, waiver, bound) is True
+    assert (
+        qualification_drift_covers_task(details, waiver, {"matching": "sha256:other"})
+        is False
+    )
+    assert qualification_drift_covers_task(details, None, bound) is False
+    assert (
+        qualification_drift_covers_task(
+            {**details, "formal_qualification_receipt_sha256": "sha256:" + "0" * 64},
+            waiver,
+            bound,
+        )
+        is False
+    )
+    assert bound_receipt_code_fingerprints(
+        {**waiver, "receipt_sha256": "sha256:" + "1" * 64}
+    ) is None
+    assert bound_receipt_code_fingerprints({**waiver, "receipt_path": str(tmp_path / "missing.json")}) is None

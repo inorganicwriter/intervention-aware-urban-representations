@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import numpy as np
@@ -155,6 +156,7 @@ class ArtifactInputs:
     task_keys: tuple[tuple[int, str], ...] | None = None
     control_task_root: Path | None = None
     control_design_waiver: Mapping[str, object] | None = None
+    qualification_waiver: Mapping[str, object] | None = None
 
 
 from urban_intervention.utils import sha256_file  # noqa: E402
@@ -405,6 +407,49 @@ def validate_control_design_provenance(
     return record_paths
 
 
+def bound_receipt_code_fingerprints(
+    waiver: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    """Load the qualification receipt a waiver is bound to and hash it again.
+
+    Returns the receipt's estimator fingerprints only when the recorded file
+    is still byte-identical to the digest inside the waiver.
+    """
+    receipt_path = Path(str(waiver.get("receipt_path", "")))
+    receipt_sha256 = str(waiver.get("receipt_sha256", ""))
+    if not receipt_sha256 or not receipt_path.is_file():
+        return None
+    if sha256_file(receipt_path) != receipt_sha256:
+        return None
+    try:
+        payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    fingerprints = payload.get("code_fingerprints")
+    return fingerprints if isinstance(fingerprints, Mapping) else None
+
+
+def qualification_drift_covers_task(
+    details: Mapping[str, Any],
+    waiver: Mapping[str, Any] | None,
+    receipt_fingerprints: Mapping[str, Any] | None,
+) -> bool:
+    """Accept receipt-revision task proof under an attested drift waiver.
+
+    The task must be bound to the same receipt revision as the waiver, and its
+    recorded estimator fingerprints must equal the receipt's own fingerprints.
+    """
+    if not isinstance(waiver, Mapping) or not isinstance(receipt_fingerprints, Mapping):
+        return False
+    receipt_sha256 = str(details.get("formal_qualification_receipt_sha256") or "")
+    if not receipt_sha256 or receipt_sha256 != str(waiver.get("receipt_sha256", "")):
+        return False
+    task_fingerprints = details.get("formal_qualification_code_fingerprints")
+    return isinstance(task_fingerprints, Mapping) and dict(task_fingerprints) == dict(
+        receipt_fingerprints
+    )
+
+
 def runtime_versions() -> dict[str, str]:
     return {
         "python": sys.version.split()[0],
@@ -535,6 +580,7 @@ def collect_task_products(
     specification_id: str,
     strict_production: bool = True,
     workers: int = 4,
+    qualification_waiver: Mapping[str, object] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, list[Path]]:
     if family_queue.duplicated(["treatment_order", "outcome_family"]).any():
         raise ValueError("Outcome-family queue key is not unique")
@@ -570,6 +616,7 @@ def collect_task_products(
 
     metadata: list[dict[str, object]] = []
     used_paths: list[Path] = []
+    receipt_cache: dict[str, Mapping[str, Any] | None] = {}
     for task_index, (order, family, label_path, manifest_path, identity, queue_status) in enumerate(
         tasks
     ):
@@ -629,12 +676,27 @@ def collect_task_products(
                 raise ValueError(
                     f"Production Python task uses a stale implementation: {manifest_path}"
                 )
+            fingerprints_match = isinstance(details, dict) and (
+                details.get("formal_qualification_code_fingerprints")
+                == all_estimator_code_fingerprints()
+            )
+            if (
+                not fingerprints_match
+                and isinstance(details, dict)
+                and qualification_waiver is not None
+            ):
+                if not receipt_cache:
+                    receipt_cache["bound"] = bound_receipt_code_fingerprints(
+                        qualification_waiver
+                    )
+                fingerprints_match = qualification_drift_covers_task(
+                    details, qualification_waiver, receipt_cache["bound"]
+                )
             if (
                 not isinstance(details, dict)
                 or details.get("formal_qualification_eligible") is not True
                 or len(str(details.get("formal_qualification_receipt_sha256", ""))) != 64
-                or details.get("formal_qualification_code_fingerprints")
-                != all_estimator_code_fingerprints()
+                or not fingerprints_match
             ):
                 raise ValueError(
                     f"Production Python task lacks formal qualification proof: {manifest_path}"
@@ -835,6 +897,7 @@ def build_response_frame(
         specification_id,
         strict_production=strict_production,
         workers=workers,
+        qualification_waiver=inputs.qualification_waiver,
     )
     artifact = skeleton.merge(labels, on=KEY_COLUMNS, how="left", validate="one_to_one")
 
@@ -1177,6 +1240,15 @@ def publish_response_artifact(
                     [str(value) for value in accepted] if isinstance(accepted, list) else []
                 ),
                 "spot_check": dict(spot_check) if isinstance(spot_check, Mapping) else {},
+            }
+        if inputs.qualification_waiver is not None:
+            waiver = inputs.qualification_waiver
+            manifest["qualification_drift_waiver"] = {
+                "path": str(waiver.get("_path", "")),
+                "sha256": str(waiver.get("_sha256", "")),
+                "receipt_path": str(waiver.get("receipt_path", "")),
+                "receipt_sha256": str(waiver.get("receipt_sha256", "")),
+                "reason": str(waiver.get("reason", "")),
             }
         (staging / "manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2, default=str) + "\n",

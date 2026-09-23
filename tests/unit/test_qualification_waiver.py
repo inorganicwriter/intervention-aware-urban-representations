@@ -167,3 +167,26 @@ def test_issuer_refuses_bound_input_drift(tmp_path) -> None:
     )
     assert changed == [str(code.resolve())]
     assert waiver["source_sha256"][str(code.resolve())] == file_sha256(code)
+
+
+def test_waiver_loads_unbound_for_release_consumers(tmp_path, monkeypatch) -> None:
+    paths = [_manifest(tmp_path, estimator) for estimator in ("matching", "gsc", "mc")]
+    report = audit_shadow_manifests(paths, minimum_parity_tasks=1)
+    receipt = tmp_path / "qualification.json"
+    receipt.write_text(json.dumps(report), encoding="utf-8")
+    drifted = _simulate_drift(monkeypatch)
+    waiver = tmp_path / "qualification_drift_waiver.json"
+    waiver.write_text(json.dumps(_waiver_payload(receipt, drifted)), encoding="utf-8")
+
+    unbound = load_qualification_waiver(waiver)
+    assert unbound["_sha256"] == file_sha256(waiver)
+    assert unbound["receipt_sha256"] == file_sha256(receipt)
+
+    with pytest.raises(ValueError, match="different receipt"):
+        load_qualification_waiver(
+            waiver, receipt_path=tmp_path / "other.json", receipt_sha256=file_sha256(receipt)
+        )
+    with pytest.raises(ValueError, match="different receipt revision"):
+        load_qualification_waiver(
+            waiver, receipt_path=receipt, receipt_sha256="sha256:" + "0" * 64
+        )

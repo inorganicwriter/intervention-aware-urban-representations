@@ -14,7 +14,6 @@ import pandas as pd
 from urban_intervention.causal.gpu.panel_builder import (
     read_annual_outcome,
     read_monthly_housing,
-    read_monthly_viirs,
 )
 from urban_intervention.causal.gpu.provenance import file_sha256
 from urban_intervention.causal.schemas import (
@@ -485,6 +484,53 @@ def _available_viirs_months(root_value: str, city: str) -> tuple[pd.Timestamp, .
     return tuple(result)
 
 
+@lru_cache(maxsize=256)
+def _cached_viirs_partition(
+    root_value: str, city: str, year: int, month: int
+) -> pd.DataFrame | None:
+    """Read one monthly VIIRS partition and share it across neighbouring tasks."""
+    path = (
+        Path(root_value)
+        / VIIRS_MONTHLY_DIR.relative_to(PROJECT_ROOT)
+        / f"city_key={city}"
+        / f"year={year}"
+        / f"month={month:02d}"
+        / "part.parquet"
+    )
+    if not path.is_file():
+        return None
+    return pd.read_parquet(path, columns=["grid_id", "avg_rad"])
+
+
+def _read_monthly_viirs_cached(
+    root: Path, city: str, months: pd.DatetimeIndex
+) -> pd.DataFrame:
+    """Cached equivalent of ``panel_builder.read_monthly_viirs`` for event studies.
+
+    The estimator reader opens one parquet file per month per city; reusing it
+    across thousands of matching tasks otherwise turns the full monthly calendar
+    into hundreds of thousands of small NFS reads.
+    """
+    root_value = str(root.resolve())
+    parts: list[pd.DataFrame] = []
+    for period in months:
+        cached = _cached_viirs_partition(
+            root_value, city, int(period.year), int(period.month)
+        )
+        if cached is None:
+            continue
+        part = cached.copy()
+        part["city_key"] = city
+        part["period"] = period
+        part["viirs_avg_asinh"] = np.arcsinh(part["avg_rad"])
+        parts.append(part[["city_key", "grid_id", "period", "viirs_avg_asinh"]])
+    if not parts:
+        return pd.DataFrame(
+            columns=["city_key", "grid_id", "period", "viirs_avg_asinh"]
+        )
+    return pd.concat(parts, ignore_index=True)
+
+
 def _monthly_pair_panel(
     row: pd.Series,
     family: str,
@@ -513,7 +559,7 @@ def _monthly_pair_panel(
             if periods is not None
             else pd.DatetimeIndex(_available_viirs_months(str(root.resolve()), city))
         )
-        return read_monthly_viirs(root, city, selected_periods)
+        return _read_monthly_viirs_cached(root, city, selected_periods)
 
     outcome = "housing_log_price" if family == "housing" else "viirs_avg_asinh"
     parts: list[pd.DataFrame] = []

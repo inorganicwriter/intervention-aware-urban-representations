@@ -145,12 +145,16 @@ def write_matching_event_study_figure(
     plt.close(figure)
 
 
-def _group_demean(values: np.ndarray, groups: np.ndarray) -> np.ndarray:
-    _, inverse = np.unique(groups, return_inverse=True)
-    counts = np.bincount(inverse).astype(np.float64)
-    sums = np.zeros((len(counts), values.shape[1]), dtype=np.float64)
-    np.add.at(sums, inverse, values)
-    return values - sums[inverse] / counts[inverse, None]
+def _demean_groups(
+    values: np.ndarray, inverse: np.ndarray, counts: np.ndarray
+) -> np.ndarray:
+    """Subtract group means given precomputed integer group codes."""
+    summed = np.empty((len(counts), values.shape[1]), dtype=np.float64)
+    for column in range(values.shape[1]):
+        summed[:, column] = np.bincount(
+            inverse, weights=values[:, column], minlength=len(counts)
+        )
+    return values - summed[inverse] / counts[inverse, None]
 
 
 def absorb_two_way_fixed_effects(
@@ -158,19 +162,36 @@ def absorb_two_way_fixed_effects(
     unit: np.ndarray,
     period: np.ndarray,
     *,
-    tolerance: float = 1e-11,
-    max_iterations: int = 10_000,
+    tolerance_relative: float = 1e-10,
+    max_iterations: int = 2_000,
 ) -> tuple[np.ndarray, int]:
-    """Residualize columns against two categorical fixed effects."""
+    """Residualize columns against two categorical fixed effects.
+
+    Alternating projections with integer group codes and ``bincount`` sums; the
+    convergence threshold is relative to the scale of ``values``.  An absolute
+    tolerance near machine precision can never be reached when outcome columns
+    are in the 1e3 range, which previously made large monthly panels iterate to
+    the cap without converging.
+    """
     residual = np.asarray(values, dtype=np.float64).copy()
     if residual.ndim != 2 or len(unit) != len(residual) or len(period) != len(residual):
         raise ValueError("fixed-effect arrays must align")
+    if not np.isfinite(residual).all():
+        raise ValueError("fixed-effect absorption requires finite values")
+    if not 0 < tolerance_relative < 1:
+        raise ValueError("tolerance_relative must be in (0, 1)")
+    if max_iterations < 1:
+        raise ValueError("max_iterations must be positive")
+    threshold = tolerance_relative * max(float(np.max(np.abs(residual))), 1.0)
+    _, unit_inverse = np.unique(unit, return_inverse=True)
+    _, period_inverse = np.unique(period, return_inverse=True)
+    unit_counts = np.bincount(unit_inverse).astype(np.float64)
+    period_counts = np.bincount(period_inverse).astype(np.float64)
     for iteration in range(1, max_iterations + 1):
-        previous = residual.copy()
-        residual = _group_demean(residual, unit)
-        residual = _group_demean(residual, period)
-        change = float(np.max(np.abs(residual - previous)))
-        if change <= tolerance:
+        previous = residual
+        residual = _demean_groups(residual, unit_inverse, unit_counts)
+        residual = _demean_groups(residual, period_inverse, period_counts)
+        if np.max(np.abs(residual - previous)) <= threshold:
             return residual, iteration
     raise RuntimeError("two-way fixed-effect absorption did not converge")
 

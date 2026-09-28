@@ -12,6 +12,7 @@ class LabeledQueueState(TypedDict):
     responses: torch.Tensor
     response_mask: torch.Tensor
     response_se: torch.Tensor
+    response_weight: torch.Tensor
     ids: torch.Tensor
 
 
@@ -41,6 +42,7 @@ class EmbeddingQueue:
         self._responses: torch.Tensor | None = None
         self._response_mask: torch.Tensor | None = None
         self._response_se: torch.Tensor | None = None
+        self._response_weight: torch.Tensor | None = None
         self._ids: torch.Tensor | None = None
 
     def enqueue(
@@ -50,6 +52,7 @@ class EmbeddingQueue:
         response_mask: torch.Tensor | None = None,
         response_se: torch.Tensor | None = None,
         ids: torch.Tensor | None = None,
+        response_weight: torch.Tensor | None = None,
     ) -> None:
         """Append rows and evict exactly the oldest excess samples."""
         if self.capacity <= 0 or embeddings.shape[0] == 0:
@@ -74,14 +77,24 @@ class EmbeddingQueue:
             assert response_mask is not None
             assert response_se is not None
             assert ids is not None
+            if response_weight is None:
+                # Callers that do not track per-label design reliability keep
+                # the historical unweighted behavior.
+                response_weight = torch.ones_like(responses)
             n = detached.shape[0]
-            if any(value.shape[0] != n for value in (responses, response_mask, response_se, ids)):
+            if any(
+                value.shape[0] != n
+                for value in (responses, response_mask, response_se, response_weight, ids)
+            ):
                 raise ValueError("Queue metadata rows must align with embeddings")
             self._responses = self._append(self._responses, responses.detach().cpu())
             self._response_mask = self._append(
                 self._response_mask, response_mask.detach().cpu()
             )
             self._response_se = self._append(self._response_se, response_se.detach().cpu())
+            self._response_weight = self._append(
+                self._response_weight, response_weight.detach().cpu()
+            )
             self._ids = self._append(self._ids, ids.detach().cpu())
 
     def _append(self, current: torch.Tensor | None, incoming: torch.Tensor) -> torch.Tensor:
@@ -98,12 +111,14 @@ class EmbeddingQueue:
             return None
         assert self._response_mask is not None
         assert self._response_se is not None
+        assert self._response_weight is not None
         assert self._ids is not None
         return {
             "embeddings": self._embeddings,
             "responses": self._responses,
             "response_mask": self._response_mask,
             "response_se": self._response_se,
+            "response_weight": self._response_weight,
             "ids": self._ids,
         }
 

@@ -55,6 +55,8 @@ def response_alignment_loss(
     queue_response_se: torch.Tensor | None = None,
     anchor_ids: torch.Tensor | None = None,
     queue_ids: torch.Tensor | None = None,
+    response_weight: torch.Tensor | None = None,
+    queue_response_weight: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Soft-weighted InfoNCE where positive weights = response similarity.
 
@@ -63,12 +65,18 @@ def response_alignment_loss(
 
     With ``response_se`` the response similarities are shrunk toward zero by
     label reliability (see ``_pair_reliability``), so noisy pairs exert less
-    pull. A labeled queue is response-aware: comparable positive and negative
-    pairs participate, incomparable and duplicate-unit pairs do not.
+    pull.  With ``response_weight`` (per-label design reliability) each pair's
+    common cells carry weight ``sqrt(w_i * w_j)`` and pairs without common
+    reliable support are dropped from the denominator instead of being treated
+    as zero similarity.  A labeled queue is response-aware: comparable positive
+    and negative pairs participate, incomparable and duplicate-unit pairs do
+    not.
     """
     batch_size = embeddings.shape[0]
     emb_sim = embeddings @ embeddings.T / temperature
-    resp_sim, valid_pairs = response_similarity_with_validity(responses, response_mask)
+    resp_sim, valid_pairs = response_similarity_with_validity(
+        responses, response_mask, weights=response_weight
+    )
     if response_se is not None:
         resp_sim = resp_sim * _pair_reliability(response_se, response_mask)
 
@@ -91,11 +99,18 @@ def response_alignment_loss(
             assert queue_response_mask is not None
             queue_resp = queue_responses.to(responses.device)
             queue_mask = queue_response_mask.to(response_mask.device)
+            queue_weight = (
+                queue_response_weight.to(responses.device)
+                if queue_response_weight is not None
+                else None
+            )
             queue_sim, queue_valid = response_similarity_between(
                 responses,
                 response_mask,
                 queue_resp,
                 queue_mask,
+                weights_a=response_weight,
+                weights_b=queue_weight,
             )
             if response_se is not None and queue_response_se is not None:
                 current_unit = _unit_reliability(response_se, response_mask)
@@ -148,6 +163,7 @@ def embedding_distance_loss(
     responses: torch.Tensor,
     response_mask: torch.Tensor,
     response_se: torch.Tensor | None = None,
+    response_weight: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """MSE between embedding cosine distance and response similarity.
 
@@ -157,9 +173,13 @@ def embedding_distance_loss(
 
     With ``response_se`` the target similarities are shrunk toward zero by
     label reliability, so uncertain pairs are not forced to be close or far.
+    ``response_weight`` uses the same pairwise design weighting as the
+    alignment loss.
     """
     emb_cos = embeddings @ embeddings.T
-    resp_sim, valid_pairs = response_similarity_with_validity(responses, response_mask)
+    resp_sim, valid_pairs = response_similarity_with_validity(
+        responses, response_mask, weights=response_weight
+    )
     if response_se is not None:
         resp_sim = resp_sim * _pair_reliability(response_se, response_mask)
 
@@ -185,6 +205,8 @@ def combined_representation_loss(
     queue_response_se: torch.Tensor | None = None,
     anchor_ids: torch.Tensor | None = None,
     queue_ids: torch.Tensor | None = None,
+    response_weight: torch.Tensor | None = None,
+    queue_response_weight: torch.Tensor | None = None,
 ) -> torch.Tensor:
     l_alignment = response_alignment_loss(
         embeddings,
@@ -198,8 +220,12 @@ def combined_representation_loss(
         queue_response_se=queue_response_se,
         anchor_ids=anchor_ids,
         queue_ids=queue_ids,
+        response_weight=response_weight,
+        queue_response_weight=queue_response_weight,
     )
-    l_distance = embedding_distance_loss(embeddings, responses, response_mask, response_se)
+    l_distance = embedding_distance_loss(
+        embeddings, responses, response_mask, response_se, response_weight
+    )
     return alpha * l_alignment + (1 - alpha) * l_distance
 
 
@@ -225,7 +251,18 @@ def prediction_loss(
     responses: torch.Tensor,
     response_mask: torch.Tensor,
     response_se: torch.Tensor | None,
+    response_weight: torch.Tensor | None = None,
 ) -> torch.Tensor:
+    """Per-family mean squared error, optionally weighted per response cell.
+
+    Without ``response_weight`` the historical precision weighting is kept
+    (``1 / SE²`` with the family median imputation).  With ``response_weight``
+    the design-only reliability is used instead: each family averages
+    ``sum(m * w * diff²) / sum(m * w)`` and families whose observable cells all
+    carry zero weight are skipped.  The statistical uncertainty of the labels
+    stays in the representation loss through ``response_se``; the prediction
+    head is intentionally seeded with the design signal only.
+    """
     total: torch.Tensor = torch.zeros((), device=responses.device)
     count = 0
     for family, (start, end, _) in RESPONSE_OFFSETS.items():
@@ -240,10 +277,18 @@ def prediction_loss(
             continue
 
         diff = pred[mask] - target[mask]
-        weight = (
-            torch.ones_like(diff) if se is None else _precision_weights(se[mask])
-        )
-        total += (weight * diff**2).sum() / weight.sum()
+        if response_weight is not None:
+            design = torch.nan_to_num(
+                response_weight[:, start:end], nan=0.0
+            ).clamp_min(0.0)
+            weight = design[mask]
+            weight_sum = weight.sum()
+            if weight_sum <= 0:
+                continue
+            total += (weight * diff**2).sum() / weight_sum
+        else:
+            weight = torch.ones_like(diff) if se is None else _precision_weights(se[mask])
+            total += (weight * diff**2).sum() / weight.sum()
         count += 1
 
     if count == 0:
@@ -269,6 +314,8 @@ def total_loss(
     queue_ids: torch.Tensor | None = None,
     log_var_rep: torch.Tensor | None = None,
     log_var_pred: torch.Tensor | None = None,
+    response_weight: torch.Tensor | None = None,
+    queue_response_weight: torch.Tensor | None = None,
 ) -> dict[str, torch.Tensor]:
     l_rep = combined_representation_loss(
         embeddings,
@@ -283,8 +330,10 @@ def total_loss(
         queue_response_se=queue_response_se,
         anchor_ids=anchor_ids,
         queue_ids=queue_ids,
+        response_weight=response_weight,
+        queue_response_weight=queue_response_weight,
     )
-    l_pred = prediction_loss(predictions, responses, response_mask, response_se)
+    l_pred = prediction_loss(predictions, responses, response_mask, response_se, response_weight)
     if log_var_rep is not None and log_var_pred is not None:
         # Uncertainty weighting (Kendall et al. 2018): the task weights are
         # learned as exp(-log_var) and the log variances regularize against

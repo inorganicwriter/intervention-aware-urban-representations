@@ -67,6 +67,7 @@ class GridSample:
     response_vector: torch.Tensor
     response_mask: torch.Tensor
     response_se: torch.Tensor
+    response_weight: torch.Tensor
     modality_available: dict[str, bool]
     final_training_mask: bool
     quality_grade: str
@@ -271,6 +272,8 @@ class RepresentationDataset(torch.utils.data.Dataset[GridSample]):
 
             response = np.full(RESPONSE_DIM, np.nan, dtype=np.float64)
             response_se = np.full(RESPONSE_DIM, np.nan, dtype=np.float64)
+            response_weight = np.zeros(RESPONSE_DIM, dtype=np.float64)
+            has_weight_column = "response_weight" in group.columns
 
             for family, (start, end, cols) in RESPONSE_OFFSETS.items():
                 del end
@@ -295,6 +298,18 @@ class RepresentationDataset(torch.utils.data.Dataset[GridSample]):
                             response_se[idx] = pd.to_numeric(
                                 task_row.get("standard_error", np.nan), errors="coerce"
                             )
+                            if has_weight_column:
+                                weight_value = pd.to_numeric(
+                                    task_row.get("response_weight", np.nan), errors="coerce"
+                                )
+                                response_weight[idx] = (
+                                    float(weight_value) if pd.notna(weight_value) else 0.0
+                                )
+                            else:
+                                # Datasets built before Rev3 carry no weight
+                                # column; treat every eligible label as equally
+                                # reliable so the loader stays compatible.
+                                response_weight[idx] = 1.0
                     else:
                         logger.warning(
                             "Skipping unknown outcome/horizon: %s in family %s",
@@ -304,6 +319,7 @@ class RepresentationDataset(torch.utils.data.Dataset[GridSample]):
 
             row["response"] = response.astype(np.float32)
             row["response_se"] = response_se.astype(np.float32)
+            row["response_weight"] = response_weight.astype(np.float32)
             records.append(row)
 
         self._records = pd.DataFrame(records)
@@ -393,6 +409,7 @@ class RepresentationDataset(torch.utils.data.Dataset[GridSample]):
             response_vector=torch.from_numpy(response),
             response_mask=torch.from_numpy(response_mask),
             response_se=torch.from_numpy(response_se),
+            response_weight=torch.from_numpy(rec["response_weight"]),
             modality_available=self._build_modality_available(order),
             final_training_mask=bool(rec["final_training_mask"]),
             quality_grade=str(rec["quality_grade"]),
@@ -465,6 +482,7 @@ def collate_samples(
         "responses": torch.stack([s.response_vector for s in samples]),
         "response_mask": torch.stack([s.response_mask for s in samples]),
         "response_se": torch.stack([s.response_se for s in samples]),
+        "response_weight": torch.stack([s.response_weight for s in samples]),
         "conditioning_tokens": torch.tensor(
             [s.conditioning_token for s in samples], dtype=torch.long
         ),

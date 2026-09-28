@@ -28,14 +28,18 @@ def response_similarity(
     responses: torch.Tensor,
     masks: torch.Tensor,
     families: list[str] | None = None,
+    weights: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Vectorized pairwise correlation over commonly-observed response cells.
 
     With ``families=None`` and ``responses`` of the full response dimension,
     the per-family correlations are averaged exactly like the training loss.
     Passing a subset of family names restricts the average to those segments.
+    ``weights`` applies the per-label design reliability: cell ``k`` of pair
+    ``(i, j)`` carries weight ``sqrt(w_i w_j)``.  Without weights the plain
+    correlation is returned.
     """
-    similarity, _ = response_similarity_with_validity(responses, masks, families)
+    similarity, _ = response_similarity_with_validity(responses, masks, families, weights)
     return similarity
 
 
@@ -43,6 +47,7 @@ def response_similarity_with_validity(
     responses: torch.Tensor,
     masks: torch.Tensor,
     families: list[str] | None = None,
+    weights: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Return response correlation and whether each pair is comparable.
 
@@ -51,7 +56,9 @@ def response_similarity_with_validity(
     over comparable families only; missing families are not interpreted as
     zero response similarity.
     """
-    return response_similarity_between(responses, masks, responses, masks, families)
+    return response_similarity_between(
+        responses, masks, responses, masks, families, weights, weights
+    )
 
 
 def response_similarity_between(
@@ -60,8 +67,18 @@ def response_similarity_between(
     responses_b: torch.Tensor,
     masks_b: torch.Tensor,
     families: list[str] | None = None,
+    weights_a: torch.Tensor | None = None,
+    weights_b: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Rectangular response similarity without constructing a square joint pool."""
+    """Rectangular response similarity without constructing a square joint pool.
+
+    With per-label design weights the per-family statistic becomes the weighted
+    correlation over commonly observed cells with pairwise weight
+    ``sqrt(w_i w_j)``; a pair whose weighted common support is below two cells
+    (or whose weighted variance is degenerate) is reported as invalid instead
+    of receiving a zero similarity, because zero would mean "orthogonal", not
+    "no evidence".
+    """
     n_a, dim = responses_a.shape
     n_b = responses_b.shape[0]
     if responses_b.shape[1] != dim:
@@ -70,6 +87,18 @@ def response_similarity_between(
         raise ValueError("Each response mask must match its response tensor")
     if responses_a.device != responses_b.device:
         raise ValueError("Response pools must be on the same device")
+    weighted = weights_a is not None or weights_b is not None
+    if weighted:
+        if weights_a is None:
+            weights_a = torch.ones_like(responses_a)
+        if weights_b is None:
+            weights_b = torch.ones_like(responses_b)
+        if weights_a.shape != responses_a.shape or weights_b.shape != responses_b.shape:
+            raise ValueError("Each response weight must match its response tensor")
+        if weights_a.device != responses_a.device or weights_b.device != responses_b.device:
+            raise ValueError("Response weights must be on the same device")
+        weights_a = torch.nan_to_num(weights_a, nan=0.0).clamp_min(0.0)
+        weights_b = torch.nan_to_num(weights_b, nan=0.0).clamp_min(0.0)
     sim_sum = responses_a.new_zeros(n_a, n_b)
     valid_count = torch.zeros(n_a, n_b, dtype=torch.int32, device=responses_a.device)
 
@@ -94,24 +123,59 @@ def response_similarity_between(
         xb = torch.where(
             mb, responses_b[:, start:end], torch.zeros_like(responses_b[:, start:end])
         )
-        mfa = ma.to(responses_a.dtype)
-        mfb = mb.to(responses_a.dtype)
-        xma = xa * mfa
-        xmb = xb * mfb
-        common = mfa @ mfb.T
-        sx = xma @ mfb.T
-        sy = mfa @ xmb.T
-        sxy = xma @ xmb.T
-        sx2 = (xa * xma) @ mfb.T
-        sy2 = mfa @ (xb * xmb).T
+        if weighted:
+            assert weights_a is not None and weights_b is not None
+            pair_weight = (ma.unsqueeze(1) & mb.unsqueeze(0)).to(responses_a.dtype) * (
+                torch.sqrt(
+                    weights_a[:, start:end].unsqueeze(1)
+                    * weights_b[:, start:end].unsqueeze(0)
+                )
+            )
+            reliable = (pair_weight > 0).sum(dim=2)
+            support = pair_weight.sum(dim=2).clamp_min(eps)
+            xa3 = xa.unsqueeze(1)
+            xb3 = xb.unsqueeze(0)
+            wx = pair_weight * xa3
+            wy = pair_weight * xb3
+            sx = wx.sum(dim=2)
+            sy = wy.sum(dim=2)
+            sxy = (wx * xb3).sum(dim=2)
+            sx2 = (wx * xa3).sum(dim=2)
+            sy2 = (wy * xb3).sum(dim=2)
+            num = sxy - sx * sy / support
+            var_x = (sx2 - sx * sx / support).clamp(min=0.0)
+            var_y = (sy2 - sy * sy / support).clamp(min=0.0)
+            # Reliability counts cells with positive pair weight, so the
+            # validity rule is invariant under re-scaling all weights; the
+            # variance is compared per unit of average weight for the same
+            # reason.
+            mean_weight = support / reliable.clamp_min(1).to(support.dtype)
+            valid = (
+                (reliable >= 2)
+                & (var_x > eps * mean_weight)
+                & (var_y > eps * mean_weight)
+            )
+            denom_std = (var_x * var_y).sqrt().clamp(min=eps)
+            corr = torch.where(valid, (num / denom_std).clamp(-1.0, 1.0), 0.0)
+        else:
+            mfa = ma.to(responses_a.dtype)
+            mfb = mb.to(responses_a.dtype)
+            xma = xa * mfa
+            xmb = xb * mfb
+            common = mfa @ mfb.T
+            sx = xma @ mfb.T
+            sy = mfa @ xmb.T
+            sxy = xma @ xmb.T
+            sx2 = (xa * xma) @ mfb.T
+            sy2 = mfa @ (xb * xmb).T
 
-        denom = common.clamp(min=eps)
-        num = sxy - (sx * sy) / denom
-        var_x = (sx2 - sx * sx / denom).clamp(min=0.0)
-        var_y = (sy2 - sy * sy / denom).clamp(min=0.0)
-        denom_std = (var_x * var_y).sqrt().clamp(min=eps)
-        valid = (common >= 2) & (var_x > eps) & (var_y > eps)
-        corr = torch.where(valid, (num / denom_std).clamp(-1.0, 1.0), 0.0)
+            denom = common.clamp(min=eps)
+            num = sxy - (sx * sy) / denom
+            var_x = (sx2 - sx * sx / denom).clamp(min=0.0)
+            var_y = (sy2 - sy * sy / denom).clamp(min=0.0)
+            denom_std = (var_x * var_y).sqrt().clamp(min=eps)
+            valid = (common >= 2) & (var_x > eps) & (var_y > eps)
+            corr = torch.where(valid, (num / denom_std).clamp(-1.0, 1.0), 0.0)
         sim_sum = sim_sum + corr
         valid_count = valid_count + valid.to(valid_count.dtype)
 

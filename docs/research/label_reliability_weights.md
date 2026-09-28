@@ -126,6 +126,34 @@ Per-treatment: `sample_index.parquet:task_sampling_weight` is an optional
 aggregate for sampling only.  Release manifest: `response_weight` block with
 the calibration version, parameters and eligible-label statistics.
 
+## Training integration (Rev3.4)
+
+The representation trainer consumes the per-label `response_weight` end to
+end: `GridSample.response_weight` (27-dimensional, zero for ineligible or
+missing labels) is stacked by `collate_samples`, carried by the labeled queue,
+and passed to `total_loss`.  Without the column the loader falls back to unit
+weights, so pre-Rev3 datasets stay usable.
+
+- Response similarity uses pairwise design weights \(a_{ijk} = m_{ijk}\sqrt{W_{ik} W_{jk}}\):
+  means, variances and covariance are weighted per family, and a pair is
+  comparable only when at least two commonly observed cells have strictly
+  positive pair weight and the weighted variance is non-degenerate.  Pairs
+  failing that rule are removed from the InfoNCE denominator (an invalid pair
+  is "no evidence", not "zero similarity").  The rule is invariant under
+  rescaling all weights, and with unit weights it reduces to the historical
+  unweighted correlation.
+- The prediction head minimizes the per-family design-weighted MSE
+  \(\sum m W \ell / \sum m W\); families whose observable cells all carry zero
+  weight are skipped.  Sampling uncertainty is not re-used here.
+- `response_se` keeps its pair-level statistical shrinkage in the alignment
+  loss (`se_shrinkage`), so design quality and sampling precision enter through
+  separate channels: design weights shape the targets, SE shrinks the
+  statistical force of each pair.
+- Training builds use `alpha = 0` (W-design); the W-full ablation runs the same
+  code path with `alpha > 0` weights.  W0 (`gamma = 0, alpha = 0`) yields unit
+  weights and therefore the historical unweighted comparison, apart from the
+  prediction head now receiving design weights instead of `1/SE^2`.
+
 ## Versions and ablations
 
 | Version | Sample weight | Loss uses SE | Purpose |

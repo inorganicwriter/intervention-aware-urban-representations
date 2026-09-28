@@ -58,6 +58,7 @@ def _run_epoch(
     all_responses: list[torch.Tensor] = []
     all_masks: list[torch.Tensor] = []
     all_response_se: list[torch.Tensor] = []
+    all_response_weights: list[torch.Tensor] = []
     all_predictions: dict[str, list[torch.Tensor]] = {}
     n_batches = 0
     n_examples = 0
@@ -72,6 +73,9 @@ def _run_epoch(
             responses = batch["responses"].to(device)
             response_mask = batch["response_mask"].to(device)
             response_se = batch["response_se"].to(device)
+            response_weight = batch.get("response_weight")
+            if response_weight is not None:
+                response_weight = response_weight.to(device)
             treatment_orders = batch["treatment_order"].to(device)
             images = batch.get("images")
             image_mask = batch.get("image_mask")
@@ -109,6 +113,10 @@ def _run_epoch(
                 queue_ids=queue_state["ids"] if queue_state else None,
                 log_var_rep=model.log_var_rep if model.uncertainty_weighted else None,
                 log_var_pred=model.log_var_pred if model.uncertainty_weighted else None,
+                response_weight=response_weight,
+                queue_response_weight=(
+                    queue_state.get("response_weight") if queue_state else None
+                ),
             )
             loss = losses["total"]
 
@@ -123,6 +131,7 @@ def _run_epoch(
                         response_mask,
                         response_se,
                         treatment_orders,
+                        response_weight=response_weight,
                     )
 
             batch_size = int(features.shape[0])
@@ -140,6 +149,8 @@ def _run_epoch(
                 all_responses.append(responses.cpu())
                 all_masks.append(response_mask.cpu())
                 all_response_se.append(response_se.cpu())
+                if response_weight is not None:
+                    all_response_weights.append(response_weight.cpu())
                 for family, prediction in predictions.items():
                     all_predictions.setdefault(family, []).append(prediction.cpu())
 
@@ -159,6 +170,9 @@ def _run_epoch(
         val_resp = torch.cat(all_responses, dim=0)
         val_mask = torch.cat(all_masks, dim=0)
         val_se = torch.cat(all_response_se, dim=0)
+        val_weight = (
+            torch.cat(all_response_weights, dim=0) if all_response_weights else None
+        )
         val_predictions = {
             family: torch.cat(parts, dim=0) for family, parts in all_predictions.items()
         }
@@ -183,6 +197,7 @@ def _run_epoch(
             se_shrinkage=se_shrinkage,
             log_var_rep=eval_log_var_rep if model.uncertainty_weighted else None,
             log_var_pred=eval_log_var_pred if model.uncertainty_weighted else None,
+            response_weight=val_weight,
         )
         result.update(
             {

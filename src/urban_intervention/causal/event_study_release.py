@@ -480,6 +480,9 @@ def _matching_availability(
             "source_file": f"{directory.name}/event_study_coefficients.csv",
         }
     )
+    n_cities_value = pd.to_numeric(row.get("n_cities"), errors="coerce")
+    if pd.notna(n_cities_value) and n_cities_value < MIN_INTERPRETABLE_CLUSTERS:
+        row["warnings"] = "insufficient_clusters"
     if pd.notna(availability_treated) and np.isfinite(window_max) and availability_treated > 0:
         row["coverage"] = window_max / float(availability_treated)
     if support is not None:

@@ -95,6 +95,16 @@ def main() -> int:
         type=Path,
         help="Optional isolated Matching task artifact root.",
     )
+    parser.add_argument(
+        "--matching-donor-scopes",
+        default="same_city,all_city_standardized",
+        help=(
+            "Comma-separated Matching donor scopes. same_city writes "
+            "matching_twfe/<family>; all_city_standardized writes "
+            "matching_twfe_cross/<family>. Each family is analyzed under every "
+            "requested scope independently."
+        ),
+    )
     parser.add_argument("--no-figures", action="store_true")
     parser.add_argument(
         "--matching-window-preset",
@@ -138,6 +148,7 @@ def main() -> int:
     statuses: list[dict[str, object]] = []
     path_result: PooledPathEventStudyResult | None = None
     matching_results = {}
+    cross_matching_results = {}
     path_output = args.output_directory / "gsc_mc_paths"
     monthly_observation_windows = {"housing": args.observation_window, "viirs": 1}
     try:
@@ -169,48 +180,63 @@ def main() -> int:
     unknown = set(families) - allowed
     if unknown:
         parser.error(f"unknown families: {sorted(unknown)}")
-    for family in families:
-        output = args.output_directory / "matching_twfe" / family
-        if args.matching_window_preset == "canonical":
-            min_pre, max_post = canonical_event_window(family)
-        else:
-            min_pre, max_post = None, None
-        try:
-            result = run_matching_event_study(
-                family,
-                output,
-                min_pre=min_pre,
-                max_post=max_post,
-                pretrend_window=args.latest_pre_periods,
-                observation_window=(1 if family == "viirs" else args.observation_window),
-                treatment_orders=(
-                    {order for order, task_family in task_keys if task_family == family}
-                    if task_keys is not None
-                    else None
-                ),
-                reference_event_time=args.reference_event_time,
-                family_queue=args.matching_family_queue,
-                control_queue=args.matching_control_queue,
-                task_root=args.matching_task_root,
-                transaction_count_threshold=args.transaction_count_threshold,
-                specification_fingerprint=args.specification_fingerprint,
-            )
-            matching_results[family] = result
-            statuses.append(
-                {
-                    "component": f"matching_twfe:{family}",
-                    "status": "completed",
-                    "details": f"{result.diagnostics['treated_events']} treatments",
-                }
-            )
-        except ValueError as error:
-            statuses.append(
-                {
-                    "component": f"matching_twfe:{family}",
-                    "status": "no_data",
-                    "details": str(error),
-                }
-            )
+    scopes = [value.strip() for value in args.matching_donor_scopes.split(",") if value.strip()]
+    allowed_scopes = {"same_city", "all_city_standardized"}
+    unknown_scopes = set(scopes) - allowed_scopes
+    if unknown_scopes:
+        parser.error(f"unknown matching donor scopes: {sorted(unknown_scopes)}")
+    for scope in scopes:
+        for family in families:
+            if scope == "same_city":
+                output = args.output_directory / "matching_twfe" / family
+                component = f"matching_twfe:{family}"
+            else:
+                output = args.output_directory / "matching_twfe_cross" / family
+                component = f"matching_twfe_cross:{family}"
+            if args.matching_window_preset == "canonical":
+                min_pre, max_post = canonical_event_window(family)
+            else:
+                min_pre, max_post = None, None
+            try:
+                result = run_matching_event_study(
+                    family,
+                    output,
+                    donor_scope=scope,
+                    min_pre=min_pre,
+                    max_post=max_post,
+                    pretrend_window=args.latest_pre_periods,
+                    observation_window=(1 if family == "viirs" else args.observation_window),
+                    treatment_orders=(
+                        {order for order, task_family in task_keys if task_family == family}
+                        if task_keys is not None
+                        else None
+                    ),
+                    reference_event_time=args.reference_event_time,
+                    family_queue=args.matching_family_queue,
+                    control_queue=args.matching_control_queue,
+                    task_root=args.matching_task_root,
+                    transaction_count_threshold=args.transaction_count_threshold,
+                    specification_fingerprint=args.specification_fingerprint,
+                )
+                if scope == "same_city":
+                    matching_results[family] = result
+                else:
+                    cross_matching_results[family] = result
+                statuses.append(
+                    {
+                        "component": component,
+                        "status": "completed",
+                        "details": f"{result.diagnostics['treated_events']} treatments",
+                    }
+                )
+            except ValueError as error:
+                statuses.append(
+                    {
+                        "component": component,
+                        "status": "no_data",
+                        "details": str(error),
+                    }
+                )
     combined = (
         []
         if args.no_figures
@@ -253,8 +279,14 @@ def main() -> int:
             else {}
         )
         requested = int(requested_by_family.get(family, 0)) if task_keys is not None else None
+        cross_count = int(
+            cross_matching_results[family].diagnostics["treated_events"]
+            if family in cross_matching_results
+            else 0
+        )
         for method, count in (
             ("matching", matching_count),
+            ("matching_cross", cross_count),
             ("gsc", int(method_counts.get("gsc", 0))),
             ("mc", int(method_counts.get("mc", 0))),
         ):
@@ -297,6 +329,13 @@ def main() -> int:
     completed = int(status["status"].eq("completed").sum())
     print(f"Completed {completed}/{len(status)} Python event-study components")
     acceptable = status["status"].isin({"completed", "skipped_by_flag"})
+    # A family with no cross-city matched labels is a valid outcome, not a
+    # failure: families are analyzed independently, and the cross scope is
+    # simply empty for that family.
+    cross_no_data = status["component"].str.startswith("matching_twfe_cross:") & status[
+        "status"
+    ].eq("no_data")
+    acceptable = acceptable | cross_no_data
     if not args.allow_partial and not acceptable.all():
         incomplete = status.loc[
             ~acceptable, ["component", "status"]

@@ -250,8 +250,8 @@ def main() -> int:
         return 1
     cross_note = (
         f"{len(cross_pairs)} cross-city matched (order, family) pairs are recorded "
-        "in the release; the same-city event study skips them and they do not "
-        "affect the other families"
+        "in the release; each family x scope is aggregated independently and "
+        "combinations without enough observations are reported as no_data"
     )
     print(cross_note)
     return 0

@@ -233,11 +233,21 @@ def test_export_builds_unified_release(release_inputs, tmp_path: Path) -> None:
     availability = pd.read_csv(output / "availability.csv", encoding="utf-8-sig")
     assert list(availability.columns) == AVAILABILITY_COLUMNS
     assert "treated_events" not in availability.columns
-    matching = availability.loc[availability["method"].eq("matching")]
+    matching = availability.loc[
+        availability["method"].eq("matching")
+        & availability["donor_scope"].eq("same_city")
+    ]
     assert matching["status"].eq("available").all()
+    cross_matching = availability.loc[
+        availability["method"].eq("matching")
+        & availability["donor_scope"].eq("all_city_standardized")
+    ]
+    assert len(cross_matching) == len(FAMILIES)
+    assert cross_matching["status"].eq("no_data").all()
     matching_viirs = availability.loc[
         availability["outcome_family"].eq("viirs")
         & availability["analysis_type"].eq("matching")
+        & availability["donor_scope"].eq("same_city")
     ].iloc[0]
     assert matching_viirs["availability_treated_events"] == pytest.approx(100.0)
     assert matching_viirs["event_study_max_n_treated"] == pytest.approx(100.0)

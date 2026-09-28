@@ -245,17 +245,31 @@ def _event_phase(event_time: pd.Series) -> pd.Series:
     return phase
 
 
-def find_family_directory(root: Path, family: str) -> Path | None:
-    """Locate a family's Matching event-study directory under either layout."""
-    candidates = (
-        root / "matching_twfe" / family,
-        root / f"matching_{family}",
-        root / family,
-    )
+def find_matching_directory(
+    root: Path, family: str, donor_scope: str
+) -> Path | None:
+    """Locate a family's Matching event-study directory for one donor scope."""
+    candidates: tuple[Path, ...]
+    if donor_scope == "same_city":
+        candidates = (
+            root / "matching_twfe" / family,
+            root / f"matching_{family}",
+            root / family,
+        )
+    else:
+        candidates = (
+            root / "matching_twfe_cross" / family,
+            root / f"matching_{family}_cross",
+        )
     for candidate in candidates:
         if candidate.is_dir():
             return candidate
     return None
+
+
+def find_family_directory(root: Path, family: str) -> Path | None:
+    """Backward-compatible same-city lookup."""
+    return find_matching_directory(root, family, "same_city")
 
 
 def _window_bounds(family: str) -> tuple[int, int]:
@@ -270,7 +284,9 @@ def _filter_window(frame: pd.DataFrame, family: str) -> tuple[pd.DataFrame, int]
     return frame.loc[keep].copy(), removed
 
 
-def _standardize_matching(family: str, directory: Path) -> tuple[pd.DataFrame, int]:
+def _standardize_matching(
+    family: str, directory: Path, donor_scope: str = "same_city"
+) -> tuple[pd.DataFrame, int]:
     coefficients = _read_csv(directory / "event_study_coefficients.csv")
     diagnostics = {}
     diagnostics_path = directory / "diagnostics.csv"
@@ -283,7 +299,7 @@ def _standardize_matching(family: str, directory: Path) -> tuple[pd.DataFrame, i
         {
             "outcome_family": family,
             "method": "matching",
-            "donor_scope": "same_city",
+            "donor_scope": donor_scope,
             "frequency": FREQUENCIES[family],
             "outcome": MAIN_OUTCOMES[family],
             "event_time": _numeric_column(coefficients, "event_time"),
@@ -405,6 +421,8 @@ def _matching_availability(
     directory: Path | None,
     support: pd.DataFrame | None,
     matching_panel: pd.DataFrame,
+    donor_scope: str = "same_city",
+    component_reason: str | None = None,
 ) -> dict[str, object]:
     bounds = _window_bounds(family)
     panel_rows = int(len(matching_panel))
@@ -417,7 +435,7 @@ def _matching_availability(
         "outcome_family": family,
         "analysis_type": "matching",
         "method": "matching",
-        "donor_scope": "same_city",
+        "donor_scope": donor_scope,
         "status": "no_data",
         "reason": "",
         "availability_treated_events": np.nan,
@@ -438,12 +456,16 @@ def _matching_availability(
         "source_file": "",
     }
     if directory is None:
-        row["reason"] = "matching_directory_missing"
+        row["reason"] = component_reason or (
+            "insufficient_samples_for_event_study"
+            if donor_scope != "same_city"
+            else "matching_directory_missing"
+        )
         return row
     diagnostics_path = directory / "diagnostics.csv"
     coefficients_path = directory / "event_study_coefficients.csv"
     if not diagnostics_path.is_file() or not coefficients_path.is_file():
-        row["reason"] = "matching_outputs_missing"
+        row["reason"] = component_reason or "matching_outputs_missing"
         return row
     diagnostics = _read_csv(diagnostics_path).iloc[0].to_dict()
     availability_treated = pd.to_numeric(
@@ -575,54 +597,78 @@ def _support_table(suite_root: Path | None, matching_root: Path, pooled_root: Pa
     return None
 
 
+def _suite_status_table(
+    suite_root: Path | None, matching_root: Path, pooled_root: Path
+) -> dict[str, tuple[str, str]]:
+    """Map component name -> (status, details) from suite_status.csv when present."""
+    candidates: list[Path] = []
+    if suite_root is not None:
+        candidates.append(suite_root)
+    candidates.extend([matching_root, pooled_root])
+    for candidate in candidates:
+        frame = _optional_read_csv(candidate / "suite_status.csv")
+        if frame is None or not {"component", "status"}.issubset(frame.columns):
+            continue
+        lookup: dict[str, tuple[str, str]] = {}
+        for row in frame.itertuples():
+            details = getattr(row, "details", "")
+            lookup[str(row.component)] = (
+                str(row.status),
+                "" if pd.isna(details) else str(details),
+            )
+        return lookup
+    return {}
+
+
 def _pretrend_rows(
     matching_root: Path,
     pooled_root: Path,
 ) -> pd.DataFrame:
     records: list[dict[str, object]] = []
     for family in FAMILIES:
-        directory = find_family_directory(matching_root, family)
-        if directory is None:
-            continue
-        for cluster, filename in (
-            ("grid", "parallel_trends_wald.csv"),
-            ("city", "parallel_trends_wald_city_cluster.csv"),
-        ):
-            frame = _optional_read_csv(directory / filename)
-            if frame is None or frame.empty:
+        for donor_scope in ("same_city", "all_city_standardized"):
+            directory = find_matching_directory(matching_root, family, donor_scope)
+            if directory is None:
                 continue
-            row = frame.iloc[0]
-            p_value = pd.to_numeric(row.get("p_value"), errors="coerce")
-            records.append(
-                {
-                    "outcome_family": family,
-                    "method": "matching",
-                    "donor_scope": "same_city",
-                    "frequency": FREQUENCIES[family],
-                    "outcome": MAIN_OUTCOMES[family],
-                    "cluster": cluster,
-                    "test_type": "joint_wald_pretrend",
-                    "statistic": row.get("statistic"),
-                    "df1": row.get("df1"),
-                    "df2": row.get("df2"),
-                    "covariance_rank": row.get("covariance_rank"),
-                    "n_cities": np.nan,
-                    "n_pre_observations": np.nan,
-                    "mean_city_mean": np.nan,
-                    "sd_city_mean": np.nan,
-                    "t_statistic": np.nan,
-                    "p_value": p_value,
-                    "reject_5pct": bool(p_value < 0.05) if pd.notna(p_value) else False,
-                    "pretrend_flag": (
-                        "cluster_flag"
-                        if pd.notna(p_value) and p_value < 0.05
-                        else "cluster_not_detected"
-                        if pd.notna(p_value)
-                        else "insufficient_clusters"
-                    ),
-                    "source_file": f"{directory.name}/{filename}",
-                }
-            )
+            for cluster, filename in (
+                ("grid", "parallel_trends_wald.csv"),
+                ("city", "parallel_trends_wald_city_cluster.csv"),
+            ):
+                frame = _optional_read_csv(directory / filename)
+                if frame is None or frame.empty:
+                    continue
+                row = frame.iloc[0]
+                p_value = pd.to_numeric(row.get("p_value"), errors="coerce")
+                records.append(
+                    {
+                        "outcome_family": family,
+                        "method": "matching",
+                        "donor_scope": donor_scope,
+                        "frequency": FREQUENCIES[family],
+                        "outcome": MAIN_OUTCOMES[family],
+                        "cluster": cluster,
+                        "test_type": "joint_wald_pretrend",
+                        "statistic": row.get("statistic"),
+                        "df1": row.get("df1"),
+                        "df2": row.get("df2"),
+                        "covariance_rank": row.get("covariance_rank"),
+                        "n_cities": np.nan,
+                        "n_pre_observations": np.nan,
+                        "mean_city_mean": np.nan,
+                        "sd_city_mean": np.nan,
+                        "t_statistic": np.nan,
+                        "p_value": p_value,
+                        "reject_5pct": bool(p_value < 0.05) if pd.notna(p_value) else False,
+                        "pretrend_flag": (
+                            "cluster_flag"
+                            if pd.notna(p_value) and p_value < 0.05
+                            else "cluster_not_detected"
+                            if pd.notna(p_value)
+                            else "insufficient_clusters"
+                        ),
+                        "source_file": f"{directory.name}/{filename}",
+                    }
+                )
     pooled_pretrend_parts: list[pd.DataFrame] = []
     for filename in ("pretrend_city_cluster.csv", "pretrend_grid_cluster.csv"):
         frame = _optional_read_csv(pooled_root / filename)
@@ -702,6 +748,7 @@ def _selection_table(
         availability_row = availability.loc[
             availability["outcome_family"].eq(family)
             & availability["method"].eq("matching")
+            & availability["donor_scope"].eq("same_city")
         ]
         availability_treated_events = np.nan
         if not availability_row.empty:
@@ -907,12 +954,15 @@ def _write_manifest(
     status_counts = (
         availability["status"].value_counts().to_dict() if not availability.empty else {}
     )
+    matching_scopes = sorted(
+        set(panel.loc[panel["method"].eq("matching"), "donor_scope"].astype(str))
+    )
     manifest: dict[str, object] = {
         "schema": FINAL_SCHEMA,
         "created_utc": datetime.now(tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "windows": windows,
         "methods": {
-            "matching": ["same_city"],
+            "matching": matching_scopes or ["same_city"],
             "gsc": list(DONOR_SCOPES),
             "mc": list(DONOR_SCOPES),
         },
@@ -968,7 +1018,10 @@ def _validate(
         "error",
         f"missing families: {missing}" if missing else "all four families present",
     )
-    matching = availability.loc[availability["method"].eq("matching")]
+    matching = availability.loc[
+        availability["method"].eq("matching")
+        & availability["donor_scope"].eq("same_city")
+    ]
     missing_matching = sorted(set(FAMILIES) - set(matching["outcome_family"]))
     unavailable_matching = sorted(
         matching.loc[~matching["status"].eq("available"), "outcome_family"].astype(str)
@@ -1082,15 +1135,21 @@ def collect_event_study_release(
 ) -> dict[str, Any]:
     """Collect, standardize and validate the four-family release in memory."""
     support = _support_table(suite_root, matching_root, pooled_root)
+    suite_status_lookup = _suite_status_table(suite_root, matching_root, pooled_root)
     matching_parts: list[pd.DataFrame] = []
     matching_removed = 0
-    for family in FAMILIES:
-        directory = find_family_directory(matching_root, family)
-        if directory is None or not (directory / "event_study_coefficients.csv").is_file():
-            continue
-        frame, removed = _standardize_matching(family, directory)
-        matching_parts.append(frame)
-        matching_removed += removed
+    matching_directories: dict[tuple[str, str], Path] = {}
+    for donor_scope in ("same_city", "all_city_standardized"):
+        for family in FAMILIES:
+            directory = find_matching_directory(matching_root, family, donor_scope)
+            if directory is None or not (
+                directory / "event_study_coefficients.csv"
+            ).is_file():
+                continue
+            frame, removed = _standardize_matching(family, directory, donor_scope)
+            matching_parts.append(frame)
+            matching_removed += removed
+            matching_directories[(family, donor_scope)] = directory
     matching_panel = (
         pd.concat(matching_parts, ignore_index=True)
         if matching_parts
@@ -1105,11 +1164,33 @@ def collect_event_study_release(
 
     availability_rows: list[dict[str, object]] = []
     for family in FAMILIES:
-        directory = find_family_directory(matching_root, family)
-        family_panel = matching_panel.loc[matching_panel["outcome_family"].eq(family)]
-        availability_rows.append(
-            _matching_availability(family, directory, support, family_panel)
-        )
+        for donor_scope in ("same_city", "all_city_standardized"):
+            directory = matching_directories.get((family, donor_scope))
+            component = (
+                f"matching_twfe:{family}"
+                if donor_scope == "same_city"
+                else f"matching_twfe_cross:{family}"
+            )
+            component_reason: str | None = None
+            status_entry = suite_status_lookup.get(component)
+            if status_entry is not None and status_entry[0] == "no_data":
+                component_reason = (
+                    status_entry[1] or "insufficient_samples_for_event_study"
+                )
+            family_panel = matching_panel.loc[
+                matching_panel["outcome_family"].eq(family)
+                & matching_panel["donor_scope"].eq(donor_scope)
+            ]
+            availability_rows.append(
+                _matching_availability(
+                    family,
+                    directory,
+                    support if donor_scope == "same_city" else None,
+                    family_panel,
+                    donor_scope,
+                    component_reason,
+                )
+            )
     availability_rows.extend(_pooled_availability(pooled_panel, support))
     availability = pd.DataFrame(availability_rows)
     for column in AVAILABILITY_COLUMNS:
@@ -1181,25 +1262,26 @@ def export_event_study_final(
         matching_root, pooled_root, suite_root, source_tables
     )
     for family in FAMILIES:
-        directory = find_family_directory(matching_root, family)
-        if directory is None:
-            continue
-        for filename in (
-            "event_study_coefficients.csv",
-            "diagnostics.csv",
-            "parallel_trends_wald.csv",
-            "parallel_trends_wald_city_cluster.csv",
-            "pretrend_metadata.csv",
-        ):
-            path = directory / filename
-            if path.is_file():
-                input_hashes.append(
-                    {
-                        "path": f"{directory.name}/{filename}",
-                        "sha256": file_sha256(path),
-                        "bytes": path.stat().st_size,
-                    }
-                )
+        for donor_scope in ("same_city", "all_city_standardized"):
+            directory = find_matching_directory(matching_root, family, donor_scope)
+            if directory is None:
+                continue
+            for filename in (
+                "event_study_coefficients.csv",
+                "diagnostics.csv",
+                "parallel_trends_wald.csv",
+                "parallel_trends_wald_city_cluster.csv",
+                "pretrend_metadata.csv",
+            ):
+                path = directory / filename
+                if path.is_file():
+                    input_hashes.append(
+                        {
+                            "path": f"{directory.name}/{filename}",
+                            "sha256": file_sha256(path),
+                            "bytes": path.stat().st_size,
+                        }
+                    )
     for filename in (
         "event_study_series.csv",
         "diagnostics.csv",
@@ -1265,13 +1347,17 @@ def export_event_study_final(
 
 def _copy_matching_figures(matching_root: Path, figures_directory: Path) -> None:
     for family in FAMILIES:
-        directory = find_family_directory(matching_root, family)
-        if directory is None:
-            continue
-        target = figures_directory / f"matching_{family}"
-        for path in sorted(directory.glob("event_study_matching_python.*")):
-            target.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(path, target / path.name)
+        for donor_scope, suffix in (
+            ("same_city", ""),
+            ("all_city_standardized", "_cross"),
+        ):
+            directory = find_matching_directory(matching_root, family, donor_scope)
+            if directory is None:
+                continue
+            target = figures_directory / f"matching_{family}{suffix}"
+            for path in sorted(directory.glob("event_study_matching_python.*")):
+                target.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, target / path.name)
 
 
 def _copy_pooled_figures(

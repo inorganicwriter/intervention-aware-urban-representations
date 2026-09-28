@@ -19,15 +19,21 @@ python scripts/causal_python/run_all_method_event_study.py \
   `--matching-task-root`；不要混用不同隔离目录。
 - 窗口为预注册规范：月度（housing/viirs）±24，年度（poi/population）
   `[-6, +3]`，reference `-1`。
+- Matching 默认按两个 donor scope 独立分析：`same_city` 写
+  `matching_twfe/<family>`，`all_city_standardized` 写
+  `matching_twfe_cross/<family>`；family 无跨城 matched 标签时该项记为
+  `no_data`，不视为失败（`--matching-donor-scopes` 可显式指定）。
 - 完成后检查 `outputs/event_study_suite/suite_status.csv` 全部
-  `completed`，以及 `gsc_mc_paths/event_study_series.csv` 同时包含
+  `completed`（`matching_twfe_cross:*` 允许 `no_data`），以及
+  `gsc_mc_paths/event_study_series.csv` 同时包含
   `same_city` 与 `all_city_standardized` 行。
 
 ## 2. 下载（保持目录结构）
 
 需要下载：
 
-- `matching_twfe/<family>/` 下全部 csv 与图（png/svg/pdf/tiff）；
+- `matching_twfe/<family>/` 与 `matching_twfe_cross/<family>/` 下全部 csv
+  与图（png/svg/pdf/tiff）；
 - `gsc_mc_paths/` 下 `event_study_series.csv`、`diagnostics.csv`、
   `pretrend_city_cluster.csv`、`pretrend_grid_cluster.csv`、`figures/`；
 - `pooled_outcomes/` 四族合并图；
@@ -74,7 +80,9 @@ python scripts/causal_python/export_event_study_final.py `
    `validation.json` 的 `treated_event_consistency` hard fail）；
 4. 跨城格子若 `n_cities < 3`，必须带 `insufficient_clusters` 警告；
 5. `manifest.json:caveats` 保留（标准化尺度、t0 非干净 lead、零锚 MC
-   降级、仅规范窗口、pooled p 为正态近似等）。
+   降级、仅规范窗口、pooled p 为正态近似等）；
+6. 每个 `family × method × scope` 组合独立聚合；样本量太少无法估计的组合
+   记为 `no_data` 并在该行写明原因（不视为主动舍弃），不影响其他组合。
 
 ## 5. 旧结果
 
@@ -101,9 +109,10 @@ python scripts/analysis/recover_causal_queues.py \
 - control 队列 = release 中 same-city matched 标签的 `control_unit_key`；
 - 期望状态计数：skipped 9,162 / matched_labelled 7,553 / gsc_labelled 2,322 /
   mc_labelled 1,155；`matched_pairs_without_matched_label` 应为 0；
-- `matched_orders_without_same_city_control` 大于 0 属正常：这些站点只有
-  跨城 matched 标签，同城队列里其他 family 的标签不受影响，检查按
-  (order, family) 独立判定。
+  `matched_orders_without_same_city_control` 若大于 0，是只有跨城 matched
+  标签的站点（其跨城 component 用 `matching_twfe_cross` 独立分析），属正常；
+- 跨城 matched 任务不需要进 same-city 控制队列：匹配分析的跨城 scope 直接读
+  manifest 的 `control_unit_key`。
 
 重跑时加：
 

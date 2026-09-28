@@ -732,6 +732,7 @@ def _selection_table(
         matching_city_row = pretrend.loc[
             pretrend["outcome_family"].eq(family)
             & pretrend["method"].eq("matching")
+            & pretrend["donor_scope"].eq("same_city")
             & pretrend["cluster"].eq("city")
         ]
         if not matching_city_row.empty:
@@ -741,6 +742,7 @@ def _selection_table(
         matching_row = panel.loc[
             panel["outcome_family"].eq(family)
             & panel["method"].eq("matching")
+            & panel["donor_scope"].eq("same_city")
         ]
         matching_n_cities = np.nan
         if not matching_row.empty:
@@ -1269,6 +1271,10 @@ def export_event_study_final(
             directory = find_matching_directory(matching_root, family, donor_scope)
             if directory is None:
                 continue
+            try:
+                rel_dir = directory.relative_to(matching_root).as_posix()
+            except ValueError:
+                rel_dir = directory.name
             for filename in (
                 "event_study_coefficients.csv",
                 "diagnostics.csv",
@@ -1280,7 +1286,7 @@ def export_event_study_final(
                 if path.is_file():
                     input_hashes.append(
                         {
-                            "path": f"{directory.name}/{filename}",
+                            "path": f"{rel_dir}/{filename}",
                             "sha256": file_sha256(path),
                             "bytes": path.stat().st_size,
                         }

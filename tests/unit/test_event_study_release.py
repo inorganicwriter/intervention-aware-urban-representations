@@ -387,3 +387,80 @@ def test_normalize_legacy_treated_events_column() -> None:
     assert pd.isna(pooled_row["availability_treated_events"])
     assert mc_row["max_supported_treated_grids"] == pytest.approx(20.0)
     assert normalize_treated_event_columns(normalized) is normalized
+
+
+def test_selection_isolates_same_city_when_cross_matching_present(
+    release_inputs, tmp_path: Path
+) -> None:
+    matching_root, pooled_root, suite_root = release_inputs
+    cross_dir = matching_root / "matching_twfe_cross" / "viirs"
+    cross_dir.mkdir(parents=True, exist_ok=True)
+    times = [-24, 0, 24]
+    pd.DataFrame(
+        {
+            "term": [f"event_time::{t}" for t in times],
+            "event_time": times,
+            "estimate": [0.05] * len(times),
+            "standard_error_grid": [0.01] * len(times),
+            "p_value_grid": [0.01] * len(times),
+            "confidence_lower_grid": [0.03] * len(times),
+            "confidence_upper_grid": [0.07] * len(times),
+            "standard_error_city": [0.02] * len(times),
+            "p_value_city": [0.05] * len(times),
+            "confidence_lower_city": [0.01] * len(times),
+            "confidence_upper_city": [0.09] * len(times),
+            "n_treated": [150] * len(times),
+            "exposure_status": ["post" if t >= 0 else "pre" for t in times],
+        }
+    ).to_csv(cross_dir / "event_study_coefficients.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "nobs": 2000,
+                "units": 300,
+                "treated_events": 150,
+                "grid_clusters": 250,
+                "city_clusters": 50,
+                "reference_event_time": -1,
+            }
+        ]
+    ).to_csv(cross_dir / "diagnostics.csv", index=False)
+    for filename in ("parallel_trends_wald.csv", "parallel_trends_wald_city_cluster.csv"):
+        pd.DataFrame(
+            [
+                {
+                    "statistic": 0.5,
+                    "df1": 2,
+                    "df2": 49,
+                    "covariance_rank": 2,
+                    "p_value": 0.6,
+                }
+            ]
+        ).to_csv(cross_dir / filename, index=False)
+
+    output = tmp_path / "event_study_final_with_cross"
+    result = export_event_study_final(
+        matching_root,
+        pooled_root,
+        output,
+        suite_root=suite_root,
+    )
+    assert result["validation"]["ok"]
+
+    selection = pd.read_csv(output / "family_selection.csv", encoding="utf-8-sig")
+    viirs = selection.loc[selection["outcome_family"].eq("viirs")].iloc[0]
+    # same-city baseline has 100 treated events & 20 city clusters
+    assert viirs["availability_treated_events"] == pytest.approx(100.0)
+    assert viirs["event_study_max_n_treated"] == pytest.approx(100.0)
+    assert viirs["matching_n_cities"] == pytest.approx(20.0)
+    assert viirs["n_treated_gap"] == pytest.approx(0.0)
+    assert viirs["coverage"] == pytest.approx(1.0)
+
+    availability = pd.read_csv(output / "availability.csv", encoding="utf-8-sig")
+    cross_viirs = availability.loc[
+        availability["outcome_family"].eq("viirs")
+        & availability["donor_scope"].eq("all_city_standardized")
+    ].iloc[0]
+    assert cross_viirs["status"] == "available"
+    assert cross_viirs["availability_treated_events"] == pytest.approx(150.0)
+    assert cross_viirs["event_study_max_n_treated"] == pytest.approx(150.0)

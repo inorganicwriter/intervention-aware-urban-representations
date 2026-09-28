@@ -89,14 +89,16 @@ def build_control_queue(artifact: pd.DataFrame) -> pd.DataFrame:
     for column in ("method", "control_unit_key", "donor_scope", "treatment_order"):
         if column not in artifact.columns:
             raise ValueError(f"response artifact lacks required column: {column}")
-    method = artifact["method"].astype("string")
-    scope = artifact["donor_scope"].astype("string")
-    keys = artifact["control_unit_key"].astype("string")
+    valid_key = (
+        artifact["control_unit_key"].notna()
+        & artifact["control_unit_key"].astype(str).ne("")
+        & artifact["control_unit_key"].astype(str).ne("None")
+        & artifact["control_unit_key"].astype(str).ne("<NA>")
+    )
+    is_matched = artifact["method"].astype(str).str.startswith(MATCHED_PREFIX)
+    is_same_city = artifact["donor_scope"].astype(str).eq("same_city")
     selected = artifact.loc[
-        method.str.startswith(MATCHED_PREFIX, na=False)
-        & scope.eq("same_city")
-        & keys.notna()
-        & keys.ne(""),
+        is_matched & is_same_city & valid_key,
         ["treatment_order", "control_unit_key"],
     ].copy()
     selected = selected.drop_duplicates("treatment_order")

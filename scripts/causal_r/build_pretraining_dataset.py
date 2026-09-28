@@ -39,6 +39,18 @@ def main() -> int:
         help="Optional comma-separated outcome families to export (default: all).",
     )
     parser.add_argument(
+        "--weight-gamma",
+        type=float,
+        default=None,
+        help="Design-score steepness for Rev3 label weights (default 1.0; 0 = equal design weights).",
+    )
+    parser.add_argument(
+        "--weight-alpha",
+        type=float,
+        default=None,
+        help="Precision-multiplier tempering for Rev3 label weights (default 0.5; 0 or 1 for sensitivity).",
+    )
+    parser.add_argument(
         "--output-root",
         type=Path,
         default=MODEL_INPUTS_DIR,
@@ -49,6 +61,11 @@ def main() -> int:
         families = tuple(
             part.strip() for part in args.families.split(",") if part.strip()
         )
+    weight_kwargs: dict[str, float] = {}
+    if args.weight_gamma is not None:
+        weight_kwargs["weight_gamma"] = args.weight_gamma
+    if args.weight_alpha is not None:
+        weight_kwargs["weight_alpha"] = args.weight_alpha
     destination = publish_pretraining_dataset(
         args.response_release,
         TREATMENT_UNIT_LIST,
@@ -61,6 +78,7 @@ def main() -> int:
         strict_production=not args.allow_partial,
         scope_view=args.scope_view,
         families=families,
+        **weight_kwargs,
     )
     print(f"Published pretraining dataset at {destination}")
     return 0

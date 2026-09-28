@@ -421,10 +421,11 @@ def _best_quality_grade(targets: pd.DataFrame) -> pd.DataFrame:
 
 KNOWN_FAMILIES = ("housing", "viirs", "poi", "population")
 
-CALIBRATION_VERSION = "rev3-ordinal-2026-09"
+CALIBRATION_VERSION = "rev3.1-ordinal-2026-09"
 DESIGN_GAMMA = 1.0
 PRECISION_ALPHA = 0.5
 DESIGN_NEUTRAL_PERCENTILE = 0.5
+WEIGHT_WINSOR_LOWER = 0.01
 WEIGHT_WINSOR_UPPER = 0.99
 MIN_DESIGN_STRATUM = 2
 
@@ -435,31 +436,57 @@ def _numeric_column(frame: pd.DataFrame, name: str) -> pd.Series:
     return pd.Series(np.nan, index=frame.index, dtype=float)
 
 
-def response_label_weights(targets: pd.DataFrame) -> pd.DataFrame:
-    """Attach Rev3 label reliability weights to every label row.
+def _stratum_percentile(
+    distance: pd.Series, primary_stratum: pd.Series, fallback_stratum: pd.Series
+) -> pd.Series:
+    """Empirical percentile of a diagnostic within its stratum (0 = best)."""
+    percentile = distance.groupby(primary_stratum).rank(pct=True)
+    fallback = distance.groupby(fallback_stratum).rank(pct=True)
+    primary_size = distance.groupby(primary_stratum).transform("size")
+    fallback_size = distance.groupby(fallback_stratum).transform("size")
+    percentile = percentile.where(primary_size.ge(MIN_DESIGN_STRATUM), fallback)
+    return percentile.where(fallback_size.ge(MIN_DESIGN_STRATUM), np.nan)
+
+
+def response_label_weights(
+    targets: pd.DataFrame,
+    *,
+    gamma: float = DESIGN_GAMMA,
+    alpha: float = PRECISION_ALPHA,
+) -> pd.DataFrame:
+    """Attach Rev3.1 label reliability weights to every label row.
 
     Structure (deliberately ordinal, not a calibrated variance):
 
-        W = A * exp(-gamma * P_design) * (precision)^alpha
+        W = A * exp(-gamma * D) * (precision)^alpha
 
     - ``A`` (``eligible``): zero pre-treatment anchors, a violated matched
       holdout boundary (``max(holdout ratios) > 1``) or unavailable labels get
       weight 0; every eligibility rule is a methodological boundary, not an
       arbitrary quality cutoff.
-    - ``P_design`` (``design_unreliability``): within-(method, outcome)
-      percentile of the design diagnostic, 0 = best.  Matched labels use
-      ``max(holdout_rms_ratio, holdout_max_ratio)``; GSC/MC labels use the
-      pre-treatment gap deviation
-      ``sqrt(max(pre_rmspe^2 - pre_mean_effect^2, 0))``.  Small strata fall
-      back to (method, family); missing diagnostics receive the neutral 0.5.
+    - ``D`` (``design_unreliability``): the row mean of the available design
+      diagnostic percentiles, computed within ``(method, outcome)`` with a
+      ``(method, family)`` fallback; 0 = best.  Diagnostics are
+      ``p_trend`` (pre-treatment gap deviation for model estimators),
+      ``p_holdout`` (matching holdout ratio) and ``p_validation``
+      (pre-treatment CV MSPE for matrix completion).  Rows without any
+      diagnostic receive the neutral 0.5.  The raw level percentile
+      (``p_level``) is stored for QC only and never enters the weight.
     - ``precision``: inverse sampling variance ``1/se^2`` winsorized at the
       1%/99% quantiles and mean-normalized **within method and outcome**;
       labels without a standard error (matching) receive exactly 1 so that a
       missing uncertainty estimate never earns a bonus.  ``alpha = 0.5``
-      tempers the multiplier (sensitivity: 0, 0.5, 1).
-    - Final weights are winsorized at the 99th percentile and normalized to
-      mean one within (method, family) among eligible labels.
+      tempers the multiplier; ``alpha = 0`` and ``alpha = 1`` are the
+      pre-specified sensitivity variants.
+    - Final weights are winsorized at the 1%/99% percentiles of the eligible
+      distribution within ``(method, family)`` and normalized to mean one over
+      eligible labels.  Only eligibility failures are exactly zero.
     """
+    if gamma < 0:
+        raise ValueError("gamma must be non-negative")
+    if not 0 <= alpha <= 1:
+        raise ValueError("alpha must lie in [0, 1]")
+
     frame = targets.copy()
     method = frame.get("method", pd.Series("", index=frame.index)).astype(str)
     matched = method.str.startswith("frozen_matched_change")
@@ -484,26 +511,26 @@ def response_label_weights(targets: pd.DataFrame) -> pd.DataFrame:
     gap_deviation = pd.Series(
         np.sqrt(np.maximum(pre_rmspe**2 - pre_mean**2, 0.0)), index=frame.index
     )
-    design_distance = pd.Series(np.nan, index=frame.index, dtype=float)
-    design_distance = design_distance.where(~matched, matched_holdout)
-    design_distance = design_distance.where(matched, gap_deviation)
+    cv_mspe = _numeric_column(frame, "mc_cv_mspe")
 
     design_stratum = method + "::" + outcome
     family_stratum = method + "::" + family
-    design_percentile = design_distance.groupby(design_stratum).rank(pct=True)
-    fallback_percentile = design_distance.groupby(family_stratum).rank(pct=True)
-    design_sizes = design_distance.groupby(design_stratum).transform("size")
-    family_sizes = design_distance.groupby(family_stratum).transform("size")
-    design_percentile = design_percentile.where(
-        design_sizes.ge(MIN_DESIGN_STRATUM), fallback_percentile
+    components = pd.DataFrame(index=frame.index)
+    components["p_trend"] = _stratum_percentile(
+        gap_deviation.where(~matched), design_stratum, family_stratum
     )
-    design_percentile = design_percentile.where(
-        family_sizes.ge(MIN_DESIGN_STRATUM), DESIGN_NEUTRAL_PERCENTILE
+    components["p_holdout"] = _stratum_percentile(
+        matched_holdout.where(matched), design_stratum, family_stratum
     )
-    design_percentile = design_percentile.where(
-        design_distance.notna(), DESIGN_NEUTRAL_PERCENTILE
+    components["p_validation"] = _stratum_percentile(
+        cv_mspe.where(~matched), design_stratum, family_stratum
     )
-    design_weight = np.exp(-DESIGN_GAMMA * design_percentile)
+    design_percentile = components.mean(axis=1, skipna=True)
+    design_percentile = design_percentile.where(
+        components.notna().any(axis=1), DESIGN_NEUTRAL_PERCENTILE
+    )
+    p_level = _stratum_percentile(pre_rmspe, design_stratum, family_stratum)
+    design_weight = np.exp(-gamma * design_percentile)
 
     standard_error = _numeric_column(frame, "standard_error")
     inverse_variance = 1.0 / (standard_error**2 + 1e-12)
@@ -519,33 +546,44 @@ def response_label_weights(targets: pd.DataFrame) -> pd.DataFrame:
     use_precision = (
         standard_error.notna() & ~matched & mean_precision.gt(0).fillna(False)
     )
-    precision_weight = normalized_precision.pow(PRECISION_ALPHA).where(
-        use_precision, 1.0
-    )
+    precision_weight = normalized_precision.pow(alpha).where(use_precision, 1.0)
 
     raw = (design_weight * precision_weight).where(eligible, 0.0)
-    cap = raw.groupby(family_stratum).transform(
+    upper_cap = raw.where(eligible).groupby(family_stratum).transform(
         lambda values: values.quantile(WEIGHT_WINSOR_UPPER)
     )
-    capped = raw.clip(upper=cap)
+    lower_cap = raw.where(eligible).groupby(family_stratum).transform(
+        lambda values: values.quantile(WEIGHT_WINSOR_LOWER)
+    )
+    capped = raw.clip(upper=upper_cap)
+    capped = capped.where(~eligible | capped.ge(lower_cap), lower_cap)
     eligible_mean = capped.where(eligible).groupby(family_stratum).transform("mean")
     final = capped / eligible_mean.where(eligible_mean.gt(0), 1.0)
     final = final.fillna(0.0).where(eligible, 0.0)
 
     frame["eligible"] = eligible.astype(bool)
+    for component in ("p_trend", "p_holdout", "p_validation"):
+        frame[component] = components[component].astype(float)
+    frame["p_level"] = p_level.astype(float)
     frame["design_unreliability"] = design_percentile.astype(float)
     frame["design_weight"] = design_weight.astype(float)
     frame["has_precision_weight"] = use_precision.astype(bool)
     frame["precision_weight"] = precision_weight.astype(float)
     frame["weight_raw"] = raw.astype(float)
     frame["response_weight"] = final.astype(float)
+    frame["weight_stratum"] = family_stratum.astype(str)
     frame["calibration_version"] = CALIBRATION_VERSION
     return frame
 
 
-def _response_weights(targets: pd.DataFrame) -> pd.DataFrame:
+def _response_weights(
+    targets: pd.DataFrame,
+    *,
+    gamma: float = DESIGN_GAMMA,
+    alpha: float = PRECISION_ALPHA,
+) -> pd.DataFrame:
     """Return one conservative response weight per treatment."""
-    weighted = response_label_weights(targets)
+    weighted = response_label_weights(targets, gamma=gamma, alpha=alpha)
     if "label_available" in weighted.columns:
         weighted = weighted.loc[weighted["label_available"].fillna(False)]
     return weighted.groupby("treatment_order", as_index=False)["response_weight"].min()
@@ -563,6 +601,8 @@ def publish_pretraining_dataset(
     strict_production: bool = True,
     scope_view: str = "same_city",
     families: tuple[str, ...] | None = None,
+    weight_gamma: float = DESIGN_GAMMA,
+    weight_alpha: float = PRECISION_ALPHA,
 ) -> Path:
     response_manifest_path = response_release / "manifest.json"
     response_path = response_release / "response_artifact.parquet"
@@ -597,7 +637,7 @@ def publish_pretraining_dataset(
             raise ValueError(
                 f"response artifact has no rows for families: {list(selected)}"
             )
-    targets = response_label_weights(targets)
+    targets = response_label_weights(targets, gamma=weight_gamma, alpha=weight_alpha)
     features, source_paths = build_pretreatment_features(
         treatments, project_root, strict_sources=strict_production
     )
@@ -637,7 +677,7 @@ def publish_pretraining_dataset(
         training_mask=("training_mask", "max"),
         final_training_mask=("final_training_mask", "max"),
     )
-    unit_weights = _response_weights(targets)
+    unit_weights = _response_weights(targets, gamma=weight_gamma, alpha=weight_alpha)
     best_grade = _best_quality_grade(targets)
     sample_index = (
         features[["treatment_order", "split", "feature_training_mask"]]
@@ -693,8 +733,8 @@ def publish_pretraining_dataset(
                     "mean one within method x family"
                 ),
                 "calibration_version": CALIBRATION_VERSION,
-                "gamma": DESIGN_GAMMA,
-                "alpha": PRECISION_ALPHA,
+                "gamma": float(weight_gamma),
+                "alpha": float(weight_alpha),
                 "mean": float(sample_index["response_weight"].mean()),
                 "positive": int((sample_index["response_weight"] > 0).sum()),
             },

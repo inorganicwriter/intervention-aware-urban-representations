@@ -362,7 +362,54 @@ def test_response_label_weights_ordinal_design_and_tempered_precision() -> None:
     ):
         group = weighted[(weighted["method"] == method) & weighted["eligible"]]
         assert group["response_weight"].mean() == pytest.approx(1.0)
-    assert set(weighted["calibration_version"]) == {"rev3-ordinal-2026-09"}
+    assert set(weighted["calibration_version"]) == {"rev3.1-ordinal-2026-09"}
+
+
+def test_response_weights_average_available_design_components() -> None:
+    targets = pd.DataFrame(
+        {
+            "treatment_order": [1, 2],
+            "outcome_family": ["poi", "poi"],
+            "outcome": ["poi_count_log", "poi_count_log"],
+            "method": ["athey_2021_mc_same_city"] * 2,
+            "label_available": [True, True],
+            "pre_rmspe": [0.2, 0.2],
+            "pre_mean_effect": [0.0, 0.0],
+            "mc_cv_mspe": [0.01, 0.09],
+            "standard_error": [0.1, 0.1],
+            "pre_observed_periods": [5, 5],
+        }
+    )
+    weighted = response_label_weights(targets).set_index("treatment_order")
+    # Identical trend diagnostics; the validation percentile breaks the tie.
+    assert weighted.loc[1, "p_trend"] == pytest.approx(weighted.loc[2, "p_trend"])
+    assert weighted.loc[1, "p_validation"] < weighted.loc[2, "p_validation"]
+    assert (
+        weighted.loc[1, "design_unreliability"]
+        < weighted.loc[2, "design_unreliability"]
+    )
+    assert weighted.loc[1, "response_weight"] > weighted.loc[2, "response_weight"]
+
+
+def test_response_weights_sensitivity_variants_collapse_to_equal_weights() -> None:
+    targets = pd.DataFrame(
+        {
+            "treatment_order": [1, 2],
+            "outcome_family": ["viirs", "viirs"],
+            "outcome": ["viirs_avg_asinh"] * 2,
+            "method": ["xu_2017_gsynth_same_city"] * 2,
+            "label_available": [True, True],
+            "pre_rmspe": [0.2, 0.9],
+            "pre_mean_effect": [0.0, 0.0],
+            "standard_error": [0.05, 0.5],
+            "pre_observed_periods": [5, 5],
+        }
+    )
+    equal = response_label_weights(targets, gamma=0.0, alpha=0.0)
+    eligible = equal[equal["eligible"]]
+    assert eligible["design_unreliability"].nunique() > 1
+    assert eligible["response_weight"].nunique() == 1
+    assert eligible["response_weight"].iloc[0] == pytest.approx(1.0)
 
 
 def test_response_weights_zero_anchor_and_unavailable_labels() -> None:
@@ -447,7 +494,7 @@ def test_pretraining_release_family_filter_and_response_weights(tmp_path: Path) 
     # score, so the normalized weights are exactly one.
     assert index["response_weight"].eq(1.0).all()
     assert manifest["response_weight"]["mean"] == pytest.approx(1.0)
-    assert manifest["response_weight"]["calibration_version"] == "rev3-ordinal-2026-09"
+    assert manifest["response_weight"]["calibration_version"] == "rev3.1-ordinal-2026-09"
 
     with pytest.raises(ValueError, match="unknown outcome families"):
         publish_pretraining_dataset(

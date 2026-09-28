@@ -47,17 +47,22 @@ python scripts/causal_python/export_event_study_final.py `
 `--matching-root` + `--pooled-root` + `--suite-root`；显式参数优先于
 `--suite-root` 的默认推断。
 
-产物：
+产物（schema `mit_event_study_final_v2`；字段语义按阶段拆分，不再出现
+含义混用的 `treated_events`）：
 
 | 文件 | 内容 |
 |---|---|
-| `event_study_panel.csv` | 统一长表：family × method × donor scope × outcome × event time；coefficient、grid/city SE、CI、p、样本量、`event_phase`，已过滤到规范窗口 |
-| `availability.csv` | 4 族 × 3 方法 × 2 scope 每格一行：`available` / `no_data` + reason、admitted units、source 范围、`insufficient_clusters` 警告 |
+| `event_study_panel.csv` | 统一长表：family × method × donor scope × outcome × event time；coefficient、grid/city SE、CI、p、样本量、`event_phase`、推断元数据（`se_type`、`p_value_method`、`n_city_clusters`），已过滤到规范窗口 |
+| `availability.csv` | 每格一行（含 `analysis_type`）。Matching：`availability_treated_events`、`event_study_max_n_treated`、`coverage`；Pooled：`max_supported_treated_grids`（不计算 matching 式 coverage）。另有 `available` / `no_data` + reason、source 范围、`insufficient_clusters` 警告 |
 | `pretrend_summary.csv` | Matching 联合 Wald（grid/city cluster）与 pooled GSC/MC cluster 均值检验 |
-| `family_selection.csv` / `.md` | 选择记录：VIIRS+POI 进入 downstream causal supervision（`selected_family` / `selection_reason`）；两阶段样本量分开：`availability_treated_events`（可用性阶段）vs `event_study_max_n_treated`（规范窗口内 `n_treated` 最大值），附 `n_treated_gap` 与 `coverage`；并记录信号稳定性、前趋势、方法一致性 |
+| `family_selection.csv` / `.md` | 选择记录：VIIRS+POI 进入 downstream causal supervision（`selected_family` / `selection_reason`）；matching 保留 `availability_treated_events`、`event_study_max_n_treated`、`n_treated_gap`、`coverage`，pooled 记录 `max_supported_treated_grids`；并记录信号稳定性、前趋势、方法一致性 |
 | `manifest.json` | 窗口、方法、输入/输出 sha256、行数、downstream 选择、caveats |
-| `validation.json` | 结构与窗口检查（error 会阻断干净运行） |
+| `validation.json` | 结构与窗口检查；`treated_event_consistency`（仅 matching）违反即 hard fail |
 | `figures/`、`source_tables/` | 底层图与审计表原样拷贝 |
+
+读取旧版表时用 `normalize_treated_event_columns()`：matching 行的旧
+`treated_events` 映射到 `availability_treated_events`，pooled 行映射到
+`max_supported_treated_grids`；新 release 不再写该旧字段。
 
 ## 4. 验收门槛（缺一不可）
 
@@ -65,14 +70,14 @@ python scripts/causal_python/export_event_study_final.py `
 2. `availability.csv` 24 格齐全——没有数据的格子也必须有一行并写明
    `no_data` 原因，不允许静默缺失；
 3. `family_selection.csv` 中 `selected_family` 仅 `viirs`、`poi` 为 true，且
-   `coverage ≤ 1`（`event_study_max_n_treated ≤ availability_treated_events`；
-   违反时 `validation.json` 的 `treated_event_consistency` 会报 error）；
+   matching 行满足 `coverage ≤ 1`
+   （`event_study_max_n_treated ≤ availability_treated_events`；违反时
+   `validation.json` 的 `treated_event_consistency` hard fail）；
 4. 跨城格子若 `n_cities < 3`，必须带 `insufficient_clusters` 警告；
 5. `manifest.json:caveats` 保留（标准化尺度、t0 非干净 lead、零锚 MC
-   降级、仅规范窗口等）。
+   降级、仅规范窗口、pooled p 为正态近似等）。
 
-## 5. 归档
+## 5. 旧结果
 
-封版完成并人工确认后，将旧的 `mit_event_study_results/` 与
-`mit_event_study_results.zip` 移入 `D:\User\Desktop\MIT_summer_archive\`
-（不进 git），后续引用只使用 `mit_event_study_final.zip`。
+旧的 `mit_event_study_results/` 与 `.zip` 已清理；后续引用只使用
+`mit_event_study_final.zip`。

@@ -35,6 +35,7 @@ from .event_study import canonical_event_window
 from .gpu.provenance import file_sha256
 
 FAMILIES: tuple[str, ...] = ("housing", "viirs", "poi", "population")
+FINAL_SCHEMA = "mit_event_study_final_v2"
 FREQUENCIES = {
     "housing": "monthly",
     "viirs": "monthly",
@@ -71,6 +72,9 @@ PANEL_COLUMNS = [
     "ci_upper_city",
     "n_units",
     "n_cities",
+    "se_type",
+    "p_value_method",
+    "n_city_clusters",
     "uncertainty_status",
     "specification",
     "source_file",
@@ -78,11 +82,15 @@ PANEL_COLUMNS = [
 
 AVAILABILITY_COLUMNS = [
     "outcome_family",
+    "analysis_type",
     "method",
     "donor_scope",
     "status",
     "reason",
-    "treated_events",
+    "availability_treated_events",
+    "event_study_max_n_treated",
+    "max_supported_treated_grids",
+    "coverage",
     "rows",
     "n_cities",
     "n_cities_min",
@@ -129,6 +137,7 @@ SELECTION_COLUMNS = [
     "canonical_outcome",
     "availability_treated_events",
     "event_study_max_n_treated",
+    "max_supported_treated_grids",
     "n_treated_gap",
     "coverage",
     "matching_n_cities",
@@ -151,7 +160,11 @@ CAVEATS = [
     "226 zero-anchor MC tasks were demoted to skipped before this release; "
     "pooled coverage reflects the post-demotion production queue.",
     "Pooled p-values are two-sided normal approximations from city-cluster "
-    "standard errors (p_source=normal_approx_city_cluster).",
+    "standard errors (se_type=city_cluster, p_value_method=normal_approximation, "
+    "n_city_clusters recorded in event_study_panel.csv).",
+    "Treated-event counts are stage-specific and never collapsed into one field: "
+    "availability_treated_events (admission stage), event_study_max_n_treated "
+    "(canonical-window support) and max_supported_treated_grids (pooled cells).",
 ]
 
 
@@ -172,6 +185,44 @@ def _numeric_column(frame: pd.DataFrame, name: str) -> pd.Series:
     if name not in frame.columns:
         return pd.Series(np.nan, index=frame.index, dtype=float)
     return pd.to_numeric(frame[name], errors="coerce")
+
+
+def normalize_treated_event_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    """Map legacy ambiguous ``treated_events`` columns to the v2 schema.
+
+    Older release tables carried a single ``treated_events`` column with
+    different meanings per analysis stage.  Reading such a table maps the
+    legacy value by analysis type: matching rows to
+    ``availability_treated_events`` and pooled rows to
+    ``max_supported_treated_grids``.  New releases never write the ambiguous
+    column again.
+    """
+    if "treated_events" not in frame.columns:
+        return frame
+    normalized = frame.copy()
+    legacy = pd.to_numeric(normalized["treated_events"], errors="coerce")
+    if "analysis_type" in normalized.columns:
+        analysis = normalized["analysis_type"].astype(str)
+    else:
+        method = normalized.get(
+            "method", pd.Series("", index=normalized.index)
+        ).astype(str)
+        analysis = pd.Series(
+            np.where(method.eq("matching"), "matching", "pooled"),
+            index=normalized.index,
+        )
+    matching_mask = analysis.eq("matching")
+    if "availability_treated_events" not in normalized.columns:
+        normalized["availability_treated_events"] = np.nan
+    if "max_supported_treated_grids" not in normalized.columns:
+        normalized["max_supported_treated_grids"] = np.nan
+    normalized.loc[matching_mask, "availability_treated_events"] = normalized.loc[
+        matching_mask, "availability_treated_events"
+    ].fillna(legacy[matching_mask])
+    normalized.loc[~matching_mask, "max_supported_treated_grids"] = normalized.loc[
+        ~matching_mask, "max_supported_treated_grids"
+    ].fillna(legacy[~matching_mask])
+    return normalized.drop(columns=["treated_events"])
 
 
 def _normal_p_value(t_stat: pd.Series) -> pd.Series:
@@ -247,6 +298,9 @@ def _standardize_matching(family: str, directory: Path) -> tuple[pd.DataFrame, i
             "ci_upper_city": _numeric_column(coefficients, "confidence_upper_city"),
             "n_units": _numeric_column(coefficients, "n_treated"),
             "n_cities": pd.to_numeric(n_cities, errors="coerce"),
+            "se_type": "city_cluster",
+            "p_value_method": "twfe_cluster_robust",
+            "n_city_clusters": pd.to_numeric(n_cities, errors="coerce"),
             "uncertainty_status": np.where(
                 _numeric_column(coefficients, "standard_error_city").notna(),
                 "available",
@@ -296,6 +350,9 @@ def _standardize_pooled(pooled_directory: Path) -> tuple[pd.DataFrame, int]:
             ),
             "n_units": pd.to_numeric(series.get("n_grids"), errors="coerce"),
             "n_cities": pd.to_numeric(series.get("n_cities"), errors="coerce"),
+            "se_type": "city_cluster",
+            "p_value_method": "normal_approximation",
+            "n_city_clusters": pd.to_numeric(series.get("n_cities"), errors="coerce"),
             "uncertainty_status": _pooled_uncertainty(series),
             "specification": series.get("specifications", pd.Series("", index=series.index))
             .fillna("")
@@ -347,16 +404,26 @@ def _matching_availability(
     family: str,
     directory: Path | None,
     support: pd.DataFrame | None,
-    panel_rows: int,
+    matching_panel: pd.DataFrame,
 ) -> dict[str, object]:
     bounds = _window_bounds(family)
+    panel_rows = int(len(matching_panel))
+    window_max = np.nan
+    if panel_rows > 0:
+        n_treated = _numeric_column(matching_panel, "n_units")
+        if n_treated.notna().any():
+            window_max = float(n_treated.max())
     row: dict[str, object] = {
         "outcome_family": family,
+        "analysis_type": "matching",
         "method": "matching",
         "donor_scope": "same_city",
         "status": "no_data",
         "reason": "",
-        "treated_events": np.nan,
+        "availability_treated_events": np.nan,
+        "event_study_max_n_treated": window_max if panel_rows > 0 else np.nan,
+        "max_supported_treated_grids": np.nan,
+        "coverage": np.nan,
         "rows": panel_rows,
         "n_cities": np.nan,
         "n_cities_min": np.nan,
@@ -379,15 +446,20 @@ def _matching_availability(
         row["reason"] = "matching_outputs_missing"
         return row
     diagnostics = _read_csv(diagnostics_path).iloc[0].to_dict()
+    availability_treated = pd.to_numeric(
+        diagnostics.get("treated_events"), errors="coerce"
+    )
     row.update(
         {
             "status": "available" if panel_rows > 0 else "no_data",
             "reason": "" if panel_rows > 0 else "no_coefficients_in_canonical_window",
-            "treated_events": diagnostics.get("treated_events"),
+            "availability_treated_events": availability_treated,
             "n_cities": diagnostics.get("city_clusters"),
             "source_file": f"{directory.name}/event_study_coefficients.csv",
         }
     )
+    if pd.notna(availability_treated) and np.isfinite(window_max) and availability_treated > 0:
+        row["coverage"] = window_max / float(availability_treated)
     if support is not None:
         match = support.loc[
             support["outcome_family"].eq(family) & support["method"].eq("matching")
@@ -425,11 +497,15 @@ def _pooled_availability(
                 ]
                 row: dict[str, object] = {
                     "outcome_family": family,
+                    "analysis_type": "pooled",
                     "method": method,
                     "donor_scope": scope,
                     "status": "no_data",
                     "reason": "",
-                    "treated_events": np.nan,
+                    "availability_treated_events": np.nan,
+                    "event_study_max_n_treated": np.nan,
+                    "max_supported_treated_grids": np.nan,
+                    "coverage": np.nan,
                     "rows": int(len(subset)),
                     "n_cities": np.nan,
                     "n_cities_min": np.nan,
@@ -466,7 +542,7 @@ def _pooled_availability(
                 row.update(
                     {
                         "status": "available",
-                        "treated_events": pd.to_numeric(
+                        "max_supported_treated_grids": pd.to_numeric(
                             subset["n_units"], errors="coerce"
                         ).max(),
                         "n_cities": n_cities.max(),
@@ -630,7 +706,7 @@ def _selection_table(
         availability_treated_events = np.nan
         if not availability_row.empty:
             value = pd.to_numeric(
-                availability_row.iloc[0]["treated_events"], errors="coerce"
+                availability_row.iloc[0]["availability_treated_events"], errors="coerce"
             )
             if pd.notna(value):
                 availability_treated_events = float(value)
@@ -660,6 +736,11 @@ def _selection_table(
             pooled_min_cities = pd.to_numeric(
                 pooled_family["n_cities"], errors="coerce"
             ).min()
+        max_supported_grids = np.nan
+        if not pooled_family.empty:
+            supported = _numeric_column(pooled_family, "n_units")
+            if supported.notna().any():
+                max_supported_grids = float(supported.max())
         post_mean_matching = (
             float(matching_post["estimate"].mean())
             if not matching_post.empty
@@ -699,6 +780,7 @@ def _selection_table(
                 "canonical_outcome": outcome,
                 "availability_treated_events": availability_treated_events,
                 "event_study_max_n_treated": event_study_max_n_treated,
+                "max_supported_treated_grids": max_supported_grids,
                 "n_treated_gap": n_treated_gap,
                 "coverage": coverage,
                 "matching_n_cities": matching_n_cities,
@@ -826,7 +908,7 @@ def _write_manifest(
         availability["status"].value_counts().to_dict() if not availability.empty else {}
     )
     manifest: dict[str, object] = {
-        "schema": "mit_event_study_final_v1",
+        "schema": FINAL_SCHEMA,
         "created_utc": datetime.now(tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "windows": windows,
         "methods": {
@@ -869,7 +951,6 @@ def _validate(
     panel: pd.DataFrame,
     availability: pd.DataFrame,
     pretrend: pd.DataFrame,
-    selection: pd.DataFrame,
     downstream: tuple[str, ...],
 ) -> dict[str, object]:
     checks: list[dict[str, object]] = []
@@ -958,7 +1039,8 @@ def _validate(
         f"pretrend families: {sorted(pretrend_families)}",
     )
     violations: list[str] = []
-    for row in selection.itertuples():
+    matching_rows = availability.loc[availability["analysis_type"].eq("matching")]
+    for row in matching_rows.itertuples():
         available_events = pd.to_numeric(
             row.availability_treated_events, errors="coerce"
         )
@@ -1024,13 +1106,9 @@ def collect_event_study_release(
     availability_rows: list[dict[str, object]] = []
     for family in FAMILIES:
         directory = find_family_directory(matching_root, family)
-        family_panel_rows = int(
-            matching_panel.loc[matching_panel["outcome_family"].eq(family)].shape[0]
-            if "outcome_family" in matching_panel
-            else 0
-        )
+        family_panel = matching_panel.loc[matching_panel["outcome_family"].eq(family)]
         availability_rows.append(
-            _matching_availability(family, directory, support, family_panel_rows)
+            _matching_availability(family, directory, support, family_panel)
         )
     availability_rows.extend(_pooled_availability(pooled_panel, support))
     availability = pd.DataFrame(availability_rows)
@@ -1041,7 +1119,7 @@ def collect_event_study_release(
 
     pretrend = _pretrend_rows(matching_root, pooled_root)
     selection = _selection_table(panel, pretrend, availability, downstream)
-    validation = _validate(panel, availability, pretrend, selection, downstream)
+    validation = _validate(panel, availability, pretrend, downstream)
     return {
         "panel": panel,
         "availability": availability,
@@ -1069,9 +1147,9 @@ def export_event_study_final(
     )
     output_directory.mkdir(parents=True, exist_ok=True)
     panel = collected["panel"]
-    availability = collected["availability"]
+    availability = normalize_treated_event_columns(collected["availability"])
     pretrend = collected["pretrend"]
-    selection = collected["selection"]
+    selection = normalize_treated_event_columns(collected["selection"])
     validation = collected["validation"]
 
     panel.to_csv(output_directory / "event_study_panel.csv", index=False, encoding="utf-8-sig")
@@ -1257,10 +1335,12 @@ def _release_readme() -> str:
             "",
             "- `event_study_panel.csv`: unified long panel (family x method x donor scope",
             "  x outcome x event time) with estimates, grid/city-cluster SEs, CIs, p-values,",
-            "  sample sizes and availability-adjacent metadata; filtered to the",
-            "  pre-registered canonical windows.",
+            "  sample sizes and inference metadata (`se_type`, `p_value_method`,",
+            "  `n_city_clusters`); filtered to the pre-registered canonical windows.",
             "- `availability.csv`: one row per family x method x donor scope with status",
-            "  (`available` / `no_data`), reasons, admitted units, source ranges and",
+            "  (`available` / `no_data`), reasons, stage-specific treated counts",
+            "  (`availability_treated_events`, `event_study_max_n_treated`, `coverage` for",
+            "  matching; `max_supported_treated_grids` for pooled), source ranges and",
             "  warnings (`insufficient_clusters`).",
             "- `pretrend_summary.csv`: joint pre-trend tests (Matching Wald by grid and",
             "  city cluster; pooled GSC/MC cluster-mean tests).",

@@ -13,6 +13,7 @@ from urban_intervention.causal.event_study_release import (
     AVAILABILITY_COLUMNS,
     PANEL_COLUMNS,
     export_event_study_final,
+    normalize_treated_event_columns,
 )
 
 FAMILIES = ("housing", "viirs", "poi", "population")
@@ -222,11 +223,34 @@ def test_export_builds_unified_release(release_inputs, tmp_path: Path) -> None:
     assert poi["event_time"].min() >= -6
     assert poi["event_time"].max() <= 3
     assert panel["p_city"].notna().any()
+    pooled_panel = panel.loc[panel["method"].isin(["gsc", "mc"])]
+    assert pooled_panel["p_value_method"].eq("normal_approximation").all()
+    assert pooled_panel["se_type"].eq("city_cluster").all()
+    assert pooled_panel["n_city_clusters"].notna().all()
+    matching_panel = panel.loc[panel["method"].eq("matching")]
+    assert matching_panel["p_value_method"].eq("twfe_cluster_robust").all()
 
     availability = pd.read_csv(output / "availability.csv", encoding="utf-8-sig")
     assert list(availability.columns) == AVAILABILITY_COLUMNS
+    assert "treated_events" not in availability.columns
     matching = availability.loc[availability["method"].eq("matching")]
     assert matching["status"].eq("available").all()
+    matching_viirs = availability.loc[
+        availability["outcome_family"].eq("viirs")
+        & availability["analysis_type"].eq("matching")
+    ].iloc[0]
+    assert matching_viirs["availability_treated_events"] == pytest.approx(100.0)
+    assert matching_viirs["event_study_max_n_treated"] == pytest.approx(100.0)
+    assert matching_viirs["coverage"] == pytest.approx(1.0)
+    assert pd.isna(matching_viirs["max_supported_treated_grids"])
+    pooled_viirs = availability.loc[
+        availability["outcome_family"].eq("viirs")
+        & availability["method"].eq("gsc")
+        & availability["donor_scope"].eq("same_city")
+    ].iloc[0]
+    assert pooled_viirs["max_supported_treated_grids"] == pytest.approx(50.0)
+    assert pd.isna(pooled_viirs["availability_treated_events"])
+    assert pd.isna(pooled_viirs["coverage"])
     housing_gsc = availability.loc[
         availability["outcome_family"].eq("housing") & availability["method"].eq("gsc")
     ]
@@ -247,6 +271,7 @@ def test_export_builds_unified_release(release_inputs, tmp_path: Path) -> None:
     vip = selection.loc[selection["outcome_family"].eq("viirs")].iloc[0]
     assert vip["availability_treated_events"] == pytest.approx(100.0)
     assert vip["event_study_max_n_treated"] == pytest.approx(100.0)
+    assert vip["max_supported_treated_grids"] == pytest.approx(50.0)
     assert vip["n_treated_gap"] == pytest.approx(0.0)
     assert vip["coverage"] == pytest.approx(1.0)
     excluded = selection.loc[selection["outcome_family"].eq("housing")].iloc[0]
@@ -255,7 +280,7 @@ def test_export_builds_unified_release(release_inputs, tmp_path: Path) -> None:
     assert (selection["event_study_max_n_treated"] <= selection["availability_treated_events"]).all()
 
     manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["schema"] == "mit_event_study_final_v1"
+    assert manifest["schema"] == "mit_event_study_final_v2"
     assert manifest["windows"]["viirs"]["canonical_pre_min"] == -24
     assert manifest["windows"]["poi"]["canonical_post_max"] == 3
     assert manifest["downstream_training"]["included_families"] == ["viirs", "poi"]
@@ -331,3 +356,24 @@ def test_validation_flags_window_support_above_availability(
     assert viirs["event_study_max_n_treated"] == pytest.approx(100.0)
     assert viirs["n_treated_gap"] == pytest.approx(-60.0)
     assert viirs["coverage"] == pytest.approx(2.5)
+
+
+def test_normalize_legacy_treated_events_column() -> None:
+    legacy = pd.DataFrame(
+        {
+            "outcome_family": ["viirs", "viirs", "poi"],
+            "method": ["matching", "gsc", "mc"],
+            "treated_events": [110.0, 50.0, 20.0],
+        }
+    )
+    normalized = normalize_treated_event_columns(legacy)
+    assert "treated_events" not in normalized.columns
+    matching_row = normalized.loc[normalized["method"].eq("matching")].iloc[0]
+    pooled_row = normalized.loc[normalized["method"].eq("gsc")].iloc[0]
+    mc_row = normalized.loc[normalized["method"].eq("mc")].iloc[0]
+    assert matching_row["availability_treated_events"] == pytest.approx(110.0)
+    assert pd.isna(matching_row["max_supported_treated_grids"])
+    assert pooled_row["max_supported_treated_grids"] == pytest.approx(50.0)
+    assert pd.isna(pooled_row["availability_treated_events"])
+    assert mc_row["max_supported_treated_grids"] == pytest.approx(20.0)
+    assert normalize_treated_event_columns(normalized) is normalized

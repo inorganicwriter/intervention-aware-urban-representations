@@ -1,4 +1,4 @@
-# Label reliability weights (Rev3.1)
+# label reliability weights (Rev3.3)
 
 This document defines the label reliability weighting used when building
 pretraining datasets from a published Response Artifact.  The scheme is
@@ -51,13 +51,16 @@ present in the Response Artifact:
 | `p_holdout` | matched | `max(holdout_rms_ratio, holdout_max_ratio)` |
 | `p_validation` | MC (when stored) | `mc_cv_mspe` (pre-treatment CV MSPE) |
 
-Each raw diagnostic is converted to an empirical percentile within
-`(method, outcome)` (0 = most reliable).  Strata with fewer than two labels
-fall back to `(method, family)`.  \(D_i\) is the **row mean of the available
-percentiles** (components that are not defined for a method are simply absent,
-never imputed); rows without any diagnostic receive the neutral percentile
-`0.5`.  The raw level percentile `p_level` is stored for QC only and never
-enters the weight.
+Each raw diagnostic is converted to an empirical percentile computed on
+**eligible labels only**, pooling upward until a stratum holds at least 30
+labels: `(method, outcome) -> (method, family) -> method -> global` (a global
+fallback below 30 labels uses the neutral 0.5).  \(D_i\) is the **row mean of
+the available percentiles** (components that are not defined for a method are
+simply absent, never imputed); rows without any diagnostic receive the neutral
+percentile `0.5`.  The raw level percentile `p_level` is stored for QC only and
+never enters the weight.  Ineligible labels are excluded from every reference
+distribution (percentiles, precision normalization, winsorization cutoffs and
+normalization means) and only receive \(W = 0\) at the end.
 
 \(D_i\) is an **unreliability score**, not an estimated variance.  Calibrating
 it to \(E[(\hat\tau^{pseudo})^2]\) is the W2/W3 roadmap below.
@@ -66,28 +69,33 @@ it to \(E[(\hat\tau^{pseudo})^2]\) is the W2/W3 roadmap below.
 
 For GSC/MC labels with a standard error, inverse sampling variance
 \(1/SE^2\) is winsorized at the 1%/99% quantiles and normalized to mean one
-within `(method, outcome)`; the multiplier is
-\((\tilde p^{SE})^{\alpha}\) with default \(\alpha = 0.5\).  Matched labels
-have no sampling uncertainty and receive exactly \(1\), so a missing
-uncertainty estimate never earns a bonus.  \(\alpha \in \{0, 0.5, 1\}\) is the
-pre-specified sensitivity set (`0` = no precision adjustment, `1` = full
-inverse variance).
+within `(method, outcome)` over eligible model labels; the multiplier is
+\((\tilde p^{SE})^{\alpha}\).  Matched labels have no sampling uncertainty and
+receive exactly \(1\), so a missing uncertainty estimate never earns a bonus.
+
+Separation of concerns: the representation loss already uses `response_se`
+for pair-level statistical shrinkage (`response_alignment_loss`), so **training
+builds the dataset with `alpha = 0`** (design-only weights).  The \(\alpha >
+0\) tempering is retained for analysis, audit and the W-full ablation.
 
 ### 4. Aggregation and normalization
 
 - raw weight: \(W^{raw}_i = A_i \exp(-\gamma D_i)(\tilde p_i^{SE})^\alpha\);
 - winsorize at the 1%/99% percentiles of the eligible distribution within
   `(method, family)`; this is a numerical-robustness rule, so a poor-quality
-  label keeps a strictly positive weight — only eligibility failures are
+  label keeps a strictly positive weight �?only eligibility failures are
   exactly zero;
 - normalize to mean one within `(method, family)` over eligible labels;
-- the per-treatment weight (`sample_index.parquet`) is the conservative
-  minimum over the treatment's available labels.
+- **training reliability is per label**: the loss sums
+  \(\sum_{i,k} W_{i,k}^{design} L_{i,k}\) over tasks \(i\) and responses \(k\);
+  a task-level aggregate is stored separately as `task_sampling_weight`
+  (minimum over eligible labels) for sampling schemes only and must not be
+  used as a substitute for the per-label reliability weight.
 
 Default constants live in `pretraining_dataset.py`:
 `DESIGN_GAMMA = 1.0`, `PRECISION_ALPHA = 0.5`,
 `DESIGN_NEUTRAL_PERCENTILE = 0.5`, `WEIGHT_WINSOR_LOWER = 0.01`,
-`WEIGHT_WINSOR_UPPER = 0.99`, `CALIBRATION_VERSION = "rev3.1-ordinal-2026-09"`.
+`WEIGHT_WINSOR_UPPER = 0.99`, `CALIBRATION_VERSION = "rev3.3-ordinal-2026-09"`.
 `build_pretraining_dataset.py` exposes `--weight-gamma` and `--weight-alpha`
 so the sensitivity variants (`alpha` = 0 / 0.5 / 1, `gamma` = 0 for the W0
 equal-weight baseline) are exact rebuilds of the same pipeline.
@@ -111,23 +119,26 @@ as `standard_error` remain available too):
 | `weight_raw` | before winsorization/normalization |
 | `response_weight` | final weight |
 | `weight_stratum` | normalization stratum `(method, family)` |
-| `calibration_version` | e.g. `rev3.1-ordinal-2026-09` |
+| `calibration_version` | e.g. `rev3.3-ordinal-2026-09` |
 
-Per-treatment: `sample_index.parquet:response_weight`; release manifest:
-`response_weight` block with the calibration version and parameters.
+Per-label: `response_targets.parquet:response_weight` is the training weight.
+Per-treatment: `sample_index.parquet:task_sampling_weight` is an optional
+aggregate for sampling only.  Release manifest: `response_weight` block with
+the calibration version, parameters and eligible-label statistics.
 
-## Versions
+## Versions and ablations
 
-| Version | Status | Method |
-|---|---|---|
-| W0 | baseline | admissible labels equally weighted (rebuild with `gamma=0, alpha=0`) |
-| **W1 (Rev3.1)** | **current** | mean of available design percentiles + tempered precision |
-| W2 | robustness | monotonic calibration of design score on a stratified 300–600 task pseudo-treatment subsample, checking that design unreliability predicts \(\lvert\hat\tau^{pseudo}\rvert\) |
-| W3 | paper | full pseudo-treatment calibration of expected label variance \(V^{design} = E[(\hat\tau^{pseudo})^2 \mid X]\) with variance-additive combination \(1/(V^{design}+SE^2)\) |
+| Version | Sample weight | Loss uses SE | Purpose |
+|---|---|---|---|
+| W0 | 1 | yes | baseline (`gamma=0, alpha=0`) |
+| **W-design** | design-only (`alpha=0`) | yes | **main training version** |
+| W-full | design × precision (`alpha=0.5`) | no | robustness / ablation |
+| W2 | monotonic calibration of the design score on a stratified 300–600 task pseudo-treatment subsample, checking that design unreliability predicts \(\lvert\hat\tau^{pseudo}\rvert\) | | robustness |
+| W3 | full pseudo-treatment calibration \(V^{design} = E[(\hat\tau^{pseudo})^2 \mid X]\) with variance-additive combination \(1/(V^{design}+SE^2)\) | | paper method |
 
 W2/W3 require re-running the production estimators on pseudo interventions
 (and, for the first-difference trend diagnostic, storing pre-treatment gap
-paths in the task products).  Neither is required for W1, and W1's stored
+paths in the task products).  Neither is required for W-design, whose stored
 components are designed so the upgrade does not require re-running causal
 estimation.
 

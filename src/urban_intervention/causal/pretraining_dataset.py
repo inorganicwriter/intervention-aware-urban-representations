@@ -421,13 +421,13 @@ def _best_quality_grade(targets: pd.DataFrame) -> pd.DataFrame:
 
 KNOWN_FAMILIES = ("housing", "viirs", "poi", "population")
 
-CALIBRATION_VERSION = "rev3.1-ordinal-2026-09"
+CALIBRATION_VERSION = "rev3.3-ordinal-2026-09"
 DESIGN_GAMMA = 1.0
 PRECISION_ALPHA = 0.5
 DESIGN_NEUTRAL_PERCENTILE = 0.5
 WEIGHT_WINSOR_LOWER = 0.01
 WEIGHT_WINSOR_UPPER = 0.99
-MIN_DESIGN_STRATUM = 2
+MIN_STRATUM_SIZE = 30
 
 
 def _numeric_column(frame: pd.DataFrame, name: str) -> pd.Series:
@@ -437,15 +437,40 @@ def _numeric_column(frame: pd.DataFrame, name: str) -> pd.Series:
 
 
 def _stratum_percentile(
-    distance: pd.Series, primary_stratum: pd.Series, fallback_stratum: pd.Series
+    distance: pd.Series,
+    method: pd.Series,
+    family: pd.Series,
+    outcome: pd.Series,
+    eligible: pd.Series,
 ) -> pd.Series:
-    """Empirical percentile of a diagnostic within its stratum (0 = best)."""
-    percentile = distance.groupby(primary_stratum).rank(pct=True)
-    fallback = distance.groupby(fallback_stratum).rank(pct=True)
-    primary_size = distance.groupby(primary_stratum).transform("size")
-    fallback_size = distance.groupby(fallback_stratum).transform("size")
-    percentile = percentile.where(primary_size.ge(MIN_DESIGN_STRATUM), fallback)
-    return percentile.where(fallback_size.ge(MIN_DESIGN_STRATUM), np.nan)
+    """Empirical percentile of a diagnostic, pooling upward until n >= 30.
+
+    Hierarchy: ``(method, outcome)`` -> ``(method, family)`` -> ``method`` ->
+    global.  Only eligible labels with a defined diagnostic participate in the
+    reference distribution; ineligible or undefined rows keep NaN.
+    """
+    masked = distance.where(eligible)
+    result = pd.Series(np.nan, index=distance.index, dtype=float)
+    remaining = masked.notna()
+    groupers = (
+        method + "::" + outcome,
+        method + "::" + family,
+        method,
+    )
+    for grouper in groupers:
+        if not remaining.any():
+            break
+        counts = masked.groupby(grouper).transform("count")
+        usable = remaining & counts.ge(MIN_STRATUM_SIZE)
+        if usable.any():
+            result = result.where(~usable, masked.groupby(grouper).rank(pct=True))
+            remaining = remaining & ~usable
+    if remaining.any():
+        if int(masked.notna().sum()) >= MIN_STRATUM_SIZE:
+            result = result.where(~remaining, masked.rank(pct=True))
+        else:
+            result = result.where(~remaining, DESIGN_NEUTRAL_PERCENTILE)
+    return result
 
 
 def response_label_weights(
@@ -454,7 +479,7 @@ def response_label_weights(
     gamma: float = DESIGN_GAMMA,
     alpha: float = PRECISION_ALPHA,
 ) -> pd.DataFrame:
-    """Attach Rev3.1 label reliability weights to every label row.
+    """Attach Rev3.3 label reliability weights to every label row.
 
     Structure (deliberately ordinal, not a calibrated variance):
 
@@ -465,19 +490,21 @@ def response_label_weights(
       weight 0; every eligibility rule is a methodological boundary, not an
       arbitrary quality cutoff.
     - ``D`` (``design_unreliability``): the row mean of the available design
-      diagnostic percentiles, computed within ``(method, outcome)`` with a
-      ``(method, family)`` fallback; 0 = best.  Diagnostics are
+      diagnostic percentiles, computed on eligible labels only, pooling upward
+      through ``(method, outcome) -> (method, family) -> method -> global``
+      until a stratum holds at least 30 labels; 0 = best.  Diagnostics are
       ``p_trend`` (pre-treatment gap deviation for model estimators),
       ``p_holdout`` (matching holdout ratio) and ``p_validation``
       (pre-treatment CV MSPE for matrix completion).  Rows without any
       diagnostic receive the neutral 0.5.  The raw level percentile
       (``p_level``) is stored for QC only and never enters the weight.
     - ``precision``: inverse sampling variance ``1/se^2`` winsorized at the
-      1%/99% quantiles and mean-normalized **within method and outcome**;
-      labels without a standard error (matching) receive exactly 1 so that a
-      missing uncertainty estimate never earns a bonus.  ``alpha = 0.5``
-      tempers the multiplier; ``alpha = 0`` and ``alpha = 1`` are the
-      pre-specified sensitivity variants.
+      1%/99% quantiles and mean-normalized **within method and outcome** over
+      eligible model labels; labels without a standard error (matching)
+      receive exactly 1 so that a missing uncertainty estimate never earns a
+      bonus.  ``alpha = 0.5`` tempers the multiplier; the training build uses
+      ``alpha = 0`` because the representation loss already handles sampling
+      precision through ``response_se``.
     - Final weights are winsorized at the 1%/99% percentiles of the eligible
       distribution within ``(method, family)`` and normalized to mean one over
       eligible labels.  Only eligibility failures are exactly zero.
@@ -517,35 +544,39 @@ def response_label_weights(
     family_stratum = method + "::" + family
     components = pd.DataFrame(index=frame.index)
     components["p_trend"] = _stratum_percentile(
-        gap_deviation.where(~matched), design_stratum, family_stratum
+        gap_deviation.where(~matched), method, family, outcome, eligible
     )
     components["p_holdout"] = _stratum_percentile(
-        matched_holdout.where(matched), design_stratum, family_stratum
+        matched_holdout.where(matched), method, family, outcome, eligible
     )
     components["p_validation"] = _stratum_percentile(
-        cv_mspe.where(~matched), design_stratum, family_stratum
+        cv_mspe.where(~matched), method, family, outcome, eligible
     )
     design_percentile = components.mean(axis=1, skipna=True)
     design_percentile = design_percentile.where(
         components.notna().any(axis=1), DESIGN_NEUTRAL_PERCENTILE
     )
-    p_level = _stratum_percentile(pre_rmspe, design_stratum, family_stratum)
+    p_level = _stratum_percentile(
+        pre_rmspe, method, family, outcome, eligible
+    )
     design_weight = np.exp(-gamma * design_percentile)
 
     standard_error = _numeric_column(frame, "standard_error")
     inverse_variance = 1.0 / (standard_error**2 + 1e-12)
-    lower = inverse_variance.groupby(design_stratum).transform(
+    model_eligible = eligible & ~matched & standard_error.notna()
+    winsor_source = inverse_variance.where(model_eligible)
+    lower = winsor_source.groupby(design_stratum).transform(
         lambda values: values.quantile(0.01)
     )
-    upper = inverse_variance.groupby(design_stratum).transform(
+    upper = winsor_source.groupby(design_stratum).transform(
         lambda values: values.quantile(0.99)
     )
     clipped = inverse_variance.clip(lower=lower, upper=upper)
-    mean_precision = clipped.groupby(design_stratum).transform("mean")
-    normalized_precision = clipped / mean_precision
-    use_precision = (
-        standard_error.notna() & ~matched & mean_precision.gt(0).fillna(False)
+    mean_precision = clipped.where(model_eligible).groupby(design_stratum).transform(
+        "mean"
     )
+    normalized_precision = clipped / mean_precision
+    use_precision = model_eligible & mean_precision.gt(0).fillna(False)
     precision_weight = normalized_precision.pow(alpha).where(use_precision, 1.0)
 
     raw = (design_weight * precision_weight).where(eligible, 0.0)
@@ -576,21 +607,22 @@ def response_label_weights(
     return frame
 
 
-def _response_weights(
+def _task_sampling_weight(
     targets: pd.DataFrame,
     *,
     gamma: float = DESIGN_GAMMA,
     alpha: float = PRECISION_ALPHA,
 ) -> pd.DataFrame:
-    """Return one conservative weight per treatment.
+    """Return an optional per-treatment sampling weight.
 
-    Only labels that pass the eligibility boundaries contribute; a single
-    ineligible label (for example one outcome without pre-treatment anchors)
-    must not zero the whole treatment.
+    This is a convenience aggregate (minimum over eligible labels) for sampling
+    schemes; training reliability must use the per-label ``response_weight``.
     """
     weighted = response_label_weights(targets, gamma=gamma, alpha=alpha)
     weighted = weighted.loc[weighted["eligible"].fillna(False)]
-    return weighted.groupby("treatment_order", as_index=False)["response_weight"].min()
+    return weighted.groupby("treatment_order", as_index=False)["response_weight"].min().rename(
+        columns={"response_weight": "task_sampling_weight"}
+    )
 
 
 def publish_pretraining_dataset(
@@ -681,7 +713,9 @@ def publish_pretraining_dataset(
         training_mask=("training_mask", "max"),
         final_training_mask=("final_training_mask", "max"),
     )
-    unit_weights = _response_weights(targets, gamma=weight_gamma, alpha=weight_alpha)
+    unit_weights = _task_sampling_weight(
+        targets, gamma=weight_gamma, alpha=weight_alpha
+    )
     best_grade = _best_quality_grade(targets)
     sample_index = (
         features[["treatment_order", "split", "feature_training_mask"]]
@@ -692,8 +726,8 @@ def publish_pretraining_dataset(
     sample_index["training_mask"] = sample_index["training_mask"].fillna(False)
     sample_index["final_training_mask"] = sample_index["final_training_mask"].fillna(False)
     sample_index["quality_grade"] = sample_index["quality_grade"].fillna("pending")
-    sample_index["response_weight"] = (
-        pd.to_numeric(sample_index["response_weight"], errors="coerce").fillna(0.0)
+    sample_index["task_sampling_weight"] = (
+        pd.to_numeric(sample_index["task_sampling_weight"], errors="coerce").fillna(0.0)
     )
 
     dataset_id = dataset_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -732,15 +766,18 @@ def publish_pretraining_dataset(
             "families": list(families) if families is not None else None,
             "response_weight": {
                 "definition": (
-                    "Rev3 ordinal label reliability: eligible * exp(-gamma * design "
-                    "percentile) * tempered precision, winsorized and normalized to "
-                    "mean one within method x family"
+                    "Rev3.3 per-label design reliability: eligible * exp(-gamma * D) * "
+                    "tempered precision, winsorized and normalized to mean one within "
+                    "method x family; training uses per-label response_weight while the "
+                    "representation loss keeps response_se for statistical precision"
                 ),
                 "calibration_version": CALIBRATION_VERSION,
                 "gamma": float(weight_gamma),
                 "alpha": float(weight_alpha),
-                "mean": float(sample_index["response_weight"].mean()),
-                "positive": int((sample_index["response_weight"] > 0).sum()),
+                "eligible_rows": int(targets["eligible"].sum()),
+                "mean": float(targets.loc[targets["eligible"], "response_weight"].mean()),
+                "min": float(targets.loc[targets["eligible"], "response_weight"].min()),
+                "max": float(targets.loc[targets["eligible"], "response_weight"].max()),
             },
             "rows": {
                 "unit_features": len(features),

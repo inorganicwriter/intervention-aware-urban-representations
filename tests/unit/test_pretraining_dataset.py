@@ -10,7 +10,7 @@ import pytest
 from urban_intervention.causal.pretraining_dataset import (
     IDENTITY_COLUMNS,
     _best_quality_grade,
-    _response_weights,
+    _task_sampling_weight,
     build_pretreatment_features,
     deterministic_city_splits,
     publish_pretraining_dataset,
@@ -300,119 +300,192 @@ def test_treatment_binding_rejects_missing_production_hash_and_identity_drift(
         )
 
 
-def test_response_label_weights_ordinal_design_and_tempered_precision() -> None:
-    targets = pd.DataFrame(
+def _weight_frame() -> pd.DataFrame:
+    """Synthetic panel with >=30 eligible labels per (method, outcome) stratum."""
+    matched = pd.DataFrame(
         {
-            "treatment_order": [1, 2, 3, 4, 5, 6, 7, 8, 9],
-            "outcome_family": ["viirs"] * 9,
-            "outcome": ["viirs_avg_asinh"] * 9,
-            "method": [
-                "frozen_matched_change_12m_baseline",
-                "frozen_matched_change_12m_baseline",
-                "frozen_matched_change_12m_baseline",
-                "xu_2017_gsynth_same_city",
-                "xu_2017_gsynth_same_city",
-                "xu_2017_gsynth_same_city",
-                "xu_2017_gsynth_same_city",
-                "frozen_matched_change_12m_baseline",
-                "xu_2017_gsynth_same_city",
-            ],
-            "label_available": [True] * 9,
-            "holdout_rms_ratio": [0.2, 0.5, 0.9, None, None, None, None, 1.2, None],
-            "holdout_max_ratio": [0.2, 0.5, 0.9, None, None, None, None, 1.2, None],
-            "pre_rmspe": [None, None, None, 0.20, 0.40, 1.00, 0.20, None, 0.20],
-            "pre_mean_effect": [None, None, None, 0.10, 0.10, 0.10, 0.10, None, 0.10],
-            "standard_error": [None, None, None, 0.05, 0.10, 0.50, 0.05, None, 0.05],
-            "pre_observed_periods": [3, 3, 3, 5, 5, 5, 0, 3, 5],
+            "treatment_order": np.arange(1, 41),
+            "outcome_family": "viirs",
+            "outcome": "viirs_avg_asinh",
+            "method": "frozen_matched_change_12m_baseline",
+            "label_available": True,
+            "holdout_rms_ratio": np.linspace(0.10, 0.90, 40),
+            "holdout_max_ratio": np.linspace(0.15, 0.95, 40),
+            "pre_rmspe": np.nan,
+            "pre_mean_effect": np.nan,
+            "mc_cv_mspe": np.nan,
+            "standard_error": np.nan,
+            "pre_observed_periods": 5,
         }
     )
-    weighted = response_label_weights(targets).set_index("treatment_order")
-
-    # Eligibility boundaries: zero anchors and a violated matched holdout
-    # boundary are the only hard zeros.
-    assert not weighted.loc[7, "eligible"]
-    assert not weighted.loc[8, "eligible"]
-    assert weighted.loc[7, "response_weight"] == 0.0
-    assert weighted.loc[8, "response_weight"] == 0.0
-    for order in (1, 2, 3, 4, 5, 6, 9):
-        assert weighted.loc[order, "eligible"]
-
-    # Matched labels rank on the holdout ratio; no precision bonus is applied.
-    assert (
-        weighted.loc[1, "response_weight"]
-        > weighted.loc[2, "response_weight"]
-        > weighted.loc[3, "response_weight"]
+    gsc = pd.DataFrame(
+        {
+            "treatment_order": np.arange(101, 141),
+            "outcome_family": "viirs",
+            "outcome": "viirs_avg_asinh",
+            "method": "xu_2017_gsynth_same_city",
+            "label_available": True,
+            "holdout_rms_ratio": np.nan,
+            "holdout_max_ratio": np.nan,
+            "pre_rmspe": np.linspace(0.05, 0.60, 40),
+            "pre_mean_effect": 0.0,
+            "mc_cv_mspe": np.nan,
+            "standard_error": np.linspace(0.05, 0.50, 40),
+            "pre_observed_periods": 5,
+        }
     )
-    assert not weighted.loc[1, "has_precision_weight"]
-    assert weighted.loc[1, "precision_weight"] == pytest.approx(1.0)
-
-    # GSC labels rank on the pre-treatment gap deviation with tempered precision;
-    # labels 4 and 9 share the same diagnostics.
-    assert weighted.loc[4, "has_precision_weight"]
-    assert weighted.loc[4, "response_weight"] == pytest.approx(
-        weighted.loc[9, "response_weight"]
+    mc = pd.DataFrame(
+        {
+            "treatment_order": np.arange(201, 241),
+            "outcome_family": "viirs",
+            "outcome": "viirs_avg_asinh",
+            "method": "athey_2021_mc_same_city",
+            "label_available": True,
+            "holdout_rms_ratio": np.nan,
+            "holdout_max_ratio": np.nan,
+            "pre_rmspe": np.linspace(0.05, 0.60, 40),
+            "pre_mean_effect": 0.0,
+            "mc_cv_mspe": np.linspace(0.01, 0.10, 40),
+            "standard_error": 0.20,
+            "pre_observed_periods": 5,
+        }
     )
-    assert weighted.loc[4, "response_weight"] > weighted.loc[5, "response_weight"]
-    assert weighted.loc[5, "response_weight"] > weighted.loc[6, "response_weight"]
+    ineligible = pd.DataFrame(
+        [
+            {
+                "treatment_order": 901,
+                "outcome_family": "viirs",
+                "outcome": "viirs_avg_asinh",
+                "method": "frozen_matched_change_12m_baseline",
+                "label_available": True,
+                "holdout_rms_ratio": 1.50,
+                "holdout_max_ratio": 1.50,
+                "pre_rmspe": np.nan,
+                "pre_mean_effect": np.nan,
+                "mc_cv_mspe": np.nan,
+                "standard_error": np.nan,
+                "pre_observed_periods": 5,
+            },
+            {
+                "treatment_order": 902,
+                "outcome_family": "viirs",
+                "outcome": "viirs_avg_asinh",
+                "method": "xu_2017_gsynth_same_city",
+                "label_available": True,
+                "holdout_rms_ratio": np.nan,
+                "holdout_max_ratio": np.nan,
+                "pre_rmspe": 0.10,
+                "pre_mean_effect": 0.0,
+                "mc_cv_mspe": np.nan,
+                "standard_error": 0.10,
+                "pre_observed_periods": 0,
+            },
+            {
+                "treatment_order": 903,
+                "outcome_family": "viirs",
+                "outcome": "viirs_avg_asinh",
+                "method": "athey_2021_mc_same_city",
+                "label_available": False,
+                "holdout_rms_ratio": np.nan,
+                "holdout_max_ratio": np.nan,
+                "pre_rmspe": 0.10,
+                "pre_mean_effect": 0.0,
+                "mc_cv_mspe": 0.02,
+                "standard_error": 0.20,
+                "pre_observed_periods": 5,
+            },
+        ]
+    )
+    return pd.concat([matched, gsc, mc, ineligible], ignore_index=True)
 
-    # Normalization holds within every (method, family) stratum.
-    for method in (
-        "frozen_matched_change_12m_baseline",
-        "xu_2017_gsynth_same_city",
-    ):
+
+def test_response_label_weights_rank_within_strata() -> None:
+    weighted = response_label_weights(_weight_frame()).set_index("treatment_order")
+
+    matched = weighted.loc[weighted["method"].eq("frozen_matched_change_12m_baseline")]
+    assert matched.loc[1, "response_weight"] > matched.loc[40, "response_weight"]
+    assert not matched.loc[1, "has_precision_weight"]
+    assert matched.loc[1, "precision_weight"] == pytest.approx(1.0)
+
+    gsc = weighted.loc[weighted["method"].eq("xu_2017_gsynth_same_city")]
+    assert gsc.loc[101, "response_weight"] > gsc.loc[140, "response_weight"]
+    mc = weighted.loc[weighted["method"].eq("athey_2021_mc_same_city")]
+    assert mc.loc[201, "response_weight"] > mc.loc[240, "response_weight"]
+    assert gsc.loc[101, "has_precision_weight"]
+    assert mc.loc[201, "has_precision_weight"]
+
+    for method in weighted["method"].unique():
         group = weighted[(weighted["method"] == method) & weighted["eligible"]]
         assert group["response_weight"].mean() == pytest.approx(1.0)
-    assert set(weighted["calibration_version"]) == {"rev3.1-ordinal-2026-09"}
+    assert set(weighted["calibration_version"]) == {"rev3.3-ordinal-2026-09"}
 
 
 def test_response_weights_average_available_design_components() -> None:
-    targets = pd.DataFrame(
-        {
-            "treatment_order": [1, 2],
-            "outcome_family": ["poi", "poi"],
-            "outcome": ["poi_count_log", "poi_count_log"],
-            "method": ["athey_2021_mc_same_city"] * 2,
-            "label_available": [True, True],
-            "pre_rmspe": [0.2, 0.2],
-            "pre_mean_effect": [0.0, 0.0],
-            "mc_cv_mspe": [0.01, 0.09],
-            "standard_error": [0.1, 0.1],
-            "pre_observed_periods": [5, 5],
-        }
-    )
-    weighted = response_label_weights(targets).set_index("treatment_order")
-    # Identical trend diagnostics; the validation percentile breaks the tie.
-    assert weighted.loc[1, "p_trend"] == pytest.approx(weighted.loc[2, "p_trend"])
-    assert weighted.loc[1, "p_validation"] < weighted.loc[2, "p_validation"]
-    assert (
-        weighted.loc[1, "design_unreliability"]
-        < weighted.loc[2, "design_unreliability"]
-    )
-    assert weighted.loc[1, "response_weight"] > weighted.loc[2, "response_weight"]
+    weighted = response_label_weights(_weight_frame())
+
+    mc = weighted.loc[
+        weighted["method"].eq("athey_2021_mc_same_city") & weighted["eligible"]
+    ]
+    assert np.allclose(mc["design_unreliability"], (mc["p_trend"] + mc["p_validation"]) / 2)
+    matched = weighted.loc[
+        weighted["method"].eq("frozen_matched_change_12m_baseline") & weighted["eligible"]
+    ]
+    assert np.allclose(matched["design_unreliability"], matched["p_holdout"])
+    gsc = weighted.loc[
+        weighted["method"].eq("xu_2017_gsynth_same_city") & weighted["eligible"]
+    ]
+    assert np.allclose(gsc["design_unreliability"], gsc["p_trend"])
 
 
-def test_response_weights_sensitivity_variants_collapse_to_equal_weights() -> None:
-    targets = pd.DataFrame(
-        {
-            "treatment_order": [1, 2],
-            "outcome_family": ["viirs", "viirs"],
-            "outcome": ["viirs_avg_asinh"] * 2,
-            "method": ["xu_2017_gsynth_same_city"] * 2,
-            "label_available": [True, True],
-            "pre_rmspe": [0.2, 0.9],
-            "pre_mean_effect": [0.0, 0.0],
-            "standard_error": [0.05, 0.5],
-            "pre_observed_periods": [5, 5],
-        }
+def test_response_weights_pool_small_outcomes_to_family() -> None:
+    outcomes = [
+        "poi_count_log",
+        "poi_category_entropy",
+        "poi_commercial_share",
+        "poi_transport_access_log",
+    ]
+    rows = []
+    for index, outcome in enumerate(outcomes):
+        for position in range(10):
+            rows.append(
+                {
+                    "treatment_order": 1000 + index * 10 + position,
+                    "outcome_family": "poi",
+                    "outcome": outcome,
+                    "method": "xu_2017_gsynth_same_city",
+                    "label_available": True,
+                    "pre_rmspe": 0.05 + 0.001 * (index * 10 + position),
+                    "pre_mean_effect": 0.0,
+                    "standard_error": 0.10,
+                    "pre_observed_periods": 5,
+                }
+            )
+    weighted = response_label_weights(pd.DataFrame(rows))
+    ordered = weighted.sort_values("p_trend").reset_index(drop=True)
+    # n = 10 per outcome (< 30), so percentiles are computed on the pooled
+    # (method, family) distribution of 40 labels, not per outcome.
+    assert ordered.loc[0, "p_trend"] == pytest.approx(1 / 40)
+    assert ordered.loc[9, "p_trend"] == pytest.approx(10 / 40)
+    assert set(weighted["weight_stratum"]) == {"xu_2017_gsynth_same_city::poi"}
+
+
+def test_response_weights_sensitivity_and_eligibility() -> None:
+    frame = _weight_frame()
+    weighted = response_label_weights(frame).set_index("treatment_order")
+    for order in (901, 902, 903):
+        assert not weighted.loc[order, "eligible"]
+        assert weighted.loc[order, "response_weight"] == 0.0
+    assert (weighted.loc[weighted["eligible"], "response_weight"] > 0).all()
+
+    equal = response_label_weights(frame, gamma=0.0, alpha=0.0).set_index(
+        "treatment_order"
     )
-    equal = response_label_weights(targets, gamma=0.0, alpha=0.0)
-    eligible = equal[equal["eligible"]]
-    assert eligible["design_unreliability"].nunique() > 1
+    eligible = equal.loc[equal["eligible"]]
     assert eligible["response_weight"].nunique() == 1
     assert eligible["response_weight"].iloc[0] == pytest.approx(1.0)
 
 
-def test_task_weight_ignores_ineligible_labels() -> None:
+def test_task_sampling_weight_ignores_ineligible_labels() -> None:
     targets = pd.DataFrame(
         {
             "treatment_order": [1, 1, 2],
@@ -427,10 +500,10 @@ def test_task_weight_ignores_ineligible_labels() -> None:
             "pre_observed_periods": [5, 0, 0],
         }
     )
-    per_task = _response_weights(targets).set_index("treatment_order")["response_weight"]
-    # One ineligible label must not zero a treatment that keeps a usable label.
+    per_task = _task_sampling_weight(targets).set_index("treatment_order")[
+        "task_sampling_weight"
+    ]
     assert per_task.loc[1] > 0
-    # A treatment whose labels are all ineligible contributes no weight row.
     assert 2 not in per_task.index
 
 
@@ -455,9 +528,9 @@ def test_response_weights_zero_anchor_and_unavailable_labels() -> None:
     assert weighted.loc[2, "response_weight"] == 0.0
     assert not weighted.loc[3, "eligible"]
     assert weighted.loc[3, "response_weight"] == 0.0
-    per_task = _response_weights(targets)
+    per_task = _task_sampling_weight(targets)
     assert set(per_task["treatment_order"]) == {1}
-    assert per_task["response_weight"].iloc[0] == pytest.approx(1.0)
+    assert per_task["task_sampling_weight"].iloc[0] == pytest.approx(1.0)
 
 
 def test_pretraining_release_family_filter_and_response_weights(tmp_path: Path) -> None:
@@ -515,9 +588,10 @@ def test_pretraining_release_family_filter_and_response_weights(tmp_path: Path) 
     assert manifest["families"] == ["viirs"]
     # Without pre-treatment diagnostics every label receives the neutral design
     # score, so the normalized weights are exactly one.
-    assert index["response_weight"].eq(1.0).all()
+    assert index["task_sampling_weight"].eq(1.0).all()
     assert manifest["response_weight"]["mean"] == pytest.approx(1.0)
-    assert manifest["response_weight"]["calibration_version"] == "rev3.1-ordinal-2026-09"
+    assert manifest["response_weight"]["eligible_rows"] == 3
+    assert manifest["response_weight"]["calibration_version"] == "rev3.3-ordinal-2026-09"
     assert manifest["response_weight"]["gamma"] == pytest.approx(1.0)
     assert manifest["response_weight"]["alpha"] == pytest.approx(0.5)
 

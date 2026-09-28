@@ -1,6 +1,6 @@
 # Current project state
 
-Updated: 2026-09-19
+Updated: 2026-09-28
 
 This page contains the state required to resume production. Research definitions
 are maintained in `docs/research/`; dataset locations and source identities are
@@ -54,6 +54,7 @@ Detailed source and coverage information belongs in `docs/data/`.
 | Causal label queue | `scripts/causal_python/run_causal_label_queue.py` |
 | Single Python/GPU estimator | `scripts/causal_python/run_formal_estimator.py` |
 | Matching/GSC/MC event study | `scripts/causal_python/run_all_method_event_study.py` |
+| Four-family event-study final export | `scripts/causal_python/export_event_study_final.py` |
 | GPU parity and qualification | `scripts/causal_gpu/` |
 | Round-pool scheduler (optional) | `scripts/causal_python/run_round_pool.py` |
 | Round-pool worker | `scripts/causal_python/run_round_pool_worker.py` |
@@ -61,6 +62,15 @@ Detailed source and coverage information belongs in `docs/data/`.
 | Response Artifact | `scripts/causal_r/build_response_artifact.py` |
 | Pretraining dataset | `scripts/causal_r/build_pretraining_dataset.py` |
 | Representation training | `urban-train-representation` |
+
+The analysis-stage closure sequence is: four-family event-study final release
+→ VIIRS+POI label extraction → design-only weights → local verification →
+frozen `training_ready` release → server training.  Server-side steps are
+deferred and tracked as a checklist in
+[`training_release_checklist.md`](training_release_checklist.md); the
+event-study closure mechanics are in
+[`event_study_final_runbook.md`](event_study_final_runbook.md).  Server work
+does not start before the local release is frozen.
 
 Phase 2 supports three scheduling modes: `global_rounds` (default),
 `task_cascade`, and `round_pool`. The SQLite-backed `round_pool` mode uses

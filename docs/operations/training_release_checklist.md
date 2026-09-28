@@ -1,0 +1,80 @@
+# 训练 release 本地检查与服务器 checklist
+
+执行顺序（分析闭环优先）：
+
+> 四族 ES 封版 → 选 VIIRS+POI → 提取 labels → 附加 design-only weights
+> → 本地验证 → 冻结 training_ready → 服务器训练
+
+服务器本轮只保留本文件第 3 节的 checklist，不推进；先完成第 2 节本地闭环。
+
+## 1. 命名约定（防止误归因）
+
+| 名称 | 含义 |
+|---|---|
+| Historical | Rev3 之前的训练器（prediction head 用 `1/SE²` precision） |
+| W0 | 无 design differentiation（`gamma=0, alpha=0`），但遵循新训练框架 |
+| W-design | `alpha=0` design-only，主训练版本 |
+| W-full | `alpha=0.5`，分析/消融 |
+
+不得把 W0 写成 historical baseline。检索指标 `nn_corr` 保持无权重口径，
+作为跨权重定义可比的历史指标；`weighted_nn_corr` 是以后的增量，不是当前
+blocker。详见 `docs/research/label_reliability_weights.md`。
+
+## 2. 本地闭环状态
+
+- [x] Rev3.4 逐标签权重训练接入（pairwise `sqrt(w_i w_j)`、逐维 prediction
+  权重、queue 携带权重；634 tests 通过）。
+- [x] 四族 ES 统一导出器与单元测试
+  （`scripts/causal_python/export_event_study_final.py`）。
+- [x] 训练显存/耗时本地 smoke（真实 forward + backward + optimizer +
+  labeled queue，本机 RTX 4060 Laptop 8 GiB）：
+
+  | batch | queue | steps | peak allocated | peak reserved | 中位 step |
+  |---:|---:|---:|---:|---:|---:|
+  | 64 | 0 | 10 | 21 MB | 26 MB | 0.046 s |
+  | 256 | 4096 | 30 | 295 MB | 938 MB | 0.075 s |
+  | 512 | 8192 | 20 | 1111 MB | 3728 MB | 0.159 s |
+
+  结论：计划配置 B=256 / Q=4096 显存与耗时都很宽裕；stress 配置
+  （512×8192）也无 OOM、无碎片尖峰。**无需 queue chunking**，权重数学
+  定义保持不变。脚本可复跑：
+  `python scripts/representation/smoke_weighted_training.py --batch-size 256 --queue-size 4096 --steps 30`。
+- [ ] 四族 ES 服务器重跑与封版（见
+  `docs/operations/event_study_final_runbook.md`）
+- [ ] VIIRS+POI label 提取（见第 3 节命令）
+- [ ] 逐标签权重核验（见第 3 节清单）
+- [ ] 冻结 `training_ready` 版本（不再沿用 rev3_4 命名）
+- [ ] 服务器部署（第 3 节）
+
+## 3. 服务器 checklist（暂不执行）
+
+前置：第 2 节全部完成，且冻结版 zip 的 sha256 已记录。
+
+1. **上传代码**：zip 传到 `/home/lsr/`，在
+   `/home/nas/lsr/MIT_summer` 解压覆盖；确认 `git`（或源码包）与冻结
+   commit 一致。
+2. **测试**：`python -m pytest tests/unit/test_representation_weighted_response.py
+   tests/unit/test_event_study_release.py tests/unit/test_pretraining_dataset.py -q`。
+3. **ES 封版**：按 `event_study_final_runbook.md` 重跑四族并导出
+   `mit_event_study_final.zip`。
+4. **数据集构建**（design-only 主版本）：
+
+   ```bash
+   python scripts/causal_r/build_pretraining_dataset.py \
+       --response-release data/active/causal/releases/2026-09-23-production \
+       --dataset-id 2026-09-25-viirs-poi-design \
+       --families viirs,poi \
+       --weight-alpha 0
+   ```
+
+   W-full 消融版本使用同一命令加 `--weight-alpha 0.5`、不同 dataset-id。
+
+5. **权重分布核验清单**（逐条贴回结果）：
+   - `response_weight` 在 `(method, family)` 内 eligible 均值 = 1；
+   - `eligible = false` 的行 `response_weight` 全为 0；
+   - matched ties（同 outcome 同分位）与 GSC/MC 分布合理，无冻结常量；
+   - MC `p_validation`（cv_mspe）覆盖足够、无大面积缺失；
+   - POI 四个 outcome 的权重独立（不因 task-level min 被拉平）；
+   - percentile pooling 在 n≥30 分层生效（小 outcome 上溯 family）。
+6. **训练**：W0 / W-design / W-full 三版，实验表使用第 1 节命名。
+7. **性能 profiling**：正式大规模训练时再记录吞吐与显存曲线（非当前阻塞）。

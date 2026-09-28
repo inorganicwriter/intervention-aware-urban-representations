@@ -153,16 +153,29 @@ weights, so pre-Rev3 datasets stay usable.
   code path with `alpha > 0` weights.  W0 (`gamma = 0, alpha = 0`) yields unit
   weights and therefore the historical unweighted comparison, apart from the
   prediction head now receiving design weights instead of `1/SE^2`.
+- Retrieval metrics (`nn_corr@k` and the random baseline) intentionally remain
+  unweighted so they stay comparable across weighting definitions; a
+  `weighted_nn_corr` variant is a future add-on, not a current requirement.
 
 ## Versions and ablations
 
-| Version | Sample weight | Loss uses SE | Purpose |
+Naming is deliberately split so that a later change cannot be misattributed to
+design weighting.  The repository has no "historical baseline" alias for W0.
+
+| Version | Sample weight | Prediction head | Purpose |
 |---|---|---|---|
-| W0 | 1 | yes | baseline (`gamma=0, alpha=0`) |
-| **W-design** | design-only (`alpha=0`) | yes | **main training version** |
-| W-full | design × precision (`alpha=0.5`) | no | robustness / ablation |
-| W2 | monotonic calibration of the design score on a stratified 300–600 task pseudo-treatment subsample, checking that design unreliability predicts \(\lvert\hat\tau^{pseudo}\rvert\) | | robustness |
+| Historical | unit (no weight column) | `1/SE²` precision | pre-Rev3 trainer; naming reference only |
+| W0 | unit (`gamma=0, alpha=0`) | design weights (all ones) | no design differentiation, new framework |
+| **W-design** | design-only (`alpha=0`) | design weights | **main training version** |
+| W-full | design × precision (`alpha=0.5`) | design weights | robustness / ablation |
+| W2 | monotonic calibration of the design score on a stratified 300–600 task pseudo-treatment subsample | | robustness |
 | W3 | full pseudo-treatment calibration \(V^{design} = E[(\hat\tau^{pseudo})^2 \mid X]\) with variance-additive combination \(1/(V^{design}+SE^2)\) | | paper method |
+
+The representation alignment loss uses `response_se` pair shrinkage
+(`se_shrinkage=True`, the default) in every version; the prediction head always
+receives the design weights.  The only difference between Historical and W0 is
+the prediction-head weighting, which is exactly why the two names must not be
+used interchangeably in experiment tables.
 
 W2/W3 require re-running the production estimators on pseudo interventions
 (and, for the first-difference trend diagnostic, storing pre-treatment gap

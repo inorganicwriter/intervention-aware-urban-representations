@@ -54,7 +54,7 @@ python scripts/causal_python/export_event_study_final.py `
 | `event_study_panel.csv` | 统一长表：family × method × donor scope × outcome × event time；coefficient、grid/city SE、CI、p、样本量、`event_phase`，已过滤到规范窗口 |
 | `availability.csv` | 4 族 × 3 方法 × 2 scope 每格一行：`available` / `no_data` + reason、admitted units、source 范围、`insufficient_clusters` 警告 |
 | `pretrend_summary.csv` | Matching 联合 Wald（grid/city cluster）与 pooled GSC/MC cluster 均值检验 |
-| `family_selection.csv` / `.md` | 选择记录：VIIRS+POI 进入 downstream causal supervision；Housing/Population 已分析但不进入；记录信号稳定性、前趋势、有效样本、方法一致性 |
+| `family_selection.csv` / `.md` | 选择记录：VIIRS+POI 进入 downstream causal supervision（`selected_family` / `selection_reason`）；两阶段样本量分开：`availability_treated_events`（可用性阶段）vs `event_study_max_n_treated`（规范窗口内 `n_treated` 最大值），附 `n_treated_gap` 与 `coverage`；并记录信号稳定性、前趋势、方法一致性 |
 | `manifest.json` | 窗口、方法、输入/输出 sha256、行数、downstream 选择、caveats |
 | `validation.json` | 结构与窗口检查（error 会阻断干净运行） |
 | `figures/`、`source_tables/` | 底层图与审计表原样拷贝 |
@@ -64,8 +64,9 @@ python scripts/causal_python/export_event_study_final.py `
 1. `validation.json` 的 `ok = true`（0 个 blocking error）；
 2. `availability.csv` 24 格齐全——没有数据的格子也必须有一行并写明
    `no_data` 原因，不允许静默缺失；
-3. `family_selection.csv` 中 `in_downstream_supervision` 仅
-   `viirs`、`poi` 为 true；
+3. `family_selection.csv` 中 `selected_family` 仅 `viirs`、`poi` 为 true，且
+   `coverage ≤ 1`（`event_study_max_n_treated ≤ availability_treated_events`；
+   违反时 `validation.json` 的 `treated_event_consistency` 会报 error）；
 4. 跨城格子若 `n_cities < 3`，必须带 `insufficient_clusters` 警告；
 5. `manifest.json:caveats` 保留（标准化尺度、t0 非干净 lead、零锚 MC
    降级、仅规范窗口等）。

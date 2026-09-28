@@ -238,12 +238,21 @@ def test_export_builds_unified_release(release_inputs, tmp_path: Path) -> None:
     downstream = dict(
         zip(
             selection["outcome_family"],
-            selection["in_downstream_supervision"],
+            selection["selected_family"],
             strict=True,
         )
     )
     assert downstream["viirs"] and downstream["poi"]
     assert not downstream["housing"] and not downstream["population"]
+    vip = selection.loc[selection["outcome_family"].eq("viirs")].iloc[0]
+    assert vip["availability_treated_events"] == pytest.approx(100.0)
+    assert vip["event_study_max_n_treated"] == pytest.approx(100.0)
+    assert vip["n_treated_gap"] == pytest.approx(0.0)
+    assert vip["coverage"] == pytest.approx(1.0)
+    excluded = selection.loc[selection["outcome_family"].eq("housing")].iloc[0]
+    assert "excluded" in excluded["selection_reason"]
+    assert "selected" in vip["selection_reason"]
+    assert (selection["event_study_max_n_treated"] <= selection["availability_treated_events"]).all()
 
     manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["schema"] == "mit_event_study_final_v1"
@@ -287,3 +296,38 @@ def test_validation_blocks_missing_family(release_inputs, tmp_path: Path) -> Non
         availability["outcome_family"].eq("population") & availability["method"].eq("matching")
     ]
     assert population["status"].iloc[0] == "no_data"
+
+
+def test_validation_flags_window_support_above_availability(
+    release_inputs, tmp_path: Path
+) -> None:
+    matching_root, pooled_root, suite_root = release_inputs
+    diagnostics_path = matching_root / "matching_twfe" / "viirs" / "diagnostics.csv"
+    diagnostics = pd.read_csv(diagnostics_path)
+    diagnostics["treated_events"] = 40
+    diagnostics.to_csv(diagnostics_path, index=False)
+
+    output = tmp_path / "event_study_final_inconsistent"
+    result = export_event_study_final(
+        matching_root,
+        pooled_root,
+        output,
+        suite_root=suite_root,
+    )
+    validation = result["validation"]
+    assert not validation["ok"]
+    consistency = {
+        check["name"]: check
+        for check in validation["checks"]
+        if check["name"] == "treated_event_consistency"
+    }["treated_event_consistency"]
+    assert consistency["severity"] == "error"
+    assert not consistency["passed"]
+    assert "viirs" in consistency["detail"]
+
+    selection = pd.read_csv(output / "family_selection.csv", encoding="utf-8-sig")
+    viirs = selection.loc[selection["outcome_family"].eq("viirs")].iloc[0]
+    assert viirs["availability_treated_events"] == pytest.approx(40.0)
+    assert viirs["event_study_max_n_treated"] == pytest.approx(100.0)
+    assert viirs["n_treated_gap"] == pytest.approx(-60.0)
+    assert viirs["coverage"] == pytest.approx(2.5)

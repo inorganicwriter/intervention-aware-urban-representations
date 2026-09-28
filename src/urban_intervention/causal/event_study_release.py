@@ -82,7 +82,7 @@ AVAILABILITY_COLUMNS = [
     "donor_scope",
     "status",
     "reason",
-    "treated_units_admitted",
+    "treated_events",
     "rows",
     "n_cities",
     "n_cities_min",
@@ -123,17 +123,20 @@ PRETREND_COLUMNS = [
 SELECTION_COLUMNS = [
     "outcome_family",
     "analyzed",
-    "in_downstream_supervision",
+    "selected_family",
+    "selection_reason",
     "frequency",
     "canonical_outcome",
-    "matching_admitted_units",
+    "availability_treated_events",
+    "event_study_max_n_treated",
+    "n_treated_gap",
+    "coverage",
     "matching_n_cities",
     "matching_city_pretrend_p",
     "pooled_min_n_cities",
     "post_mean_matching",
     "post_share_significant_city",
     "method_sign_consistency",
-    "note",
 ]
 
 CAVEATS = [
@@ -353,7 +356,7 @@ def _matching_availability(
         "donor_scope": "same_city",
         "status": "no_data",
         "reason": "",
-        "treated_units_admitted": np.nan,
+        "treated_events": np.nan,
         "rows": panel_rows,
         "n_cities": np.nan,
         "n_cities_min": np.nan,
@@ -380,7 +383,7 @@ def _matching_availability(
         {
             "status": "available" if panel_rows > 0 else "no_data",
             "reason": "" if panel_rows > 0 else "no_coefficients_in_canonical_window",
-            "treated_units_admitted": diagnostics.get("treated_events"),
+            "treated_events": diagnostics.get("treated_events"),
             "n_cities": diagnostics.get("city_clusters"),
             "source_file": f"{directory.name}/event_study_coefficients.csv",
         }
@@ -426,7 +429,7 @@ def _pooled_availability(
                     "donor_scope": scope,
                     "status": "no_data",
                     "reason": "",
-                    "treated_units_admitted": np.nan,
+                    "treated_events": np.nan,
                     "rows": int(len(subset)),
                     "n_cities": np.nan,
                     "n_cities_min": np.nan,
@@ -463,7 +466,7 @@ def _pooled_availability(
                 row.update(
                     {
                         "status": "available",
-                        "treated_units_admitted": pd.to_numeric(
+                        "treated_events": pd.to_numeric(
                             subset["n_units"], errors="coerce"
                         ).max(),
                         "n_cities": n_cities.max(),
@@ -582,7 +585,20 @@ def _post_rows(panel: pd.DataFrame, family: str, method: str, scope: str, outcom
     ]
 
 
-def _selection_table(panel: pd.DataFrame, pretrend: pd.DataFrame) -> pd.DataFrame:
+def _selection_table(
+    panel: pd.DataFrame,
+    pretrend: pd.DataFrame,
+    availability: pd.DataFrame,
+    downstream: tuple[str, ...],
+) -> pd.DataFrame:
+    """Record the analysis-stage selection with explicit two-stage sample counts.
+
+    ``availability_treated_events`` is the treated-event count identified at the
+    availability/admission stage; ``event_study_max_n_treated`` is the largest
+    per-event-time ``n_treated`` that actually enters the canonical-window
+    event-study coefficients.  The two are kept separate (with gap and coverage)
+    instead of being forced to agree, because they describe different stages.
+    """
     records: list[dict[str, object]] = []
     for family in FAMILIES:
         outcome = MAIN_OUTCOMES[family]
@@ -597,20 +613,43 @@ def _selection_table(panel: pd.DataFrame, pretrend: pd.DataFrame) -> pd.DataFram
             matching_city_p = pd.to_numeric(
                 matching_city_row.iloc[0]["p_value"], errors="coerce"
             )
-        matching_n_cities = np.nan
         matching_row = panel.loc[
             panel["outcome_family"].eq(family)
             & panel["method"].eq("matching")
         ]
+        matching_n_cities = np.nan
         if not matching_row.empty:
             matching_n_cities = pd.to_numeric(
                 matching_row["n_cities"], errors="coerce"
             ).max()
-        admitted = np.nan
+
+        availability_row = availability.loc[
+            availability["outcome_family"].eq(family)
+            & availability["method"].eq("matching")
+        ]
+        availability_treated_events = np.nan
+        if not availability_row.empty:
+            value = pd.to_numeric(
+                availability_row.iloc[0]["treated_events"], errors="coerce"
+            )
+            if pd.notna(value):
+                availability_treated_events = float(value)
+
+        event_study_max_n_treated = np.nan
         if not matching_row.empty:
-            admitted_series = _numeric_column(matching_row, "n_units")
-            if admitted_series.notna().any():
-                admitted = admitted_series.max()
+            n_treated = _numeric_column(matching_row, "n_units")
+            if n_treated.notna().any():
+                event_study_max_n_treated = float(n_treated.max())
+
+        n_treated_gap = np.nan
+        coverage = np.nan
+        if np.isfinite(availability_treated_events) and np.isfinite(
+            event_study_max_n_treated
+        ):
+            n_treated_gap = availability_treated_events - event_study_max_n_treated
+            if availability_treated_events > 0:
+                coverage = event_study_max_n_treated / availability_treated_events
+
         pooled_family = panel.loc[
             panel["outcome_family"].eq(family)
             & panel["method"].isin(["gsc", "mc"])
@@ -645,26 +684,29 @@ def _selection_table(panel: pd.DataFrame, pretrend: pd.DataFrame) -> pd.DataFram
         consistency = (
             max(signs.count(1), signs.count(-1)) / len(signs) if signs else np.nan
         )
-        in_downstream = family in {"viirs", "poi"}
+        selected = family in downstream
         records.append(
             {
                 "outcome_family": family,
                 "analyzed": True,
-                "in_downstream_supervision": in_downstream,
+                "selected_family": selected,
+                "selection_reason": (
+                    "selected for downstream causal supervision"
+                    if selected
+                    else "analyzed but excluded from downstream causal supervision"
+                ),
                 "frequency": FREQUENCIES[family],
                 "canonical_outcome": outcome,
-                "matching_admitted_units": admitted,
+                "availability_treated_events": availability_treated_events,
+                "event_study_max_n_treated": event_study_max_n_treated,
+                "n_treated_gap": n_treated_gap,
+                "coverage": coverage,
                 "matching_n_cities": matching_n_cities,
                 "matching_city_pretrend_p": matching_city_p,
                 "pooled_min_n_cities": pooled_min_cities,
                 "post_mean_matching": post_mean_matching,
                 "post_share_significant_city": post_share_sig,
                 "method_sign_consistency": consistency,
-                "note": (
-                    "in downstream causal supervision"
-                    if in_downstream
-                    else "analyzed but excluded from downstream causal supervision"
-                ),
             }
         )
     return pd.DataFrame(records, columns=SELECTION_COLUMNS)
@@ -680,16 +722,29 @@ def _selection_markdown(selection: pd.DataFrame, downstream: tuple[str, ...]) ->
         "supervision; this is a fixed scope decision recorded here, not a",
         "post-hoc significance filter.",
         "",
+        "Two sample counts are reported separately because they belong to",
+        "different stages:",
+        "",
+        "- `availability_treated_events`: treated events identified at the",
+        "  availability/admission stage;",
+        "- `event_study_max_n_treated`: largest per-event-time `n_treated` entering",
+        "  the canonical-window event-study coefficients;",
+        "- `n_treated_gap = availability_treated_events - event_study_max_n_treated`;",
+        "- `coverage = event_study_max_n_treated / availability_treated_events`;",
+        "  coverage above 1 signals mixed releases/versions or inconsistent",
+        "  de-duplication keys and is flagged by `validation.json`.",
+        "",
         "Criteria recorded for transparency:",
         "",
         "- signal stability: share of post periods with |t| >= 1.96 (city cluster);",
         "- pre-trends: joint city-cluster pre-trend test p-value (diagnostic, not a gate);",
-        "- effective sample: admitted units and city clusters;",
+        "- effective sample: availability treated events, canonical-window support",
+        "  and city clusters;",
         "- method consistency: sign agreement of post-period means across methods",
         "  and donor scopes for the family's canonical outcome.",
         "",
-        "| family | downstream | freq | outcome | admitted | city clusters | pre-trend p | pooled min cities | post mean (matching) | share |t|>=1.96 | sign consistency |",
-        "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|",
+        "| family | selected | freq | outcome | availability events | window max n_treated | gap | coverage | city clusters | pre-trend p | pooled min cities | post mean (matching) | share |t|>=1.96 | sign consistency |",
+        "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in selection.itertuples():
         def _fmt(value: object, digits: int = 3) -> str:
@@ -703,13 +758,17 @@ def _selection_markdown(selection: pd.DataFrame, downstream: tuple[str, ...]) ->
             return f"{number:.{digits}f}"
 
         lines.append(
-            "| {family} | {downstream} | {freq} | {outcome} | {admitted} | {cities} | "
-            "{p} | {min_cities} | {post} | {share} | {consistency} |".format(
+            "| {family} | {selected} | {freq} | {outcome} | {events} | {max_n} | "
+            "{gap} | {coverage} | {cities} | {p} | {min_cities} | {post} | "
+            "{share} | {consistency} |".format(
                 family=row.outcome_family,
-                downstream="yes" if row.in_downstream_supervision else "no",
+                selected="yes" if row.selected_family else "no",
                 freq=row.frequency,
                 outcome=row.canonical_outcome,
-                admitted=_fmt(row.matching_admitted_units, 0),
+                events=_fmt(row.availability_treated_events, 0),
+                max_n=_fmt(row.event_study_max_n_treated, 0),
+                gap=_fmt(row.n_treated_gap, 0),
+                coverage=_fmt(row.coverage),
                 cities=_fmt(row.matching_n_cities, 0),
                 p=_fmt(row.matching_city_pretrend_p),
                 min_cities=_fmt(row.pooled_min_n_cities, 0),
@@ -810,6 +869,7 @@ def _validate(
     panel: pd.DataFrame,
     availability: pd.DataFrame,
     pretrend: pd.DataFrame,
+    selection: pd.DataFrame,
     downstream: tuple[str, ...],
 ) -> dict[str, object]:
     checks: list[dict[str, object]] = []
@@ -897,6 +957,32 @@ def _validate(
         "warning",
         f"pretrend families: {sorted(pretrend_families)}",
     )
+    violations: list[str] = []
+    for row in selection.itertuples():
+        available_events = pd.to_numeric(
+            row.availability_treated_events, errors="coerce"
+        )
+        window_max = pd.to_numeric(row.event_study_max_n_treated, errors="coerce")
+        if not (pd.notna(available_events) and pd.notna(window_max)):
+            continue
+        if window_max > available_events + 1e-9:
+            violations.append(
+                f"{row.outcome_family}: window max {window_max:g} > "
+                f"availability {available_events:g}"
+            )
+    add(
+        "treated_event_consistency",
+        not violations,
+        "error",
+        (
+            "event_study_max_n_treated > availability_treated_events for "
+            f"{'; '.join(violations)}; check mixed releases/versions, "
+            "de-duplication keys, events outside the availability table, and "
+            "whether treated events and treated units share a statistical unit"
+        )
+        if violations
+        else "canonical-window support never exceeds the availability count",
+    )
     return {
         "checks": checks,
         "ok": all(
@@ -954,8 +1040,8 @@ def collect_event_study_release(
     availability = availability[AVAILABILITY_COLUMNS]
 
     pretrend = _pretrend_rows(matching_root, pooled_root)
-    selection = _selection_table(panel, pretrend)
-    validation = _validate(panel, availability, pretrend, downstream)
+    selection = _selection_table(panel, pretrend, availability, downstream)
+    validation = _validate(panel, availability, pretrend, selection, downstream)
     return {
         "panel": panel,
         "availability": availability,
@@ -1178,8 +1264,11 @@ def _release_readme() -> str:
             "  warnings (`insufficient_clusters`).",
             "- `pretrend_summary.csv`: joint pre-trend tests (Matching Wald by grid and",
             "  city cluster; pooled GSC/MC cluster-mean tests).",
-            "- `family_selection.csv` / `family_selection.md`: analysis-stage selection",
-            "  record; downstream causal supervision uses VIIRS and POI.",
+            "- `family_selection.csv` / `family_selection.md`: two-stage sample counts",
+            "  (`availability_treated_events` vs `event_study_max_n_treated`, with",
+            "  `n_treated_gap` and `coverage`), signal stability, pre-trends and the",
+            "  downstream selection record; downstream causal supervision uses VIIRS",
+            "  and POI.",
             "- `manifest.json`: windows, methods, input/output hashes, row counts,",
             "  downstream selection and caveats.",
             "- `validation.json`: schema and window checks (errors block a clean run).",

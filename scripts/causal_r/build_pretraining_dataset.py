@@ -35,11 +35,20 @@ def main() -> int:
         "or cross_city (extension-only view).",
     )
     parser.add_argument(
+        "--families",
+        help="Optional comma-separated outcome families to export (default: all).",
+    )
+    parser.add_argument(
         "--output-root",
         type=Path,
         default=MODEL_INPUTS_DIR,
     )
     args = parser.parse_args()
+    families = None
+    if args.families:
+        families = tuple(
+            part.strip() for part in args.families.split(",") if part.strip()
+        )
     destination = publish_pretraining_dataset(
         args.response_release,
         TREATMENT_UNIT_LIST,
@@ -51,6 +60,7 @@ def main() -> int:
         streetview_index=args.streetview_index,
         strict_production=not args.allow_partial,
         scope_view=args.scope_view,
+        families=families,
     )
     print(f"Published pretraining dataset at {destination}")
     return 0

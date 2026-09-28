@@ -10,9 +10,11 @@ import pytest
 from urban_intervention.causal.pretraining_dataset import (
     IDENTITY_COLUMNS,
     _best_quality_grade,
+    _response_weights,
     build_pretreatment_features,
     deterministic_city_splits,
     publish_pretraining_dataset,
+    response_label_weights,
     validate_response_treatment_binding,
 )
 from urban_intervention.causal.response_artifact import sha256_file
@@ -295,4 +297,106 @@ def test_treatment_binding_rejects_missing_production_hash_and_identity_drift(
     with pytest.raises(ValueError, match="city_key disagrees"):
         validate_response_treatment_binding(
             manifest, drifted, treatments, treatment_path, strict_production=False
+        )
+
+
+def test_response_weights_reflect_grade_and_pre_trend_diagnostics() -> None:
+    targets = pd.DataFrame(
+        {
+            "treatment_order": [1, 1, 2, 2, 3, 4],
+            "label_available": [True] * 6,
+            "label_grade": [
+                "matched_same_city_pass",
+                "mc_same_city_pass",
+                "gsc_same_city_pass",
+                "gsc_same_city_pass",
+                "mc_same_city_minimal_pre_support",
+                "matched_cross_city_pass",
+            ],
+            "pretrend_slope_p_value": [None, 0.03, 0.07, 0.20, 0.50, 0.12],
+            "pre_observed_periods": [None, 5, 1, 3, 1, 4],
+        }
+    )
+    per_label = response_label_weights(targets)
+    weights = _response_weights(targets).set_index("treatment_order")["response_weight"]
+
+    # Matching labels keep full weight when the diagnostic columns are absent.
+    assert per_label.loc[0, "response_weight"] == pytest.approx(1.0)
+    # An available MC label with p < 0.05 is halved.
+    assert per_label.loc[1, "response_weight"] == pytest.approx(0.4)
+    # Task weight is the conservative minimum across available labels.
+    assert weights.loc[1] == pytest.approx(0.4)
+    # GSC with p in [0.05, 0.10) and a single anchor: 0.9 * 0.75 * 0.75.
+    assert weights.loc[2] == pytest.approx(0.9 * 0.75 * 0.75)
+    # Minimal-support MC with a single anchor: 0.5 * 0.75.
+    assert weights.loc[3] == pytest.approx(0.5 * 0.75)
+    # Cross-city matched labels keep the 0.8 base weight.
+    assert weights.loc[4] == pytest.approx(0.8)
+
+
+def test_pretraining_release_family_filter_and_response_weights(tmp_path: Path) -> None:
+    treatments = _treatments()
+    _write_sources(tmp_path, treatments)
+    treatment_path = tmp_path / "treatments.parquet"
+    treatments.to_parquet(treatment_path, index=False)
+    response_release = tmp_path / "response"
+    response_release.mkdir()
+    frames = []
+    for family, outcome in (("population", "population_log"), ("viirs", "viirs_avg_asinh")):
+        frames.append(
+            pd.DataFrame(
+                {
+                    **{column: treatments[column] for column in IDENTITY_COLUMNS},
+                    "outcome_family": family,
+                    "outcome": outcome,
+                    "event_time": [1, 1, 1],
+                    "specification_id": "main_a6_r1km",
+                    "training_mask": True,
+                    "quality_grade": "matched_same_city_pass",
+                    "pretrend_slope_p_value": 0.50,
+                    "pre_observed_periods": 4,
+                }
+            )
+        )
+    response = pd.concat(frames, ignore_index=True)
+    response_path = response_release / "response_artifact.parquet"
+    response.to_parquet(response_path, index=False)
+    (response_release / "manifest.json").write_text(
+        json.dumps(
+            {
+                "strict_production": False,
+                "artifact": {"sha256": sha256_file(response_path)},
+                "source_files": {"treatments": {"sha256": sha256_file(treatment_path)}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    output = publish_pretraining_dataset(
+        response_release,
+        treatment_path,
+        tmp_path,
+        tmp_path / "model_inputs",
+        dataset_id="viirs_only",
+        min_modalities=2,
+        strict_production=False,
+        families=("viirs",),
+    )
+    targets = pd.read_parquet(output / "response_targets.parquet")
+    index = pd.read_parquet(output / "sample_index.parquet")
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    assert set(targets["outcome_family"]) == {"viirs"}
+    assert manifest["families"] == ["viirs"]
+    assert index["response_weight"].eq(1.0).all()
+    assert manifest["response_weight"]["mean"] == pytest.approx(1.0)
+
+    with pytest.raises(ValueError, match="unknown outcome families"):
+        publish_pretraining_dataset(
+            response_release,
+            treatment_path,
+            tmp_path,
+            tmp_path / "model_inputs",
+            dataset_id="must_fail",
+            strict_production=False,
+            families=("unknown",),
         )

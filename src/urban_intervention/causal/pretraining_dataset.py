@@ -419,6 +419,55 @@ def _best_quality_grade(targets: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+KNOWN_FAMILIES = ("housing", "viirs", "poi", "population")
+
+RESPONSE_WEIGHT_BY_GRADE = {
+    "matched_same_city_pass": 1.0,
+    "gsc_same_city_pass": 0.9,
+    "mc_same_city_pass": 0.8,
+    "mc_same_city_minimal_pre_support": 0.5,
+    "matched_cross_city_pass": 0.8,
+    "gsc_cross_city_pass": 0.7,
+    "mc_cross_city_pass": 0.6,
+    "mc_cross_city_minimal_pre_support": 0.4,
+}
+
+
+def response_label_weights(targets: pd.DataFrame) -> pd.DataFrame:
+    """Attach a training weight to every label row.
+
+    The base weight ranks the label channel by grade; per-label pre-trend
+    diagnostics then downgrade weak tasks: a slope p-value below 0.05 halves
+    the weight, 0.05-0.10 multiplies it by 0.75, and a single pre-treatment
+    anchor multiplies it by 0.75.  Unavailable labels receive weight zero.
+    Importers should take the per-treatment minimum across available labels.
+    """
+    frame = targets.copy()
+    grade_column = "label_grade" if "label_grade" in frame.columns else "quality_grade"
+    weights = frame[grade_column].astype(str).map(RESPONSE_WEIGHT_BY_GRADE).fillna(0.0)
+    if "pretrend_slope_p_value" in frame.columns:
+        slope_p = pd.to_numeric(frame["pretrend_slope_p_value"], errors="coerce")
+        weights = weights.where(~slope_p.lt(0.05).fillna(False), weights * 0.5)
+        weights = weights.where(
+            ~(slope_p.ge(0.05) & slope_p.lt(0.10)).fillna(False), weights * 0.75
+        )
+    if "pre_observed_periods" in frame.columns:
+        anchors = pd.to_numeric(frame["pre_observed_periods"], errors="coerce")
+        weights = weights.where(~anchors.eq(1).fillna(False), weights * 0.75)
+    if "label_available" in frame.columns:
+        weights = weights.where(frame["label_available"].fillna(False), 0.0)
+    frame["response_weight"] = weights.astype(float)
+    return frame
+
+
+def _response_weights(targets: pd.DataFrame) -> pd.DataFrame:
+    """Return one conservative response weight per treatment."""
+    weighted = response_label_weights(targets)
+    if "label_available" in weighted.columns:
+        weighted = weighted.loc[weighted["label_available"].fillna(False)]
+    return weighted.groupby("treatment_order", as_index=False)["response_weight"].min()
+
+
 def publish_pretraining_dataset(
     response_release: Path,
     treatments_path: Path,
@@ -430,6 +479,7 @@ def publish_pretraining_dataset(
     streetview_index: Path | None = None,
     strict_production: bool = True,
     scope_view: str = "same_city",
+    families: tuple[str, ...] | None = None,
 ) -> Path:
     response_manifest_path = response_release / "manifest.json"
     response_path = response_release / "response_artifact.parquet"
@@ -452,6 +502,19 @@ def publish_pretraining_dataset(
     state = git_state(project_root)
     if strict_production:
         require_reproducible_code_state(state)
+    if families is not None:
+        selected = tuple(dict.fromkeys(str(family) for family in families))
+        unknown = sorted(set(selected) - set(KNOWN_FAMILIES))
+        if unknown:
+            raise ValueError(f"unknown outcome families: {unknown}")
+        if not selected:
+            raise ValueError("--families must select at least one outcome family")
+        targets = targets.loc[targets["outcome_family"].astype(str).isin(selected)].copy()
+        if targets.empty:
+            raise ValueError(
+                f"response artifact has no rows for families: {list(selected)}"
+            )
+    targets = response_label_weights(targets)
     features, source_paths = build_pretreatment_features(
         treatments, project_root, strict_sources=strict_production
     )
@@ -491,15 +554,20 @@ def publish_pretraining_dataset(
         training_mask=("training_mask", "max"),
         final_training_mask=("final_training_mask", "max"),
     )
+    unit_weights = _response_weights(targets)
     best_grade = _best_quality_grade(targets)
     sample_index = (
         features[["treatment_order", "split", "feature_training_mask"]]
         .merge(unit_level, on="treatment_order", how="left")
+        .merge(unit_weights, on="treatment_order", how="left")
         .merge(best_grade, on="treatment_order", how="left")
     )
     sample_index["training_mask"] = sample_index["training_mask"].fillna(False)
     sample_index["final_training_mask"] = sample_index["final_training_mask"].fillna(False)
     sample_index["quality_grade"] = sample_index["quality_grade"].fillna("pending")
+    sample_index["response_weight"] = (
+        pd.to_numeric(sample_index["response_weight"], errors="coerce").fillna(0.0)
+    )
 
     dataset_id = dataset_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     destination = output_root / dataset_id
@@ -534,6 +602,15 @@ def publish_pretraining_dataset(
             "split_seed": split_seed,
             "splits": split_manifest,
             "min_modalities": int(min_modalities),
+            "families": list(families) if families is not None else None,
+            "response_weight": {
+                "definition": (
+                    "per-treatment minimum of per-label weights derived from label_grade, "
+                    "pre-trend slope p-value and pre-treatment anchor count"
+                ),
+                "mean": float(sample_index["response_weight"].mean()),
+                "positive": int((sample_index["response_weight"] > 0).sum()),
+            },
             "rows": {
                 "unit_features": len(features),
                 "response_targets": len(targets),

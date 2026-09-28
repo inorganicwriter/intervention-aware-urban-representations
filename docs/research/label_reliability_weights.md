@@ -126,7 +126,7 @@ Per-treatment: `sample_index.parquet:task_sampling_weight` is an optional
 aggregate for sampling only.  Release manifest: `response_weight` block with
 the calibration version, parameters and eligible-label statistics.
 
-## Training integration (Rev3.4)
+## Training integration
 
 The representation trainer consumes the per-label `response_weight` end to
 end: `GridSample.response_weight` (27-dimensional, zero for ineligible or

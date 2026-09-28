@@ -22,8 +22,8 @@ blocker。详见 `docs/research/label_reliability_weights.md`。
 
 ## 2. 本地闭环状态
 
-- [x] Rev3.4 逐标签权重训练接入（pairwise `sqrt(w_i w_j)`、逐维 prediction
-  权重、queue 携带权重；634 tests 通过）。
+- [x] 逐标签权重训练接入（pairwise `sqrt(w_i w_j)`、逐维 prediction
+  权重、queue 携带权重；637 tests 通过）。
 - [x] 四族 ES 统一导出器与单元测试
   （`scripts/causal_python/export_event_study_final.py`）。
 - [x] 训练显存/耗时本地 smoke（真实 forward + backward + optimizer +

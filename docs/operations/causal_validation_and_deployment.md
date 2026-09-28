@@ -226,4 +226,20 @@ python -c "import pandas as pd; p='outputs/figures/causal_balance/balance_smd.cs
 
 不要因事件研究图不理想而事后修改窗口、抽样或门禁。任何敏感性规格必须使用独立输出目录，并与主规格并列报告。
 
-本次 `t=0` 修复改变了资格绑定源码，必须重新生成三方法 qualification receipt。Phase 1 的实际匹配特征和 6 个月设计缓冲没有改变；但严格代码指纹会把旧 durable control records 标记为 stale，因此服务器覆盖新代码后应使用 `--repair-stale-controls` 复核/重建 Phase 1 记录，再启动新的 Phase 2。
+（历史记录）本次 `t=0` 修复曾改变资格绑定源码，当时要求重新生成三方法
+qualification receipt；该问题最终以 attestation 形式的 qualification drift
+waiver 与 control-design drift waiver 解决，生产未重跑 parity。Phase 1 的
+实际匹配特征和 6 个月设计缓冲没有改变，`--repair-stale-controls` 复核后
+Phase 2 已完成并发布严格 release（见
+[`current_project_status.md`](current_project_status.md) 的资格章节）。
+
+## 12. 四族 event-study 最终封版（当前分析阶段）
+
+Phase 1/Phase 2 已在服务器完成，严格 release
+`data/active/causal/releases/2026-09-23-production` 已发布（含两个 drift
+waiver）。分析阶段最后一步是四族统一封版：按规范窗口重跑
+`run_all_method_event_study.py`，再用 `export_event_study_final.py` 生成
+`mit_event_study_final.zip`。完整命令、下载清单与验收门槛见
+[`event_study_final_runbook.md`](event_study_final_runbook.md)；服务器训练
+前置检查与 checklist 见
+[`training_release_checklist.md`](training_release_checklist.md)。

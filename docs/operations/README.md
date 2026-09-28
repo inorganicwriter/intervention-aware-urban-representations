@@ -7,6 +7,8 @@
 - [`causal_validation_and_deployment.md`](causal_validation_and_deployment.md)：因果代码包覆盖、资格门禁、Phase 1–3、发布、事件研究和论证复核的可复制命令清单。
 - [`server_runtime_profile.md`](server_runtime_profile.md)：生产服务器资源、容器配额、NFS 配置与并发测试基线。
 - [`current_project_status.md`](current_project_status.md)：固定研究资产、生产入口、队列状态和待执行任务。
+- [`event_study_final_runbook.md`](event_study_final_runbook.md)：四族 event-study 封版流程（服务器重跑、下载、导出、验收门槛）。
+- [`training_release_checklist.md`](training_release_checklist.md)：本地闭环顺序、Historical/W0/W-design 命名约定与服务器训练 checklist（服务器暂缓）。
 - [`station_data.md`](station_data.md)：站点人工决议及三个可追溯产品。
 - [`housing_price_collection.md`](housing_price_collection.md)：房价采集、开放数据导入与验收。
 - [`viirs_monthly.md`](viirs_monthly.md)：月度 VIIRS 缓存和网格聚合。

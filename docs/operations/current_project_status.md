@@ -29,7 +29,9 @@ isolated working copy and records the hashes of the frozen inputs.
 The local queue snapshot below is the 2026-08-30 baseline. The server working
 copy completed Phase 1 on 2026-09-01 with 3,032 `matched` and 2,016
 `gsc_pending` rows (see [`server_runtime_profile.md`](server_runtime_profile.md));
-do not infer production progress from the local frozen queues.
+do not infer production progress from the local frozen queues.  Phase 2
+completed on 2026-09-23 and the strict causal release was published from the
+server copy; see the current-phase section below.
 
 ## Data products
 
@@ -103,26 +105,36 @@ stable import and script paths may remain as delegation-only compatibility facad
 | `outcome_family_work_queue.csv` | 20,192 | 20,192 `pending` |
 | `counterfactual_work_queue.csv` | 5,048 | 5,048 `pending` |
 
-The server working copy is Phase 1-complete (3,032 `matched` / 2,016
-`gsc_pending`, all 5,048 rows terminal) and is the state to resume from.
+The server working copy completed Phase 2 on 2026-09-23 (all 20,192
+family-level tasks terminal; terminal queue census: 9,162 `skipped`, 7,553
+`matched_labelled`, 2,322 `gsc_labelled`, 1,155 `mc_labelled`).  Before
+publication, 226 MC tasks without a pre-treatment anchor were demoted to
+`skipped` (housing 2 / POI 131 / population 93; audit JSON in
+`outputs/causal_labels/qc/`), and the strict release
+`data/active/causal/releases/2026-09-23-production` (136,296 rows) was published
+with attested control-design and qualification drift waivers.
 
 Queue CSV files are single-writer resources. Parallel execution must use the
 provided shard orchestrator (or the round-pool coordinator) rather than
 multiple independent writers.
 
-## Work required before formal production
+## Current phase (analysis closure, 2026-09)
 
-1. Confirm the environment-bound qualification receipt. If the
-   qualification-bound GPU estimator sources still match the signed revision
-   and the stored shadow manifests pass, re-auditing the existing root
-   (`audit_formal_qualification.py`) is enough; re-run the three Matching,
-   three GSC and three MC parity tasks only when a bound source changed.
-2. Repair any stale Phase 1 control records in the server working copy with
-   `--repair-stale-controls`, then run the server dry-run and bounded test.
-3. Run the 5,048-grid Phase 2 label queue (20,192 family-level tasks).
-4. Aggregate Matching, GSC and MC event studies and review pre-trend metadata.
-5. Publish the validated Response Artifact and pretraining dataset.
-6. Train and evaluate the representation model on the formal release.
+Phase 1 and Phase 2 are complete and the strict causal release is published
+(`data/active/causal/releases/2026-09-23-production`, 136,296 rows, server
+working copy).  The remaining work is the analysis-stage closure, then
+training:
+
+1. Four-family event-study final release
+   ([`event_study_final_runbook.md`](event_study_final_runbook.md));
+2. VIIRS+POI pretraining dataset build with design-only weights
+   (`build_pretraining_dataset.py --families viirs,poi --weight-alpha 0`);
+3. per-label weight verification and the `training_ready` freeze
+   ([`training_release_checklist.md`](training_release_checklist.md));
+4. server training (W0 / W-design / W-full) after the local freeze.
+
+Server deployment does not start before the local release is frozen; the
+checklist is kept in `training_release_checklist.md`.
 
 The code checks are in place: all queue entry points default to `python_gpu`,
 startup prints the selected backend, and Response Artifact publication validates

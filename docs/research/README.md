@@ -8,6 +8,7 @@ prototype notes are removed after their durable content is merged below.
 - [`econometric_methods.md`](econometric_methods.md): econometric objects, identification assumptions, estimators, inference, parallel-trend tests, robustness and reporting standards.
 - [`counterfactual_response_label_design.md`](counterfactual_response_label_design.md): complete design for the 5,048 treated grids, pre-only matching, GSC fallback, response labels, quality gates, and production order.
 - [`identification_and_diagnostics.md`](identification_and_diagnostics.md): executable event-study and pooled-path diagnostics, output files and interpretation flags.
+- [`label_reliability_weights.md`](label_reliability_weights.md): Rev3 per-label reliability weights (eligibility, ordinal design score, tempered precision), stored fields, training integration and version naming.
 - [`matching_and_gsc_methodology.md`](matching_and_gsc_methodology.md): matching and GSC algorithm details, literature mapping, and differences from original papers.
 - [`../architecture/research_architecture.md`](../architecture/research_architecture.md): concise relationship between causal-label construction and representation learning.
 - [`decisions/`](decisions/): frozen research-design decisions that protect the estimand and implementation boundary.
@@ -16,6 +17,7 @@ prototype notes are removed after their durable content is merged below.
 
 - [`project_abstract.md`](project_abstract.md): project title and abstract.
 - [`related_work_literature.md`](related_work_literature.md): literature review.
+- [`manuscript_draft_intro_related_work_v0.md`](manuscript_draft_intro_related_work_v0.md): paper Introduction and Related Work draft (v0), to be extended after the response release is frozen.
 - [`robustness_plan.md`](robustness_plan.md): robustness specifications and reporting requirements.
 
 Dataset-specific documentation belongs in [`../data/`](../data/) and

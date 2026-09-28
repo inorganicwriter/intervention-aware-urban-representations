@@ -74,3 +74,13 @@ def test_absorption_requires_a_relative_tolerance(tolerance: float) -> None:
             np.array([0, 1, 0, 1]),
             tolerance_relative=tolerance,
         )
+
+
+def test_absorption_handles_empty_array() -> None:
+    values = np.zeros((0, 2))
+    residual, iterations = absorb_two_way_fixed_effects(
+        values, np.array([]), np.array([])
+    )
+    assert residual.shape == (0, 2)
+    assert iterations == 0
+

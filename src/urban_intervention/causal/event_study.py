@@ -204,6 +204,8 @@ def absorb_two_way_fixed_effects(
         raise ValueError("tolerance_relative must be in (0, 1)")
     if max_iterations < 1:
         raise ValueError("max_iterations must be positive")
+    if len(residual) == 0:
+        return residual, 0
     threshold = tolerance_relative * max(float(np.max(np.abs(residual))), 1.0)
     _, unit_inverse = np.unique(unit, return_inverse=True)
     _, period_inverse = np.unique(period, return_inverse=True)

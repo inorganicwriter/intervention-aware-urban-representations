@@ -195,10 +195,16 @@ conda run -n mit python scripts/causal_r/run_parallel_production.py \
 ### 7.4 发布标签与训练前数据（全部任务终态后）
 
 ```bash
-conda run -n mit python scripts/causal_r/build_response_artifact.py --release-id production_$(date +%Y%m%d)
+conda run -n mit python scripts/causal_r/build_response_artifact.py --release-id production
 conda run -n mit python scripts/causal_r/build_pretraining_dataset.py \
-  --response-release data/active/causal/releases/production_$(date +%Y%m%d) --dataset-id production_$(date +%Y%m%d)
+  --response-release data/active/causal/releases/production \
+  --dataset-id viirs-poi-design --families viirs,poi --weight-alpha 0
 ```
+
+封版路径固定为 `data/active/causal/releases/production`，不要在目录名里加日期。
+若该目录已被上一版占用，先把旧目录移入 `data/active/causal/releases/archive/`
+（归档名保留其原始 `release_id`），再把新 release 提拔为 `production`。
+内部 `release_id` 是发布时的不可变溯源标识，不随路径别名改变。
 
 `--allow-partial` 仅限有界测试和单元测试，产物带非生产标记，进入正式训练前会被排除。
 
@@ -206,10 +212,10 @@ conda run -n mit python scripts/causal_r/build_pretraining_dataset.py \
 
 ```bash
 conda run -n mit urban-train-representation \
-  data/active/model_inputs/production_$(date +%Y%m%d) \
-  --output outputs/representation/production_$(date +%Y%m%d) \
+  data/model_inputs/viirs-poi-design \
+  --output outputs/representation/viirs-poi-design \
   --epochs 100 --device cuda \
-  2>&1 | tee outputs/representation/production_$(date +%Y%m%d).log
+  2>&1 | tee outputs/representation/viirs-poi-design.log
 ```
 
 每轮输出 `Epoch x/100 | train/val loss | nn_corr@5 | lr`；终局产物

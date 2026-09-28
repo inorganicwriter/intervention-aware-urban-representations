@@ -61,13 +61,15 @@ blocker。详见 `docs/research/label_reliability_weights.md`。
 
    ```bash
    python scripts/causal_r/build_pretraining_dataset.py \
-       --response-release data/active/causal/releases/2026-09-23-production \
-       --dataset-id 2026-09-25-viirs-poi-design \
+       --response-release data/active/causal/releases/production \
+       --dataset-id viirs-poi-design \
        --families viirs,poi \
        --weight-alpha 0
    ```
 
-   W-full 消融版本使用同一命令加 `--weight-alpha 0.5`、不同 dataset-id。
+   W-full 消融版本使用同一命令加 `--weight-alpha 0.5`、dataset-id 用
+   `viirs-poi-full`。封版路径不带日期：release 固定为
+   `data/active/causal/releases/production`，数据集 id 用内容命名。
 
 5. **权重分布核验清单**（逐条贴回结果）：
    - `response_weight` 在 `(method, family)` 内 eligible 均值 = 1；

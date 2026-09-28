@@ -9,7 +9,7 @@
 ```bash
 cd /home/nas/lsr/MIT_summer
 python scripts/causal_python/run_all_method_event_study.py \
-    --output-directory outputs/event_study_python_final \
+    --output-directory outputs/event_study_suite \
     --families housing,viirs,poi,population \
     --matching-window-preset canonical
 ```
@@ -19,7 +19,7 @@ python scripts/causal_python/run_all_method_event_study.py \
   `--matching-task-root`；不要混用不同隔离目录。
 - 窗口为预注册规范：月度（housing/viirs）±24，年度（poi/population）
   `[-6, +3]`，reference `-1`。
-- 完成后检查 `outputs/event_study_python_final/suite_status.csv` 全部
+- 完成后检查 `outputs/event_study_suite/suite_status.csv` 全部
   `completed`，以及 `gsc_mc_paths/event_study_series.csv` 同时包含
   `same_city` 与 `all_city_standardized` 行。
 

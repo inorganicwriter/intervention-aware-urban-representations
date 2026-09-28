@@ -265,6 +265,7 @@ datasets:
   causal_response_artifact_v1:
     layer: causal_release
     path: data/active/causal/releases/{release_id}/response_artifact.parquet
+    active_release: data/active/causal/releases/production
     primary_key: [treatment_order, outcome_family, outcome, event_time, specification_id]
     expected_rows_per_treatment: 27
     production_contract:
@@ -274,7 +275,7 @@ datasets:
       source_hashes_required: true
       partial_release_for_training: false
     publisher: scripts/causal_r/build_response_artifact.py
-    status: code_complete_awaiting_production_run
+    status: production_release_published
   intervention_pretraining_dataset_v1:
     layer: model_input_release
     path: data/model_inputs/{dataset_id}

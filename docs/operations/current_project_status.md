@@ -111,7 +111,7 @@ family-level tasks terminal; terminal queue census: 9,162 `skipped`, 7,553
 publication, 226 MC tasks without a pre-treatment anchor were demoted to
 `skipped` (housing 2 / POI 131 / population 93; audit JSON in
 `outputs/causal_labels/qc/`), and the strict release
-`data/active/causal/releases/2026-09-23-production` (136,296 rows) was published
+`data/active/causal/releases/production` (136,296 rows) was published
 with attested control-design and qualification drift waivers.
 
 Queue CSV files are single-writer resources. Parallel execution must use the
@@ -121,7 +121,7 @@ multiple independent writers.
 ## Current phase (analysis closure, 2026-09)
 
 Phase 1 and Phase 2 are complete and the strict causal release is published
-(`data/active/causal/releases/2026-09-23-production`, 136,296 rows, server
+(`data/active/causal/releases/production`, 136,296 rows, server
 working copy).  The remaining work is the analysis-stage closure, then
 training:
 

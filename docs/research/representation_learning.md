@@ -84,15 +84,15 @@
 
 ```powershell
 conda run -n mit python scripts/causal_r/build_pretraining_dataset.py `
-  --response-release data/active/causal/releases/production_YYYYMMDD `
-  --dataset-id production_YYYYMMDD
-conda run -n mit urban-train-representation data/model_inputs/production_YYYYMMDD `
+  --response-release data/active/causal/releases/production `
+  --dataset-id viirs-poi-design --families viirs,poi --weight-alpha 0
+conda run -n mit urban-train-representation data/model_inputs/viirs-poi-design `
   --output outputs/representation/main --epochs 100 --use-images --seeds 1 2 3
-conda run -n mit urban-run-ablation data/model_inputs/production_YYYYMMDD --specs specs.json
+conda run -n mit urban-run-ablation data/model_inputs/viirs-poi-design --specs specs.json
 conda run -n mit urban-build-model-card outputs/representation/main
 conda run -n mit urban-export-embeddings outputs/representation/main/best_model.pt `
-  data/model_inputs/production_YYYYMMDD --output outputs/representation/embeddings.parquet
-conda run -n mit urban-run-ablation data/model_inputs/production_YYYYMMDD `
+  data/model_inputs/viirs-poi-design --output outputs/representation/embeddings.parquet
+conda run -n mit urban-run-ablation data/model_inputs/viirs-poi-design `
   --specs configs/representation/ablation_specs.example.json
 conda run -n mit urban-summarize-runs outputs/representation/main `
   outputs/representation/seed_1 outputs/representation/seed_2 --output outputs/representation/summary

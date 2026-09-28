@@ -236,7 +236,7 @@ Phase 2 已完成并发布严格 release（见
 ## 12. 四族 event-study 最终封版（当前分析阶段）
 
 Phase 1/Phase 2 已在服务器完成，严格 release
-`data/active/causal/releases/2026-09-23-production` 已发布（含两个 drift
+`data/active/causal/releases/production` 已发布（含两个 drift
 waiver）。分析阶段最后一步是四族统一封版：按规范窗口重跑
 `run_all_method_event_study.py`，再用 `export_event_study_final.py` 生成
 `mit_event_study_final.zip`。完整命令、下载清单与验收门槛见

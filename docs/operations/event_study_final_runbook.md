@@ -80,3 +80,34 @@ python scripts/causal_python/export_event_study_final.py `
 
 旧的 `mit_event_study_results/` 与 `.zip` 已清理；后续引用只使用
 `mit_event_study_final.zip`。
+
+## 6. 附：队列状态被代码包覆盖时的恢复
+
+症状：`suite_status.csv` 中 `matching_twfe:*` 全部 `no_data`，而
+`gsc_mc_paths` 正常完成（pooled 不读队列，直接读 staging）。
+
+原因：`data/active/causal/*queue*.csv` 是 git 跟踪的冻结基线，`unzip -o`
+覆盖了服务器上的终态队列。标签产物与匹配计算不受影响，只恢复账本：
+
+```bash
+python scripts/analysis/recover_causal_queues.py \
+  --family-queue-backup outputs/causal_labels/qc/outcome_family_work_queue.before_<stamp>.csv \
+  --demotions outputs/causal_labels/qc/mc_insufficient_pre_demotions.csv \
+  --response-release data/active/causal/releases/production \
+  --output-directory outputs/causal_labels/recovered
+```
+
+- family 队列 = qc 降级前备份 + 226 条 MC 降级记录；
+- control 队列 = release 中 matched 标签的 `control_unit_key`；
+- 期望状态计数：skipped 9,162 / matched_labelled 7,553 / gsc_labelled 2,322 /
+  mc_labelled 1,155；`control_missing_matched_orders` 应为 0。
+
+重跑时加：
+
+```
+--matching-family-queue outputs/causal_labels/recovered/outcome_family_work_queue.csv \
+--matching-control-queue outputs/causal_labels/recovered/control_design_queue.csv
+```
+
+生产任务根仍用原来的 `--matching-task-root`（默认
+`outputs/causal_labels/tasks`）；不重算任何匹配。

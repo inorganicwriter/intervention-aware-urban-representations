@@ -50,9 +50,18 @@ blocker。详见 `docs/research/label_reliability_weights.md`。
 
 前置：第 2 节全部完成，且冻结版 zip 的 sha256 已记录。
 
-1. **上传代码**：zip 传到 `/home/lsr/`，在
-   `/home/nas/lsr/MIT_summer` 解压覆盖；确认 `git`（或源码包）与冻结
-   commit 一致。
+1. **上传代码**：zip 传到 `/home/lsr/`，解压时排除状态型队列文件——
+   服务器生产队列状态不能跟着代码包回滚：
+
+   ```bash
+   unzip -o /home/lsr/MIT_summer_code.zip -d /home/nas/lsr/MIT_summer \
+     -x 'data/active/causal/*queue*.csv'
+   ```
+
+   确认源码与冻结 commit 一致。若队列已被覆盖（症状：`matching_twfe:*`
+   全 `no_data`、pooled 正常），按
+   [`event_study_final_runbook.md`](event_study_final_runbook.md) 第 6 节恢复，
+   不重算任何匹配。
 2. **测试**：`python -m pytest tests/unit/test_representation_weighted_response.py
    tests/unit/test_event_study_release.py tests/unit/test_pretraining_dataset.py -q`。
 3. **ES 封版**：按 `event_study_final_runbook.md` 重跑四族并导出

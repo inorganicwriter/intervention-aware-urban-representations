@@ -421,63 +421,125 @@ def _best_quality_grade(targets: pd.DataFrame) -> pd.DataFrame:
 
 KNOWN_FAMILIES = ("housing", "viirs", "poi", "population")
 
+CALIBRATION_VERSION = "rev3-ordinal-2026-09"
+DESIGN_GAMMA = 1.0
+PRECISION_ALPHA = 0.5
+DESIGN_NEUTRAL_PERCENTILE = 0.5
+WEIGHT_WINSOR_UPPER = 0.99
+MIN_DESIGN_STRATUM = 2
+
+
+def _numeric_column(frame: pd.DataFrame, name: str) -> pd.Series:
+    if name in frame.columns:
+        return pd.to_numeric(frame[name], errors="coerce")
+    return pd.Series(np.nan, index=frame.index, dtype=float)
+
 
 def response_label_weights(targets: pd.DataFrame) -> pd.DataFrame:
-    """Attach a parallel-trends similarity weight to every label row.
+    """Attach Rev3 label reliability weights to every label row.
 
-    Similarity uses the pre-treatment window only: matched labels use the
-    control-design holdout gaps ``max(holdout_rms_ratio, holdout_max_ratio)``;
-    GSC/MC labels use ``pre_rmspe`` (both are pre-treatment gap distances).
-    Distances are converted to within-outcome, within-metric percentile ranks
-    so different outcome scales stay comparable: the closest third receives
-    weight 1.0, the middle third 0.7 and the farthest third 0.4.  A significant
-    pre-trend slope caps the weight at 0.4, a single pre-treatment anchor caps
-    it at 0.7, and unavailable or zero-anchor labels receive weight 0.
+    Structure (deliberately ordinal, not a calibrated variance):
+
+        W = A * exp(-gamma * P_design) * (precision)^alpha
+
+    - ``A`` (``eligible``): zero pre-treatment anchors, a violated matched
+      holdout boundary (``max(holdout ratios) > 1``) or unavailable labels get
+      weight 0; every eligibility rule is a methodological boundary, not an
+      arbitrary quality cutoff.
+    - ``P_design`` (``design_unreliability``): within-(method, outcome)
+      percentile of the design diagnostic, 0 = best.  Matched labels use
+      ``max(holdout_rms_ratio, holdout_max_ratio)``; GSC/MC labels use the
+      pre-treatment gap deviation
+      ``sqrt(max(pre_rmspe^2 - pre_mean_effect^2, 0))``.  Small strata fall
+      back to (method, family); missing diagnostics receive the neutral 0.5.
+    - ``precision``: inverse sampling variance ``1/se^2`` winsorized at the
+      1%/99% quantiles and mean-normalized **within method and outcome**;
+      labels without a standard error (matching) receive exactly 1 so that a
+      missing uncertainty estimate never earns a bonus.  ``alpha = 0.5``
+      tempers the multiplier (sensitivity: 0, 0.5, 1).
+    - Final weights are winsorized at the 99th percentile and normalized to
+      mean one within (method, family) among eligible labels.
     """
     frame = targets.copy()
     method = frame.get("method", pd.Series("", index=frame.index)).astype(str)
     matched = method.str.startswith("frozen_matched_change")
+    family = frame["outcome_family"].astype(str)
+    outcome = frame.get("outcome", pd.Series("", index=frame.index)).astype(str)
 
-    distance = pd.Series(np.nan, index=frame.index, dtype=float)
-    if "holdout_rms_ratio" in frame.columns:
-        holdout_rms = pd.to_numeric(frame["holdout_rms_ratio"], errors="coerce")
-        holdout_max = pd.to_numeric(
-            frame.get("holdout_max_ratio", pd.Series(np.nan, index=frame.index)),
-            errors="coerce",
-        )
-        matched_distance = pd.concat([holdout_rms, holdout_max], axis=1).max(axis=1)
-        distance = distance.where(~matched, matched_distance)
-    if "pre_rmspe" in frame.columns:
-        distance = distance.where(
-            matched, pd.to_numeric(frame["pre_rmspe"], errors="coerce")
-        )
+    label_available = (
+        frame.get("label_available", pd.Series(True, index=frame.index))
+        .fillna(False)
+        .astype(bool)
+    )
+    anchors = _numeric_column(frame, "pre_observed_periods")
+    holdout_rms = _numeric_column(frame, "holdout_rms_ratio")
+    holdout_max = _numeric_column(frame, "holdout_max_ratio")
+    matched_holdout = pd.concat([holdout_rms, holdout_max], axis=1).max(axis=1)
 
-    metric_group = np.where(matched, "matched", "model")
-    group = (
-        frame["outcome_family"].astype(str)
-        + "::"
-        + frame["outcome"].astype(str)
-        + "::"
-        + pd.Series(metric_group, index=frame.index)
+    eligible = label_available & ~anchors.eq(0).fillna(False)
+    eligible = eligible & ~(matched & matched_holdout.gt(1.0).fillna(False))
+
+    pre_rmspe = _numeric_column(frame, "pre_rmspe")
+    pre_mean = _numeric_column(frame, "pre_mean_effect")
+    gap_deviation = pd.Series(
+        np.sqrt(np.maximum(pre_rmspe**2 - pre_mean**2, 0.0)), index=frame.index
     )
-    closeness = 1.0 - distance.groupby(group).rank(pct=True)
-    weights = pd.Series(
-        np.select([closeness.ge(2 / 3), closeness.ge(1 / 3)], [1.0, 0.7], default=0.4),
-        index=frame.index,
+    design_distance = pd.Series(np.nan, index=frame.index, dtype=float)
+    design_distance = design_distance.where(~matched, matched_holdout)
+    design_distance = design_distance.where(matched, gap_deviation)
+
+    design_stratum = method + "::" + outcome
+    family_stratum = method + "::" + family
+    design_percentile = design_distance.groupby(design_stratum).rank(pct=True)
+    fallback_percentile = design_distance.groupby(family_stratum).rank(pct=True)
+    design_sizes = design_distance.groupby(design_stratum).transform("size")
+    family_sizes = design_distance.groupby(family_stratum).transform("size")
+    design_percentile = design_percentile.where(
+        design_sizes.ge(MIN_DESIGN_STRATUM), fallback_percentile
     )
-    weights = weights.where(distance.notna(), 0.4)
-    if "pretrend_slope_p_value" in frame.columns:
-        slope_p = pd.to_numeric(frame["pretrend_slope_p_value"], errors="coerce")
-        weights = weights.where(
-            ~slope_p.lt(0.05).fillna(False), np.minimum(weights, 0.4)
-        )
-    if "pre_observed_periods" in frame.columns:
-        anchors = pd.to_numeric(frame["pre_observed_periods"], errors="coerce")
-        weights = weights.where(~anchors.eq(1).fillna(False), np.minimum(weights, 0.7))
-        weights = weights.where(~anchors.eq(0).fillna(False), 0.0)
-    if "label_available" in frame.columns:
-        weights = weights.where(frame["label_available"].fillna(False), 0.0)
-    frame["response_weight"] = weights.astype(float)
+    design_percentile = design_percentile.where(
+        family_sizes.ge(MIN_DESIGN_STRATUM), DESIGN_NEUTRAL_PERCENTILE
+    )
+    design_percentile = design_percentile.where(
+        design_distance.notna(), DESIGN_NEUTRAL_PERCENTILE
+    )
+    design_weight = np.exp(-DESIGN_GAMMA * design_percentile)
+
+    standard_error = _numeric_column(frame, "standard_error")
+    inverse_variance = 1.0 / (standard_error**2 + 1e-12)
+    lower = inverse_variance.groupby(design_stratum).transform(
+        lambda values: values.quantile(0.01)
+    )
+    upper = inverse_variance.groupby(design_stratum).transform(
+        lambda values: values.quantile(0.99)
+    )
+    clipped = inverse_variance.clip(lower=lower, upper=upper)
+    mean_precision = clipped.groupby(design_stratum).transform("mean")
+    normalized_precision = clipped / mean_precision
+    use_precision = (
+        standard_error.notna() & ~matched & mean_precision.gt(0).fillna(False)
+    )
+    precision_weight = normalized_precision.pow(PRECISION_ALPHA).where(
+        use_precision, 1.0
+    )
+
+    raw = (design_weight * precision_weight).where(eligible, 0.0)
+    cap = raw.groupby(family_stratum).transform(
+        lambda values: values.quantile(WEIGHT_WINSOR_UPPER)
+    )
+    capped = raw.clip(upper=cap)
+    eligible_mean = capped.where(eligible).groupby(family_stratum).transform("mean")
+    final = capped / eligible_mean.where(eligible_mean.gt(0), 1.0)
+    final = final.fillna(0.0).where(eligible, 0.0)
+
+    frame["eligible"] = eligible.astype(bool)
+    frame["design_unreliability"] = design_percentile.astype(float)
+    frame["design_weight"] = design_weight.astype(float)
+    frame["has_precision_weight"] = use_precision.astype(bool)
+    frame["precision_weight"] = precision_weight.astype(float)
+    frame["weight_raw"] = raw.astype(float)
+    frame["response_weight"] = final.astype(float)
+    frame["calibration_version"] = CALIBRATION_VERSION
     return frame
 
 
@@ -626,10 +688,13 @@ def publish_pretraining_dataset(
             "families": list(families) if families is not None else None,
             "response_weight": {
                 "definition": (
-                    "per-treatment minimum of per-label parallel-trends similarity "
-                    "weights; matched labels rank on control-design holdout gaps, "
-                    "GSC/MC labels rank on pre-treatment RMSPE, within outcome"
+                    "Rev3 ordinal label reliability: eligible * exp(-gamma * design "
+                    "percentile) * tempered precision, winsorized and normalized to "
+                    "mean one within method x family"
                 ),
+                "calibration_version": CALIBRATION_VERSION,
+                "gamma": DESIGN_GAMMA,
+                "alpha": PRECISION_ALPHA,
                 "mean": float(sample_index["response_weight"].mean()),
                 "positive": int((sample_index["response_weight"] > 0).sum()),
             },

@@ -11,7 +11,7 @@
 
 | 名称 | 含义 |
 |---|---|
-| Historical | Rev3 之前的训练器（prediction head 用 `1/SE²` precision） |
+| Historical | 引入标签权重之前的训练器（prediction head 用 `1/SE²` precision） |
 | W0 | 无 design differentiation（`gamma=0, alpha=0`），但遵循新训练框架 |
 | W-design | `alpha=0` design-only，主训练版本 |
 | W-full | `alpha=0.5`，分析/消融 |
@@ -43,7 +43,7 @@ blocker。详见 `docs/research/label_reliability_weights.md`。
   `docs/operations/event_study_final_runbook.md`）
 - [ ] VIIRS+POI label 提取（见第 3 节命令）
 - [ ] 逐标签权重核验（见第 3 节清单）
-- [ ] 冻结 `training_ready` 版本（不再沿用 rev3_4 命名）
+- [ ] 冻结 `training_ready` 发布（名称按内容，不带版本号）
 - [ ] 服务器部署（第 3 节）
 
 ## 3. 服务器 checklist（暂不执行）

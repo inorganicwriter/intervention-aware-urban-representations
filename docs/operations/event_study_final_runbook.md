@@ -47,8 +47,7 @@ python scripts/causal_python/export_event_study_final.py `
 `--matching-root` + `--pooled-root` + `--suite-root`；显式参数优先于
 `--suite-root` 的默认推断。
 
-产物（schema `mit_event_study_final_v2`；字段语义按阶段拆分，不再出现
-含义混用的 `treated_events`）：
+产物（字段语义按阶段拆分，不再出现混用的 `treated_events`）：
 
 | 文件 | 内容 |
 |---|---|

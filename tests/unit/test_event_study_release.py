@@ -280,7 +280,7 @@ def test_export_builds_unified_release(release_inputs, tmp_path: Path) -> None:
     assert (selection["event_study_max_n_treated"] <= selection["availability_treated_events"]).all()
 
     manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["schema"] == "mit_event_study_final_v2"
+    assert manifest["schema"] == "mit_event_study_final"
     assert manifest["windows"]["viirs"]["canonical_pre_min"] == -24
     assert manifest["windows"]["poi"]["canonical_post_max"] == 3
     assert manifest["downstream_training"]["included_families"] == ["viirs", "poi"]

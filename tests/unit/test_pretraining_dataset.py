@@ -417,7 +417,7 @@ def test_response_label_weights_rank_within_strata() -> None:
     for method in weighted["method"].unique():
         group = weighted[(weighted["method"] == method) & weighted["eligible"]]
         assert group["response_weight"].mean() == pytest.approx(1.0)
-    assert set(weighted["calibration_version"]) == {"rev3.3-ordinal-2026-09"}
+    assert set(weighted["calibration_id"]) == {"ordinal-design-precision"}
 
 
 def test_response_weights_average_available_design_components() -> None:
@@ -591,7 +591,7 @@ def test_pretraining_release_family_filter_and_response_weights(tmp_path: Path) 
     assert index["task_sampling_weight"].eq(1.0).all()
     assert manifest["response_weight"]["mean"] == pytest.approx(1.0)
     assert manifest["response_weight"]["eligible_rows"] == 3
-    assert manifest["response_weight"]["calibration_version"] == "rev3.3-ordinal-2026-09"
+    assert manifest["response_weight"]["calibration_id"] == "ordinal-design-precision"
     assert manifest["response_weight"]["gamma"] == pytest.approx(1.0)
     assert manifest["response_weight"]["alpha"] == pytest.approx(0.5)
 

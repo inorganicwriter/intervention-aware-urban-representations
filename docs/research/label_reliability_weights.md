@@ -1,4 +1,4 @@
-# label reliability weights (Rev3.3)
+# label reliability weights
 
 This document defines the label reliability weighting used when building
 pretraining datasets from a published Response Artifact.  The scheme is
@@ -95,7 +95,7 @@ builds the dataset with `alpha = 0`** (design-only weights).  The \(\alpha >
 Default constants live in `pretraining_dataset.py`:
 `DESIGN_GAMMA = 1.0`, `PRECISION_ALPHA = 0.5`,
 `DESIGN_NEUTRAL_PERCENTILE = 0.5`, `WEIGHT_WINSOR_LOWER = 0.01`,
-`WEIGHT_WINSOR_UPPER = 0.99`, `CALIBRATION_VERSION = "rev3.3-ordinal-2026-09"`.
+`WEIGHT_WINSOR_UPPER = 0.99`, `CALIBRATION_ID = "ordinal-design-precision"`.
 `build_pretraining_dataset.py` exposes `--weight-gamma` and `--weight-alpha`
 so the sensitivity variants (`alpha` = 0 / 0.5 / 1, `gamma` = 0 for the W0
 equal-weight baseline) are exact rebuilds of the same pipeline.
@@ -119,12 +119,12 @@ as `standard_error` remain available too):
 | `weight_raw` | before winsorization/normalization |
 | `response_weight` | final weight |
 | `weight_stratum` | normalization stratum `(method, family)` |
-| `calibration_version` | e.g. `rev3.3-ordinal-2026-09` |
+| `calibration_id` | `ordinal-design-precision` |
 
 Per-label: `response_targets.parquet:response_weight` is the training weight.
 Per-treatment: `sample_index.parquet:task_sampling_weight` is an optional
 aggregate for sampling only.  Release manifest: `response_weight` block with
-the calibration version, parameters and eligible-label statistics.
+the calibration id, parameters and eligible-label statistics.
 
 ## Training integration
 
@@ -132,7 +132,7 @@ The representation trainer consumes the per-label `response_weight` end to
 end: `GridSample.response_weight` (27-dimensional, zero for ineligible or
 missing labels) is stacked by `collate_samples`, carried by the labeled queue,
 and passed to `total_loss`.  Without the column the loader falls back to unit
-weights, so pre-Rev3 datasets stay usable.
+weights, so datasets built before the weight columns stay usable.
 
 - Response similarity uses pairwise design weights \(a_{ijk} = m_{ijk}\sqrt{W_{ik} W_{jk}}\):
   means, variances and covariance are weighted per family, and a pair is
@@ -164,7 +164,7 @@ design weighting.  The repository has no "historical baseline" alias for W0.
 
 | Version | Sample weight | Prediction head | Purpose |
 |---|---|---|---|
-| Historical | unit (no weight column) | `1/SE²` precision | pre-Rev3 trainer; naming reference only |
+| Historical | unit (no weight column) | `1/SE²` precision | pre-weight trainer; naming reference only |
 | W0 | unit (`gamma=0, alpha=0`) | design weights (all ones) | no design differentiation, new framework |
 | **W-design** | design-only (`alpha=0`) | design weights | **main training version** |
 | W-full | design × precision (`alpha=0.5`) | design weights | robustness / ablation |

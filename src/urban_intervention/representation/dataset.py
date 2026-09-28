@@ -306,9 +306,10 @@ class RepresentationDataset(torch.utils.data.Dataset[GridSample]):
                                     float(weight_value) if pd.notna(weight_value) else 0.0
                                 )
                             else:
-                                # Datasets built before Rev3 carry no weight
-                                # column; treat every eligible label as equally
-                                # reliable so the loader stays compatible.
+                                # Datasets built before the weight columns
+                                # existed carry no weight column; treat every
+                                # eligible label as equally reliable so the
+                                # loader stays compatible.
                                 response_weight[idx] = 1.0
                     else:
                         logger.warning(

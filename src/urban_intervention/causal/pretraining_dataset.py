@@ -421,7 +421,7 @@ def _best_quality_grade(targets: pd.DataFrame) -> pd.DataFrame:
 
 KNOWN_FAMILIES = ("housing", "viirs", "poi", "population")
 
-CALIBRATION_VERSION = "rev3.3-ordinal-2026-09"
+CALIBRATION_ID = "ordinal-design-precision"
 DESIGN_GAMMA = 1.0
 PRECISION_ALPHA = 0.5
 DESIGN_NEUTRAL_PERCENTILE = 0.5
@@ -479,7 +479,7 @@ def response_label_weights(
     gamma: float = DESIGN_GAMMA,
     alpha: float = PRECISION_ALPHA,
 ) -> pd.DataFrame:
-    """Attach Rev3.3 label reliability weights to every label row.
+    """Attach per-label reliability weights to every label row.
 
     Structure (deliberately ordinal, not a calibrated variance):
 
@@ -603,7 +603,7 @@ def response_label_weights(
     frame["weight_raw"] = raw.astype(float)
     frame["response_weight"] = final.astype(float)
     frame["weight_stratum"] = family_stratum.astype(str)
-    frame["calibration_version"] = CALIBRATION_VERSION
+    frame["calibration_id"] = CALIBRATION_ID
     return frame
 
 
@@ -766,12 +766,12 @@ def publish_pretraining_dataset(
             "families": list(families) if families is not None else None,
             "response_weight": {
                 "definition": (
-                    "Rev3.3 per-label design reliability: eligible * exp(-gamma * D) * "
+                    "Per-label design reliability: eligible * exp(-gamma * D) * "
                     "tempered precision, winsorized and normalized to mean one within "
                     "method x family; training uses per-label response_weight while the "
                     "representation loss keeps response_se for statistical precision"
                 ),
-                "calibration_version": CALIBRATION_VERSION,
+                "calibration_id": CALIBRATION_ID,
                 "gamma": float(weight_gamma),
                 "alpha": float(weight_alpha),
                 "eligible_rows": int(targets["eligible"].sum()),

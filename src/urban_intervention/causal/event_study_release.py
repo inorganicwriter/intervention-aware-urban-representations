@@ -35,7 +35,7 @@ from .event_study import canonical_event_window
 from .gpu.provenance import file_sha256
 
 FAMILIES: tuple[str, ...] = ("housing", "viirs", "poi", "population")
-FINAL_SCHEMA = "mit_event_study_final_v2"
+FINAL_SCHEMA = "mit_event_study_final"
 FREQUENCIES = {
     "housing": "monthly",
     "viirs": "monthly",
@@ -188,7 +188,7 @@ def _numeric_column(frame: pd.DataFrame, name: str) -> pd.Series:
 
 
 def normalize_treated_event_columns(frame: pd.DataFrame) -> pd.DataFrame:
-    """Map legacy ambiguous ``treated_events`` columns to the v2 schema.
+    """Map legacy ambiguous ``treated_events`` columns to the current schema.
 
     Older release tables carried a single ``treated_events`` column with
     different meanings per analysis stage.  Reading such a table maps the

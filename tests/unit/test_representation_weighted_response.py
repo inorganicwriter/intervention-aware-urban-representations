@@ -1,4 +1,4 @@
-"""Tests for per-label design reliability weights in response losses (Rev3.4)."""
+"""Tests for per-label design reliability weights in response losses."""
 
 from __future__ import annotations
 

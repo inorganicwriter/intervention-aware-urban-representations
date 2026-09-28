@@ -249,8 +249,9 @@ def main() -> int:
         )
         return 1
     cross_note = (
-        f"{len(cross_pairs)} cross-city matched pairs are covered by the release "
-        "and are analyzed under the all_city_standardized matching scope"
+        f"{len(cross_pairs)} cross-city matched (order, family) pairs are recorded "
+        "in the release; the same-city event study skips them and they do not "
+        "affect the other families"
     )
     print(cross_note)
     return 0

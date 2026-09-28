@@ -12,14 +12,16 @@ For every label row \(i\):
 
 \[
 W_i = A_i \cdot \exp(-\gamma \, D_i) \cdot
-      \left(\tilde p_i^{SE}\right)^{\alpha}
+      \left(p_i^{SE}\right)^{\alpha}
 \]
 
 where \(D_i\) is the mean of the **available** design-diagnostic percentiles
-(see below), and after winsorization and normalization
+and \(p_i^{SE}\) is the winsorized, mean-normalized precision multiplier (see
+below).  After the final winsorization and normalization within
+`(method, family)` `(m,f)`,
 
 \[
-\mathrm{mean}_{\,i \in \text{eligible} \cap (m,o)} W_i = 1 .
+\mathrm{mean}_{\,i \in \text{eligible} \cap (m,f)} W_i = 1 .
 \]
 
 \(W_i\) is written to `response_weight`; components are written alongside it
@@ -40,38 +42,69 @@ These are identification or design-contract boundaries, not quality cutoffs.
 No other rule may zero a label: poor quality is expressed through lower
 weights, never through silent exclusion.
 
+Missing-value semantics (matching the implementation): a missing
+`label_available` column is treated as available, but an explicit NaN is not;
+`pre_observed_periods` that is NaN or absent is **not** treated as zero
+(unknown anchors do not disqualify); and missing holdout ratios do not
+disqualify either.  Only the two exact conditions in the table zero a label.
+
 ### 2. Design unreliability \(D_i\) (ordinal)
 
 The pre-treatment design diagnostics are computed per method from data already
 present in the Response Artifact:
 
-| Component | Methods | Raw diagnostic |
-|---|---|---|
-| `p_trend` | GSC / MC | pre-treatment gap deviation \(\sqrt{\max(\texttt{pre\_rmspe}^2-\texttt{pre\_mean\_effect}^2,\,0)}\) |
-| `p_holdout` | matched | `max(holdout_rms_ratio, holdout_max_ratio)` |
-| `p_validation` | MC (when stored) | `mc_cv_mspe` (pre-treatment CV MSPE) |
+| Component | Methods | Raw diagnostic \(x_i\) | Source columns |
+|---|---|---|---|
+| `p_trend` | GSC / MC | pre-treatment gap deviation \(\sqrt{\max(\texttt{pre\_rmspe}^2-\texttt{pre\_mean\_effect}^2,\,0)}\) | `pre_rmspe`, `pre_mean_effect` |
+| `p_holdout` | matched | \(\max(\texttt{holdout\_rms\_ratio},\ \texttt{holdout\_max\_ratio})\) | `holdout_rms_ratio`, `holdout_max_ratio` |
+| `p_validation` | MC (when stored) | `mc_cv_mspe` (pre-treatment CV MSPE) | `mc_cv_mspe` |
 
-Each raw diagnostic is converted to an empirical percentile computed on
-**eligible labels only**, pooling upward until a stratum holds at least 30
-labels: `(method, outcome) -> (method, family) -> method -> global` (a global
-fallback below 30 labels uses the neutral 0.5).  \(D_i\) is the **row mean of
-the available percentiles** (components that are not defined for a method are
-simply absent, never imputed); rows without any diagnostic receive the neutral
-percentile `0.5`.  The raw level percentile `p_level` is stored for QC only and
-never enters the weight.  Ineligible labels are excluded from every reference
-distribution (percentiles, precision normalization, winsorization cutoffs and
-normalization means) and only receive \(W = 0\) at the end.
+Each raw diagnostic is converted to an empirical percentile within a reference
+stratum,
+
+\[
+p_i = \frac{\operatorname{rank}_{avg}(x_i)}{n},
+\]
+
+where \(n\) is the number of eligible labels with that diagnostic defined in
+the stratum and tied values share their average rank (the implementation uses
+pandas `rank(pct=True)`).  Reference strata pool upward until a stratum holds
+at least 30 labels: `(method, outcome) -> (method, family) -> method -> global`
+(a global fallback below 30 labels uses the neutral 0.5).  \(D_i\) is the **row
+mean of the available percentiles**,
+
+\[
+D_i = \operatorname{mean}_{c \in \text{available}} p_i^{(c)},
+\]
+
+(components that are not defined for a method are simply absent, never
+imputed); rows without any diagnostic receive the neutral percentile `0.5`.
+The percentile of the pre-treatment fit `pre_rmspe`, stored as `p_level`, is
+for QC only and never enters the weight.  Ineligible labels are excluded from
+every reference distribution (percentiles, precision normalization,
+winsorization cutoffs and normalization means) and only receive \(W = 0\) at
+the end.
 
 \(D_i\) is an **unreliability score**, not an estimated variance.  Calibrating
 it to \(E[(\hat\tau^{pseudo})^2]\) is the W2/W3 roadmap below.
 
 ### 3. Tempered precision
 
-For GSC/MC labels with a standard error, inverse sampling variance
-\(1/SE^2\) is winsorized at the 1%/99% quantiles and normalized to mean one
-within `(method, outcome)` over eligible model labels; the multiplier is
-\((\tilde p^{SE})^{\alpha}\).  Matched labels have no sampling uncertainty and
-receive exactly \(1\), so a missing uncertainty estimate never earns a bonus.
+For GSC/MC labels with a standard error, the inverse sampling variance
+\(q_i = 1/(SE_i^2 + 10^{-12})\) is winsorized and mean-normalized **within
+`(method, outcome)` over eligible model labels**:
+
+\[
+\tilde q_i = \operatorname{clip}\!\left(q_i,\ Q^{(m,o)}_{0.01},\ Q^{(m,o)}_{0.99}\right),
+\qquad
+p_i^{SE} = \frac{\tilde q_i}{\operatorname{mean}_{j}\bigl(\tilde q_j\bigr)},
+\]
+
+and the multiplier is \(\bigl(p_i^{SE}\bigr)^{\alpha}\).  Matched labels and
+model labels without a usable standard error receive exactly \(p_i^{SE} = 1\),
+so a missing uncertainty estimate never earns a bonus.  The reference
+quantiles and the mean are computed on `eligible & not matched & SE present`
+rows only.
 
 Separation of concerns: the representation loss already uses `response_se`
 for pair-level statistical shrinkage (`response_alignment_loss`), so **training
@@ -80,17 +113,37 @@ builds the dataset with `alpha = 0`** (design-only weights).  The \(\alpha >
 
 ### 4. Aggregation and normalization
 
-- raw weight: \(W^{raw}_i = A_i \exp(-\gamma D_i)(\tilde p_i^{SE})^\alpha\);
-- winsorize at the 1%/99% percentiles of the eligible distribution within
-  `(method, family)`; this is a numerical-robustness rule, so a poor-quality
-  label keeps a strictly positive weight �?only eligibility failures are
-  exactly zero;
-- normalize to mean one within `(method, family)` over eligible labels;
-- **training reliability is per label**: the loss sums
-  \(\sum_{i,k} W_{i,k}^{design} L_{i,k}\) over tasks \(i\) and responses \(k\);
-  a task-level aggregate is stored separately as `task_sampling_weight`
-  (minimum over eligible labels) for sampling schemes only and must not be
-  used as a substitute for the per-label reliability weight.
+Raw weight:
+
+\[
+W^{raw}_i = A_i \cdot \exp\bigl(-\gamma D_i\bigr) \cdot \bigl(p_i^{SE}\bigr)^{\alpha}.
+\]
+
+Winsorization is a numerical-robustness rule applied to eligible labels within
+`(method, family)`: values above the 99% quantile are capped and values below
+the 1% quantile are raised to it,
+
+\[
+\tilde W_i = \operatorname{clip}\!\left(W^{raw}_i,\ Q^{(m,f)}_{0.01},\ Q^{(m,f)}_{0.99}\right)
+\quad (A_i = 1),
+\]
+
+so a poor-quality label keeps a strictly positive weight — only eligibility
+failures are exactly zero.  Final normalization to mean one within
+`(method, family)` over eligible labels gives the stored weight
+
+\[
+W_i = A_i \cdot \frac{\tilde W_i}{\operatorname{mean}_{j:\,A_j=1}\bigl(\tilde W_j\bigr)} .
+\]
+
+- **Training reliability is per label**: the loss sums
+  \(\sum_{i,k} W_{i,k} L_{i,k}\) over tasks \(i\) and responses \(k\);
+- a task-level aggregate is stored separately as `task_sampling_weight`,
+  \[
+  \text{task\_sampling\_weight}_t = \min_{i:\, A_i=1,\ \text{task}(i)=t} W_i ,
+  \]
+  for sampling schemes only and must not be used as a substitute for the
+  per-label reliability weight.
 
 Default constants live in `pretraining_dataset.py`:
 `DESIGN_GAMMA = 1.0`, `PRECISION_ALPHA = 0.5`,
@@ -111,12 +164,12 @@ as `standard_error` remain available too):
 | `p_trend` | trend-deviation percentile (GSC/MC) |
 | `p_holdout` | matched holdout percentile |
 | `p_validation` | MC CV-MSPE percentile |
-| `p_level` | pre-treatment level percentile (QC only) |
-| `design_unreliability` | \(D_i\), mean of available component percentiles |
+| `p_level` | percentile of the pre-treatment fit `pre_rmspe` (QC only) |
+| `design_unreliability` | \(D_i\), row mean of available component percentiles (neutral 0.5 when none) |
 | `design_weight` | \(\exp(-\gamma D_i)\) |
-| `has_precision_weight` | label carries a usable SE |
-| `precision_weight` | \((\tilde p^{SE})^\alpha\) or 1 |
-| `weight_raw` | before winsorization/normalization |
+| `has_precision_weight` | label carries a usable SE and uses the model precision |
+| `precision_weight` | \((p^{SE})^\alpha\) or 1 |
+| `weight_raw` | \(W^{raw}\) before winsorization/normalization |
 | `response_weight` | final weight |
 | `weight_stratum` | normalization stratum `(method, family)` |
 | `calibration_id` | `ordinal-design-precision` |

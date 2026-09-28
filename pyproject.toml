@@ -43,6 +43,7 @@ dev = [
   "mypy>=1.8",
   "pytest>=8.0",
   "ruff>=0.4",
+  "types-PyYAML>=6.0",
   "beautifulsoup4>=4.12",
   "earthengine-api>=0.1.400",
   "geopandas>=1.0",

@@ -287,14 +287,14 @@ def event_study_coverage_table(
     support = event_study_support_table(
         matching_results, pooled, donor_scope=donor_scope
     )
-    for family, result in matching_results.items():
-        frame = _matching_frame(result, family=family)
+    for family, matching_result in matching_results.items():
+        frame = _matching_frame(matching_result, family=family)
         counts = (
-            result.coefficients.set_index("event_time")["n_treated"].to_dict()
-            if "n_treated" in result.coefficients
+            matching_result.coefficients.set_index("event_time")["n_treated"].to_dict()
+            if "n_treated" in matching_result.coefficients
             else {}
         )
-        reference = int(result.diagnostics["reference_event_time"])
+        reference = int(matching_result.diagnostics["reference_event_time"])
         for event_time in sorted(set(frame["event_time"].astype(int))):
             rows.append(
                 {
@@ -302,7 +302,7 @@ def event_study_coverage_table(
                     "method": "matching",
                     "event_time": event_time,
                     "treated_grids": int(
-                        counts.get(event_time, result.diagnostics["reference_treated"])
+                        counts.get(event_time, matching_result.diagnostics["reference_treated"])
                         if event_time == reference
                         else counts.get(event_time, 0)
                     ),
@@ -329,8 +329,8 @@ def event_study_coverage_table(
                     "treated_grids": int(count),
                 }
             )
-    result = pd.DataFrame(rows)
-    if result.empty:
+    coverage = pd.DataFrame(rows)
+    if coverage.empty:
         return pd.DataFrame(
             columns=[
                 "outcome_family",
@@ -352,8 +352,8 @@ def event_study_coverage_table(
         upper = family_bounds[f"common_{side}_max"]
         return bool(pd.notna(lower) and pd.notna(upper) and lower <= event_time <= upper)
 
-    result["included_in_comparison_figure"] = result.apply(included, axis=1)
-    return result.sort_values(["outcome_family", "method", "event_time"]).reset_index(
+    coverage["included_in_comparison_figure"] = coverage.apply(included, axis=1)
+    return coverage.sort_values(["outcome_family", "method", "event_time"]).reset_index(
         drop=True
     )
 

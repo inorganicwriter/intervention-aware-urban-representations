@@ -17,7 +17,10 @@ from urban_intervention.causal.diagnostic_figures import (  # noqa: E402
     event_study_support_table,
     write_pooled_outcome_event_studies,
 )
-from urban_intervention.causal.event_study import run_matching_event_study  # noqa: E402
+from urban_intervention.causal.event_study import (  # noqa: E402
+    canonical_event_window,
+    run_matching_event_study,
+)
 from urban_intervention.causal.pooled_event_study import (  # noqa: E402
     DEFAULT_MAIN_SPECIFICATION_FINGERPRINT,
     PooledPathEventStudyResult,
@@ -94,6 +97,15 @@ def main() -> int:
     )
     parser.add_argument("--no-figures", action="store_true")
     parser.add_argument(
+        "--matching-window-preset",
+        choices=("canonical", "full"),
+        default="canonical",
+        help=(
+            "canonical: horizon-aligned pre-registered event windows for the "
+            "Matching components; full: every available period."
+        ),
+    )
+    parser.add_argument(
         "--allow-partial",
         action="store_true",
         help=(
@@ -159,10 +171,16 @@ def main() -> int:
         parser.error(f"unknown families: {sorted(unknown)}")
     for family in families:
         output = args.output_directory / "matching_twfe" / family
+        if args.matching_window_preset == "canonical":
+            min_pre, max_post = canonical_event_window(family)
+        else:
+            min_pre, max_post = None, None
         try:
             result = run_matching_event_study(
                 family,
                 output,
+                min_pre=min_pre,
+                max_post=max_post,
                 pretrend_window=args.latest_pre_periods,
                 observation_window=(1 if family == "viirs" else args.observation_window),
                 treatment_orders=(

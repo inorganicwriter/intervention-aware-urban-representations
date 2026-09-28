@@ -2,7 +2,7 @@
 
 更新：2026-09-04
 适用环境：本地 Windows 工作区与 Linux 生产服务器 `/home/nas/lsr/MIT_summer`
-主规格：Python/GPU；四类 outcome 统一以 `t=-1` 为参考；月度 anticipation=0；`t=0` 为真实开通冲击期；housing 和 VIIRS 均使用逐月 observation window=1；年度 window=1；跨城 donor 上限 5,000。housing/VIIRS 另以 `t=-7`（anticipation=6）做独立稳健性分析。
+主规格：Python/GPU；四类 outcome 统一以 `t=-1` 为参考；月度 anticipation=0；`t=0` 为真实开通冲击期；housing 和 VIIRS 均使用逐月 observation window=1；年度 window=1；跨城 donor 上限 5,000。housing/VIIRS 另以 `t=-7`（anticipation=6）做独立稳健性分析。事件研究主窗口预注册为与标签期限对齐的有界窗口：月度族（housing/VIIRS）`[-24, +24]` 个月，年度族（POI/population）`[-6, +3]` 年；窗口敏感性（月度 ±12/±36、年度 `[-6, +10]`）单独报告，主检验为城市聚类联合检验。
 
 本文是因果流程的单一命令清单。命令均写成单行，不使用反斜杠续行。R 只用于冻结参考和 parity；通过资格后，Phase 1–3 的正式生产只依赖 Python/CUDA。
 

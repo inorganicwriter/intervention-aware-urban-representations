@@ -37,6 +37,29 @@ class EventStudyResult:
     diagnostics: dict[str, int | float | str]
 
 
+CANONICAL_EVENT_WINDOWS: dict[str, tuple[int, int]] = {
+    "viirs": (-24, 24),
+    "housing": (-24, 24),
+    "poi": (-6, 3),
+    "population": (-6, 3),
+}
+
+
+def canonical_event_window(family: str) -> tuple[int, int]:
+    """Return the pre-registered horizon-aligned event window for a family.
+
+    Windows cover the maximum label horizon (+24 months for monthly families,
+    +3 years for annual families) and retain the five clean pre-treatment
+    leads at event times -6..-2.  Wider windows include weakly identified
+    distant periods with different cohort composition and are not the main
+    specification.
+    """
+    try:
+        return CANONICAL_EVENT_WINDOWS[family]
+    except KeyError as exc:
+        raise ValueError(f"unsupported event-study family: {family}") from exc
+
+
 def write_matching_event_study_figure(
     result: EventStudyResult,
     path: Path,

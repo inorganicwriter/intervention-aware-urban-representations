@@ -777,6 +777,8 @@ SE_h = sqrt(within_var_h + between_var_h / N_h)
 8. 用 Sun-Abraham 作为交错处理敏感性；
 9. 将结果与 holdout、placebo、空间半径和 anticipation 敏感性联合归档。
 
+事件窗口规范：Matching 事件研究使用预注册的、与标签期限对齐的有界窗口——月度族（housing、VIIRS）为 `[-24, +24]` 个月，年度族（POI、population）为 `[-6, +3]` 年；窗口下端不超过 `-6` 以保留五个 clean pre lead。窗口敏感性（月度 ±12/±36，年度 `[-6, +10]`）单独报告；不依据前趋势 p 值调整窗口，更宽窗口包含的远端期因 cohort 组成变化与支持衰减不属于主规格。
+
 ### 8.2 GSC 和 MC 的检验步骤
 
 1. 保存每个任务的处理前 observed、counterfactual 和 gap；

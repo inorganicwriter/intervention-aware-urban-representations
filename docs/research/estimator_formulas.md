@@ -14,6 +14,7 @@
 | 动态效应 | \(τ_{ikh}=Y_{ik,G_i+h}(1)-Y_{ik,G_i+h}(0)\) | [1.3](econometric_methods.md#13-动态处理效应) |
 | 响应标签 | \(L_{ikh}=Y_{ik,G_i+h}-\widehat Y_{ik,G_i+h}(0)\) | [1.3](econometric_methods.md#13-动态处理效应) |
 | 队列均值 | \(μ_{kh}=N_{kh}^{-1}\sum_i L_{ikh}\) | [1.4](econometric_methods.md#14-标签和-att-的区别) |
+| 动态 ATT | \(ATT_k(h)=E[Y_{ik,G_i+h}(1)-Y_{ik,G_i+h}(0)\mid T_i=1]\) | [1.4](econometric_methods.md#14-标签和-att-的区别) |
 
 代码入口：[`src/urban_intervention/causal/response_artifact.py`](../../src/urban_intervention/causal/response_artifact.py)。
 
@@ -23,6 +24,7 @@
 |---|---|---|
 | Mahalanobis 距离 | \(d_{ij}=\sqrt{(X_i-X_j)'\widehat\Sigma^{-1}(X_i-X_j)}\) | [4.3](econometric_methods.md#43-mahalanobis-距离) |
 | 条件支持 | \(\min_jX_{jm}\le X_{im}\le\max_jX_{jm}\) | [3.5](econometric_methods.md#35-共同支持和正值概率) |
+| 条件平行趋势 | \(E[ΔY_{i,t}(0)\mid T_i=1,X_i=x]=E[ΔY_{j,t}(0)\mid C_j=1,X_j=x]\) | [3.3](econometric_methods.md#33-匹配路径的条件平行趋势) |
 | 匹配标签 | \(L_{ikh}=(Y_{i,h}-B_i)-(Y_{j(i),h}-B_{j(i)})\) | [4.6](econometric_methods.md#46-匹配标签) |
 | ATT | \(ATT=N_T^{-1}\sum_i[\Delta Y_i-\sum_jw_{ij}\Delta Y_j]\) | [4.7](econometric_methods.md#47-完整-abadie-and-imbens-att) |
 | 偏差修正 ATT | \(ATT_{adj}=N_T^{-1}\sum_i[\Delta Y_i-\Delta Y_{j(i)}+(X_i-X_{j(i)})'\widehat\beta]\) | [4.7](econometric_methods.md#47-完整-abadie-and-imbens-att) |
@@ -59,6 +61,7 @@
 
 | 对象 | 公式 | 详细章节 |
 |---|---|---|
+| 2×2 DID | \(ATT_{DID}=E[ΔY_i\mid T_i=1]-E[ΔY_j\mid C_j=1]\) | [7.1](econometric_methods.md#71-匹配样本上的-twfe) |
 | TWFE 事件研究 | \(Y_{it}=\alpha_i+\gamma_t+\sum_{h\ne h_0}\beta_h[Treated_i\times1(event\_time=h)]+\epsilon_{it}\) | [7.1](econometric_methods.md#71-匹配样本上的-twfe) |
 | 清洁 pre 原假设 | \(H_0:\beta_h=0\) for every \(h\) in the prespecified recent clean-pre window（最近 5 期，最后一期为参考） | [7.3](econometric_methods.md#73-平行趋势联合-wald-检验) |
 | Wald/F 统计量 | \(F=q^{-1}\widehat\beta_{pre}'\widehat V_{pre}^{-1}\widehat\beta_{pre}\) | [7.3](econometric_methods.md#73-平行趋势联合-wald-检验) |

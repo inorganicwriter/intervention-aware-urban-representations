@@ -98,9 +98,12 @@ python scripts/analysis/recover_causal_queues.py \
 ```
 
 - family 队列 = qc 降级前备份 + 226 条 MC 降级记录；
-- control 队列 = release 中 matched 标签的 `control_unit_key`；
+- control 队列 = release 中 same-city matched 标签的 `control_unit_key`；
 - 期望状态计数：skipped 9,162 / matched_labelled 7,553 / gsc_labelled 2,322 /
-  mc_labelled 1,155；`control_missing_matched_orders` 应为 0。
+  mc_labelled 1,155；`matched_pairs_without_matched_label` 应为 0；
+- `matched_orders_without_same_city_control` 大于 0 属正常：这些站点只有
+  跨城 matched 标签，同城队列里其他 family 的标签不受影响，检查按
+  (order, family) 独立判定。
 
 重跑时加：
 

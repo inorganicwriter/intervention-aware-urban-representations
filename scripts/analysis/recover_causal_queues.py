@@ -170,7 +170,14 @@ def main() -> int:
 
     artifact = pd.read_parquet(
         artifact_path,
-        columns=["treatment_order", "method", "donor_scope", "control_unit_key"],
+        columns=[
+            "treatment_order",
+            "outcome_family",
+            "method",
+            "donor_scope",
+            "control_unit_key",
+            "label_available",
+        ],
     )
     control = build_control_queue(artifact)
 
@@ -181,11 +188,36 @@ def main() -> int:
     atomic_write_csv(control, control_path)
 
     counts = queue["status"].value_counts().to_dict()
-    matched_orders = set(
-        queue.loc[queue["status"].eq("matched_labelled"), "treatment_order"].astype(int)
+    matched_mask = artifact["method"].astype(str).str.startswith(MATCHED_PREFIX)
+    available_mask = artifact["label_available"].fillna(False).astype(bool)
+    scope = artifact["donor_scope"].astype(str)
+    orders = artifact["treatment_order"].astype(int).to_numpy()
+    families = artifact["outcome_family"].astype(str).to_numpy()
+    base = (matched_mask & available_mask).to_numpy()
+    same_mask = scope.eq("same_city").to_numpy()
+    cross_mask = scope.eq("all_city_standardized").to_numpy()
+    same_pairs = set(
+        zip(orders[base & same_mask], families[base & same_mask], strict=False)
     )
-    control_orders = set(control["treatment_order"].astype(int))
-    missing = sorted(matched_orders - control_orders)
+    cross_pairs = set(
+        zip(orders[base & cross_mask], families[base & cross_mask], strict=False)
+    )
+
+    queue_matched = queue.loc[
+        queue["status"].eq("matched_labelled"), ["treatment_order", "outcome_family"]
+    ]
+    queue_pairs = set(
+        zip(
+            queue_matched["treatment_order"].astype(int),
+            queue_matched["outcome_family"].astype(str),
+            strict=False,
+        )
+    )
+    covered_pairs = same_pairs | cross_pairs
+    missing_pairs = sorted(queue_pairs - covered_pairs)
+    same_city_orders = {order for order, _ in same_pairs}
+    matched_orders = {order for order, _ in queue_pairs}
+    same_city_missing_orders = sorted(matched_orders - same_city_orders)
     payload = {
         "family_queue_backup": str(backup),
         "demotions_applied": demoted,
@@ -194,9 +226,13 @@ def main() -> int:
             str(key): int(counts.get(key, 0)) == expected
             for key, expected in EXPECTED_STATUS_COUNTS.items()
         },
-        "control_rows": int(len(control)),
-        "control_missing_matched_orders": len(missing),
-        "control_missing_orders_sample": missing[:10],
+        "same_city_control_rows": int(len(control)),
+        "same_city_matched_pairs": len(same_pairs),
+        "cross_city_matched_pairs": len(cross_pairs),
+        "matched_orders_without_same_city_control": len(same_city_missing_orders),
+        "matched_orders_without_same_city_control_sample": same_city_missing_orders[:10],
+        "matched_pairs_without_matched_label": len(missing_pairs),
+        "matched_pairs_without_matched_label_sample": missing_pairs[:10],
         "family_queue": str(family_path),
         "control_queue": str(control_path),
     }
@@ -204,13 +240,19 @@ def main() -> int:
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
-    if missing:
+    if missing_pairs:
         print(
-            f"WARNING: {len(missing)} matched_labelled orders lack a control key "
-            "in the release; inspect before rerunning the event study",
+            f"WARNING: {len(missing_pairs)} matched_labelled (order, family) pairs "
+            "have no matched label in the release under either donor scope; "
+            "inspect before rerunning the event study",
             file=sys.stderr,
         )
         return 1
+    cross_note = (
+        f"{len(cross_pairs)} cross-city matched pairs are covered by the release "
+        "and are analyzed under the all_city_standardized matching scope"
+    )
+    print(cross_note)
     return 0
 
 

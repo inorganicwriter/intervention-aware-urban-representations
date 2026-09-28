@@ -582,10 +582,14 @@ def _response_weights(
     gamma: float = DESIGN_GAMMA,
     alpha: float = PRECISION_ALPHA,
 ) -> pd.DataFrame:
-    """Return one conservative response weight per treatment."""
+    """Return one conservative weight per treatment.
+
+    Only labels that pass the eligibility boundaries contribute; a single
+    ineligible label (for example one outcome without pre-treatment anchors)
+    must not zero the whole treatment.
+    """
     weighted = response_label_weights(targets, gamma=gamma, alpha=alpha)
-    if "label_available" in weighted.columns:
-        weighted = weighted.loc[weighted["label_available"].fillna(False)]
+    weighted = weighted.loc[weighted["eligible"].fillna(False)]
     return weighted.groupby("treatment_order", as_index=False)["response_weight"].min()
 
 

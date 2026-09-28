@@ -412,6 +412,28 @@ def test_response_weights_sensitivity_variants_collapse_to_equal_weights() -> No
     assert eligible["response_weight"].iloc[0] == pytest.approx(1.0)
 
 
+def test_task_weight_ignores_ineligible_labels() -> None:
+    targets = pd.DataFrame(
+        {
+            "treatment_order": [1, 1, 2],
+            "outcome_family": ["poi"] * 3,
+            "outcome": ["poi_count_log"] * 3,
+            "method": ["athey_2021_mc_same_city"] * 3,
+            "label_available": [True, True, True],
+            "pre_rmspe": [0.10, 0.05, 0.05],
+            "pre_mean_effect": [0.0, 0.0, 0.0],
+            "mc_cv_mspe": [0.01, 0.01, 0.01],
+            "standard_error": [0.1, 0.1, 0.1],
+            "pre_observed_periods": [5, 0, 0],
+        }
+    )
+    per_task = _response_weights(targets).set_index("treatment_order")["response_weight"]
+    # One ineligible label must not zero a treatment that keeps a usable label.
+    assert per_task.loc[1] > 0
+    # A treatment whose labels are all ineligible contributes no weight row.
+    assert 2 not in per_task.index
+
+
 def test_response_weights_zero_anchor_and_unavailable_labels() -> None:
     targets = pd.DataFrame(
         {
@@ -434,7 +456,8 @@ def test_response_weights_zero_anchor_and_unavailable_labels() -> None:
     assert not weighted.loc[3, "eligible"]
     assert weighted.loc[3, "response_weight"] == 0.0
     per_task = _response_weights(targets)
-    assert set(per_task["response_weight"]) == {0.0, 1.0}
+    assert set(per_task["treatment_order"]) == {1}
+    assert per_task["response_weight"].iloc[0] == pytest.approx(1.0)
 
 
 def test_pretraining_release_family_filter_and_response_weights(tmp_path: Path) -> None:
@@ -495,6 +518,8 @@ def test_pretraining_release_family_filter_and_response_weights(tmp_path: Path) 
     assert index["response_weight"].eq(1.0).all()
     assert manifest["response_weight"]["mean"] == pytest.approx(1.0)
     assert manifest["response_weight"]["calibration_version"] == "rev3.1-ordinal-2026-09"
+    assert manifest["response_weight"]["gamma"] == pytest.approx(1.0)
+    assert manifest["response_weight"]["alpha"] == pytest.approx(0.5)
 
     with pytest.raises(ValueError, match="unknown outcome families"):
         publish_pretraining_dataset(

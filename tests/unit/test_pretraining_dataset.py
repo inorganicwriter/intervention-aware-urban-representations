@@ -300,38 +300,61 @@ def test_treatment_binding_rejects_missing_production_hash_and_identity_drift(
         )
 
 
-def test_response_weights_reflect_grade_and_pre_trend_diagnostics() -> None:
+def test_response_weights_follow_pre_treatment_similarity() -> None:
     targets = pd.DataFrame(
         {
-            "treatment_order": [1, 1, 2, 2, 3, 4],
-            "label_available": [True] * 6,
-            "label_grade": [
-                "matched_same_city_pass",
-                "mc_same_city_pass",
-                "gsc_same_city_pass",
-                "gsc_same_city_pass",
-                "mc_same_city_minimal_pre_support",
-                "matched_cross_city_pass",
+            "treatment_order": [1, 2, 3, 4, 5, 6, 7],
+            "outcome_family": ["viirs"] * 7,
+            "outcome": ["viirs_avg_asinh"] * 7,
+            "method": [
+                "frozen_matched_change_12m_baseline",
+                "frozen_matched_change_12m_baseline",
+                "frozen_matched_change_12m_baseline",
+                "xu_2017_gsynth_same_city",
+                "xu_2017_gsynth_same_city",
+                "xu_2017_gsynth_same_city",
+                "athey_2021_mc_same_city",
             ],
-            "pretrend_slope_p_value": [None, 0.03, 0.07, 0.20, 0.50, 0.12],
-            "pre_observed_periods": [None, 5, 1, 3, 1, 4],
+            "label_available": [True] * 7,
+            "holdout_rms_ratio": [0.2, 0.5, 0.8, None, None, None, None],
+            "holdout_max_ratio": [0.3, 0.5, 0.8, None, None, None, None],
+            "pre_rmspe": [None, None, None, 0.10, 0.30, 0.90, 0.50],
+            "pretrend_slope_p_value": [None, None, None, 0.50, 0.02, 0.50, None],
+            "pre_observed_periods": [None, None, None, 5, 5, 5, 1],
         }
     )
-    per_label = response_label_weights(targets)
-    weights = _response_weights(targets).set_index("treatment_order")["response_weight"]
+    weights = response_label_weights(targets)["response_weight"].tolist()
 
-    # Matching labels keep full weight when the diagnostic columns are absent.
-    assert per_label.loc[0, "response_weight"] == pytest.approx(1.0)
-    # An available MC label with p < 0.05 is halved.
-    assert per_label.loc[1, "response_weight"] == pytest.approx(0.4)
-    # Task weight is the conservative minimum across available labels.
-    assert weights.loc[1] == pytest.approx(0.4)
-    # GSC with p in [0.05, 0.10) and a single anchor: 0.9 * 0.75 * 0.75.
-    assert weights.loc[2] == pytest.approx(0.9 * 0.75 * 0.75)
-    # Minimal-support MC with a single anchor: 0.5 * 0.75.
-    assert weights.loc[3] == pytest.approx(0.5 * 0.75)
-    # Cross-city matched labels keep the 0.8 base weight.
-    assert weights.loc[4] == pytest.approx(0.8)
+    # Matched labels rank on max(holdout gaps): 0.3 / 0.5 / 0.8 -> 1.0 / 0.7 / 0.4.
+    assert weights[0] == pytest.approx(1.0)
+    assert weights[1] == pytest.approx(0.7)
+    assert weights[2] == pytest.approx(0.4)
+    # Model labels rank on pre_rmspe: 0.10 / 0.30 / 0.50 / 0.90.
+    assert weights[3] == pytest.approx(1.0)
+    # A pre-trend slope p-value below 0.05 caps the weight at 0.4.
+    assert weights[4] == pytest.approx(0.4)
+    assert weights[5] == pytest.approx(0.4)
+    # A single pre-treatment anchor keeps the ranked weight but is capped at 0.7.
+    assert weights[6] == pytest.approx(0.4)
+
+
+def test_response_weights_zero_anchor_and_unavailable_labels() -> None:
+    targets = pd.DataFrame(
+        {
+            "treatment_order": [1, 2],
+            "outcome_family": ["poi", "poi"],
+            "outcome": ["poi_count_log", "poi_count_log"],
+            "method": ["athey_2021_mc_same_city", "athey_2021_mc_same_city"],
+            "label_available": [True, False],
+            "pre_rmspe": [0.05, 0.01],
+            "pretrend_slope_p_value": [0.5, 0.5],
+            "pre_observed_periods": [0, 5],
+        }
+    )
+    weights = response_label_weights(targets)["response_weight"].tolist()
+    assert weights == [0.0, 0.0]
+    per_task = _response_weights(targets)
+    assert set(per_task["response_weight"]) == {0.0}
 
 
 def test_pretraining_release_family_filter_and_response_weights(tmp_path: Path) -> None:
@@ -387,8 +410,10 @@ def test_pretraining_release_family_filter_and_response_weights(tmp_path: Path) 
     manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
     assert set(targets["outcome_family"]) == {"viirs"}
     assert manifest["families"] == ["viirs"]
-    assert index["response_weight"].eq(1.0).all()
-    assert manifest["response_weight"]["mean"] == pytest.approx(1.0)
+    # Without pre-treatment diagnostics the similarity rank is unknown, so the
+    # conservative neutral weight applies.
+    assert index["response_weight"].eq(0.4).all()
+    assert manifest["response_weight"]["mean"] == pytest.approx(0.4)
 
     with pytest.raises(ValueError, match="unknown outcome families"):
         publish_pretraining_dataset(

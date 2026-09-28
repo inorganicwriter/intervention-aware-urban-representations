@@ -421,39 +421,60 @@ def _best_quality_grade(targets: pd.DataFrame) -> pd.DataFrame:
 
 KNOWN_FAMILIES = ("housing", "viirs", "poi", "population")
 
-RESPONSE_WEIGHT_BY_GRADE = {
-    "matched_same_city_pass": 1.0,
-    "gsc_same_city_pass": 0.9,
-    "mc_same_city_pass": 0.8,
-    "mc_same_city_minimal_pre_support": 0.5,
-    "matched_cross_city_pass": 0.8,
-    "gsc_cross_city_pass": 0.7,
-    "mc_cross_city_pass": 0.6,
-    "mc_cross_city_minimal_pre_support": 0.4,
-}
-
 
 def response_label_weights(targets: pd.DataFrame) -> pd.DataFrame:
-    """Attach a training weight to every label row.
+    """Attach a parallel-trends similarity weight to every label row.
 
-    The base weight ranks the label channel by grade; per-label pre-trend
-    diagnostics then downgrade weak tasks: a slope p-value below 0.05 halves
-    the weight, 0.05-0.10 multiplies it by 0.75, and a single pre-treatment
-    anchor multiplies it by 0.75.  Unavailable labels receive weight zero.
-    Importers should take the per-treatment minimum across available labels.
+    Similarity uses the pre-treatment window only: matched labels use the
+    control-design holdout gaps ``max(holdout_rms_ratio, holdout_max_ratio)``;
+    GSC/MC labels use ``pre_rmspe`` (both are pre-treatment gap distances).
+    Distances are converted to within-outcome, within-metric percentile ranks
+    so different outcome scales stay comparable: the closest third receives
+    weight 1.0, the middle third 0.7 and the farthest third 0.4.  A significant
+    pre-trend slope caps the weight at 0.4, a single pre-treatment anchor caps
+    it at 0.7, and unavailable or zero-anchor labels receive weight 0.
     """
     frame = targets.copy()
-    grade_column = "label_grade" if "label_grade" in frame.columns else "quality_grade"
-    weights = frame[grade_column].astype(str).map(RESPONSE_WEIGHT_BY_GRADE).fillna(0.0)
+    method = frame.get("method", pd.Series("", index=frame.index)).astype(str)
+    matched = method.str.startswith("frozen_matched_change")
+
+    distance = pd.Series(np.nan, index=frame.index, dtype=float)
+    if "holdout_rms_ratio" in frame.columns:
+        holdout_rms = pd.to_numeric(frame["holdout_rms_ratio"], errors="coerce")
+        holdout_max = pd.to_numeric(
+            frame.get("holdout_max_ratio", pd.Series(np.nan, index=frame.index)),
+            errors="coerce",
+        )
+        matched_distance = pd.concat([holdout_rms, holdout_max], axis=1).max(axis=1)
+        distance = distance.where(~matched, matched_distance)
+    if "pre_rmspe" in frame.columns:
+        distance = distance.where(
+            matched, pd.to_numeric(frame["pre_rmspe"], errors="coerce")
+        )
+
+    metric_group = np.where(matched, "matched", "model")
+    group = (
+        frame["outcome_family"].astype(str)
+        + "::"
+        + frame["outcome"].astype(str)
+        + "::"
+        + pd.Series(metric_group, index=frame.index)
+    )
+    closeness = 1.0 - distance.groupby(group).rank(pct=True)
+    weights = pd.Series(
+        np.select([closeness.ge(2 / 3), closeness.ge(1 / 3)], [1.0, 0.7], default=0.4),
+        index=frame.index,
+    )
+    weights = weights.where(distance.notna(), 0.4)
     if "pretrend_slope_p_value" in frame.columns:
         slope_p = pd.to_numeric(frame["pretrend_slope_p_value"], errors="coerce")
-        weights = weights.where(~slope_p.lt(0.05).fillna(False), weights * 0.5)
         weights = weights.where(
-            ~(slope_p.ge(0.05) & slope_p.lt(0.10)).fillna(False), weights * 0.75
+            ~slope_p.lt(0.05).fillna(False), np.minimum(weights, 0.4)
         )
     if "pre_observed_periods" in frame.columns:
         anchors = pd.to_numeric(frame["pre_observed_periods"], errors="coerce")
-        weights = weights.where(~anchors.eq(1).fillna(False), weights * 0.75)
+        weights = weights.where(~anchors.eq(1).fillna(False), np.minimum(weights, 0.7))
+        weights = weights.where(~anchors.eq(0).fillna(False), 0.0)
     if "label_available" in frame.columns:
         weights = weights.where(frame["label_available"].fillna(False), 0.0)
     frame["response_weight"] = weights.astype(float)
@@ -605,8 +626,9 @@ def publish_pretraining_dataset(
             "families": list(families) if families is not None else None,
             "response_weight": {
                 "definition": (
-                    "per-treatment minimum of per-label weights derived from label_grade, "
-                    "pre-trend slope p-value and pre-treatment anchor count"
+                    "per-treatment minimum of per-label parallel-trends similarity "
+                    "weights; matched labels rank on control-design holdout gaps, "
+                    "GSC/MC labels rank on pre-treatment RMSPE, within outcome"
                 ),
                 "mean": float(sample_index["response_weight"].mean()),
                 "positive": int((sample_index["response_weight"] > 0).sum()),

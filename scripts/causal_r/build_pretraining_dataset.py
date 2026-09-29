@@ -39,6 +39,11 @@ def main() -> int:
         help="Optional comma-separated outcome families to export (default: all).",
     )
     parser.add_argument(
+        "--methods",
+        help="Optional comma-separated estimator methods to keep: matched, gsc, mc "
+        "(default: all). Filtering happens before weight calibration.",
+    )
+    parser.add_argument(
         "--weight-gamma",
         type=float,
         default=None,
@@ -61,6 +66,11 @@ def main() -> int:
         families = tuple(
             part.strip() for part in args.families.split(",") if part.strip()
         )
+    methods = None
+    if args.methods:
+        methods = tuple(
+            part.strip() for part in args.methods.split(",") if part.strip()
+        )
     weight_kwargs: dict[str, float] = {}
     if args.weight_gamma is not None:
         weight_kwargs["weight_gamma"] = args.weight_gamma
@@ -78,6 +88,7 @@ def main() -> int:
         strict_production=not args.allow_partial,
         scope_view=args.scope_view,
         families=families,
+        methods=methods,
         **weight_kwargs,
     )
     print(f"Published pretraining dataset at {destination}")

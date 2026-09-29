@@ -420,6 +420,20 @@ def _best_quality_grade(targets: pd.DataFrame) -> pd.DataFrame:
 
 
 KNOWN_FAMILIES = ("housing", "viirs", "poi", "population")
+KNOWN_METHODS = ("matched", "gsc", "mc")
+
+
+def classify_method(value: object) -> str | None:
+    """Map an estimator method string to its estimator family."""
+    text = str(value).lower()
+    if text.startswith("frozen_matched_change"):
+        return "matched"
+    if "gsynth" in text or text.startswith("gsc"):
+        return "gsc"
+    if "athey_2021_mc" in text or text.startswith("mc") or text.endswith("_mc"):
+        return "mc"
+    return None
+
 
 CALIBRATION_ID = "ordinal-design-precision"
 DESIGN_GAMMA = 1.0
@@ -637,6 +651,7 @@ def publish_pretraining_dataset(
     strict_production: bool = True,
     scope_view: str = "same_city",
     families: tuple[str, ...] | None = None,
+    methods: tuple[str, ...] | None = None,
     weight_gamma: float = DESIGN_GAMMA,
     weight_alpha: float = PRECISION_ALPHA,
 ) -> Path:
@@ -672,6 +687,19 @@ def publish_pretraining_dataset(
         if targets.empty:
             raise ValueError(
                 f"response artifact has no rows for families: {list(selected)}"
+            )
+    if methods is not None:
+        selected_methods = tuple(dict.fromkeys(str(method) for method in methods))
+        unknown_methods = sorted(set(selected_methods) - set(KNOWN_METHODS))
+        if unknown_methods:
+            raise ValueError(f"unknown estimation methods: {unknown_methods}")
+        if not selected_methods:
+            raise ValueError("--methods must select at least one estimation method")
+        method_family = targets["method"].map(classify_method)
+        targets = targets.loc[method_family.isin(selected_methods)].copy()
+        if targets.empty:
+            raise ValueError(
+                f"response artifact has no rows for methods: {list(selected_methods)}"
             )
     targets = response_label_weights(targets, gamma=weight_gamma, alpha=weight_alpha)
     features, source_paths = build_pretreatment_features(
@@ -764,6 +792,7 @@ def publish_pretraining_dataset(
             "splits": split_manifest,
             "min_modalities": int(min_modalities),
             "families": list(families) if families is not None else None,
+            "methods": list(methods) if methods is not None else None,
             "response_weight": {
                 "definition": (
                     "Per-label design reliability: eligible * exp(-gamma * D) * "

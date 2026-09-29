@@ -751,8 +751,12 @@ def publish_pretraining_dataset(
         .merge(unit_weights, on="treatment_order", how="left")
         .merge(best_grade, on="treatment_order", how="left")
     )
-    sample_index["training_mask"] = sample_index["training_mask"].fillna(False)
-    sample_index["final_training_mask"] = sample_index["final_training_mask"].fillna(False)
+    sample_index["training_mask"] = (
+        sample_index["training_mask"].astype("boolean").fillna(False).astype(bool)
+    )
+    sample_index["final_training_mask"] = (
+        sample_index["final_training_mask"].astype("boolean").fillna(False).astype(bool)
+    )
     sample_index["quality_grade"] = sample_index["quality_grade"].fillna("pending")
     sample_index["task_sampling_weight"] = (
         pd.to_numeric(sample_index["task_sampling_weight"], errors="coerce").fillna(0.0)

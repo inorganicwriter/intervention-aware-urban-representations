@@ -210,16 +210,6 @@ weights, so datasets built before the weight columns stay usable.
   unweighted so they stay comparable across weighting definitions; a
   `weighted_nn_corr` variant is a future add-on, not a current requirement.
 
-## Production build record (2026-09)
-
-| Dataset | `alpha` | Purpose | Verification |
-|---|---:|---|---|
-| `data/active/model_inputs/viirs-poi-design` | 0 | main training | per-stratum eligible means exactly 1; zero rule holds (no eligible zeros, no ineligible non-zeros); POI keeps four independent outcome weights |
-| `data/active/model_inputs/viirs-poi-full` | 0.5 | ablation | precision applied to 19,726 / 90,864 cells; weights differ from the design-only build |
-
-Both manifests carry `response_weight.calibration_id = ordinal-design-precision`
-and `gamma = 1.0`; eligible rows 60,118 across the viirs + poi task set.
-
 ## Versions and ablations
 
 Naming is deliberately split so that a later change cannot be misattributed to

@@ -1,7 +1,5 @@
 # Current project state
 
-Updated: 2026-09-28
-
 This page contains the state required to resume production. Research definitions
 are maintained in `docs/research/`; dataset locations and source identities are
 maintained in `data/active/catalog/datasets.yaml`.
@@ -26,12 +24,12 @@ estimation and label availability are reported in the queue tables.
 and cleaning tasks use it as read-only input. A server production run uses an
 isolated working copy and records the hashes of the frozen inputs.
 
-The local queue snapshot below is the 2026-08-30 baseline. The server working
-copy completed Phase 1 on 2026-09-01 with 3,032 `matched` and 2,016
-`gsc_pending` rows (see [`server_runtime_profile.md`](server_runtime_profile.md));
-do not infer production progress from the local frozen queues.  Phase 2
-completed on 2026-09-23 and the strict causal release was published from the
-server copy; see the current-phase section below.
+The local queue snapshot below is the frozen baseline. The server working copy
+completed Phase 1 with 3,032 `matched` and 2,016 `gsc_pending` rows
+(see [`server_runtime_profile.md`](server_runtime_profile.md)); do not infer
+production progress from the local frozen queues.  Phase 2 is complete and the
+strict causal release was published from the server copy; see the current-phase
+section below.
 
 ## Data products
 
@@ -97,7 +95,7 @@ real-data validation on the production server. Cutover must replace the original
 implementation bodies and remove the `_modular` entry points in the same change;
 stable import and script paths may remain as delegation-only compatibility facades.
 
-## Queue state (local frozen baseline, 2026-08-30)
+## Queue state (local frozen baseline)
 
 | Queue | Rows | State |
 |---|---:|---|
@@ -105,7 +103,7 @@ stable import and script paths may remain as delegation-only compatibility facad
 | `outcome_family_work_queue.csv` | 20,192 | 20,192 `pending` |
 | `counterfactual_work_queue.csv` | 5,048 | 5,048 `pending` |
 
-The server working copy completed Phase 2 on 2026-09-23 (all 20,192
+The server working copy completed Phase 2 (all 20,192
 family-level tasks terminal; terminal queue census: 9,162 `skipped`, 7,553
 `matched_labelled`, 2,322 `gsc_labelled`, 1,155 `mc_labelled`).  Before
 publication, 226 MC tasks without a pre-treatment anchor were demoted to
@@ -118,31 +116,26 @@ Queue CSV files are single-writer resources. Parallel execution must use the
 provided shard orchestrator (or the round-pool coordinator) rather than
 multiple independent writers.
 
-## Current phase (analysis closure, 2026-09)
+## Current phase (analysis closure)
 
 Phase 1 and Phase 2 are complete and the strict causal release is published
-(`data/active/causal/releases/production`, 136,296 rows, server working copy).
-The terminal queue was recovered from the QC pre-demotion backup plus the 226
-MC demotions (skipped 9,162 / matched_labelled 7,553 / gsc_labelled 2,322 /
-mc_labelled 1,155) and the code-package unzip is always applied with
-`-x 'data/active/causal/*queue*.csv'` so server state is never rolled back.
+(`data/active/causal/releases/production`, server working copy).  The terminal
+queue is recovered from the QC pre-demotion backup plus the recorded MC
+demotions, and code-package unzips always exclude
+`data/active/causal/*queue*.csv` so server state is not rolled back
+([`event_study_final_runbook.md`](event_study_final_runbook.md) §6).
 
-Completed analysis stage (2026-09-29):
+The analysis stage is closed:
 
-1. Four-family event-study suite re-run with the recovered queues
-   (`outputs/event_study_suite` on the server): same-city matching completed
-   for housing 110 / viirs 2,267 / poi 2,478 / population 2,608; cross-city
-   matching completed for viirs 13 / poi 16 / population 61 with housing
-   `no_data` (no cross-city matched labels); pooled GSC/MC 1,582 treatments;
-   four-family figures completed.  The frozen release was exported locally
-   (`outputs/event_study_final`, validation ok, 24 availability cells with
-   4 housing `no_data` reasons, downstream families viirs + poi; see
-   [`event_study_final_runbook.md`](event_study_final_runbook.md) §7).
-2. Pretraining datasets built with per-label reliability weights:
-   `data/active/model_inputs/viirs-poi-design` (`alpha=0`, main) and
-   `viirs-poi-full` (`alpha=0.5`, ablation); per-stratum eligible means are
-   exactly 1, ineligible labels are exactly 0, and POI keeps four independent
-   outcome weights (see [`../research/label_reliability_weights.md`](../research/label_reliability_weights.md)).
+1. the four-family event-study suite has been re-run with the recovered queues,
+   each family under both matching donor scopes; combinations without enough
+   observations are recorded as `no_data` rather than dropped;
+2. the frozen release is exported through `export_event_study_final.py`
+   (canonical windows, availability, pre-trends, family selection, manifest)
+   with validation passing;
+3. pretraining datasets are built with per-label reliability weights:
+   `data/active/model_inputs/viirs-poi-design` (design-only, main) and
+   `viirs-poi-full` (`alpha = 0.5`, ablation).
 
 Next: representation training (W-design main, then W0 / W-full ablations) and
 evaluation; the server checklist lives in
@@ -162,7 +155,7 @@ Two legacy records remain in the local frozen baseline:
   `minimum_complete_families = 2`, while the current code contract is 1.
 
 The local frozen file stays read-only. The server copy superseded these records
-during the 2026-09-01 Phase 1 completion; on resume, `--repair-stale-controls`
+during the Phase 1 completion; on resume, `--repair-stale-controls`
 recomputes only records that fail the current source checks, and the release
 validator rejects any remaining stale records.
 

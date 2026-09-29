@@ -1,6 +1,5 @@
 # 因果代码验证、服务器覆盖与生产复核命令
 
-更新：2026-09-04
 适用环境：本地 Windows 工作区与 Linux 生产服务器 `/home/nas/lsr/MIT_summer`
 主规格：Python/GPU；四类 outcome 统一以 `t=-1` 为参考；月度 anticipation=0；`t=0` 为真实开通冲击期；housing 和 VIIRS 均使用逐月 observation window=1；年度 window=1；跨城 donor 上限 5,000。housing/VIIRS 另以 `t=-7`（anticipation=6）做独立稳健性分析。事件研究主窗口预注册为与标签期限对齐的有界窗口：月度族（housing/VIIRS）`[-24, +24]` 个月，年度族（POI/population）`[-6, +3]` 年；窗口敏感性（月度 ±12/±36、年度 `[-6, +10]`）单独报告，主检验为城市聚类联合检验。
 
@@ -158,9 +157,9 @@ python scripts/causal_r/run_parallel_production.py --phase 3 --tasks-file output
 样本允许 partial release；全量正式发布不要加 `--allow-partial`：
 
 ```bash
-python scripts/causal_r/build_response_artifact.py --release-id presentation_sample_20260902 --tasks-file outputs/causal_labels/presentation_sample_tasks.csv --allow-partial
-python scripts/analysis/summarize_causal_labels.py --response-release data/active/causal/releases/presentation_sample_20260902 --tasks-file outputs/causal_labels/presentation_sample_tasks.csv
-python -c "import pandas as pd; r='outputs/causal_labels/summary_presentation_sample_20260902'; print(pd.read_csv(r+'/label_generation_by_family.csv').to_string(index=False)); print(pd.read_csv(r+'/failure_reasons_by_family.csv').to_string(index=False)); print(pd.read_csv(r+'/label_distribution_by_family.csv').to_string(index=False))"
+python scripts/causal_r/build_response_artifact.py --release-id presentation_sample --tasks-file outputs/causal_labels/presentation_sample_tasks.csv --allow-partial
+python scripts/analysis/summarize_causal_labels.py --response-release data/active/causal/releases/presentation_sample --tasks-file outputs/causal_labels/presentation_sample_tasks.csv
+python -c "import pandas as pd; r='outputs/causal_labels/summary_presentation_sample'; print(pd.read_csv(r+'/label_generation_by_family.csv').to_string(index=False)); print(pd.read_csv(r+'/failure_reasons_by_family.csv').to_string(index=False)); print(pd.read_csv(r+'/label_distribution_by_family.csv').to_string(index=False))"
 ```
 
 ## 9. 所有样本的 pooled event-study
@@ -237,11 +236,10 @@ Phase 2 已完成并发布严格 release（见
 
 Phase 1/Phase 2 已在服务器完成，严格 release
 `data/active/causal/releases/production` 已发布（含两个 drift
-waiver）。四族封版已于 2026-09-29 完成：按规范窗口重跑
-`run_all_method_event_study.py`（同城四族 + 跨城 viirs/poi/population，
-housing 跨城无 matched 标签记 `no_data`），再由
-`export_event_study_final.py` 生成 `mit_event_study_final.zip`
-（validation ok）。完整命令、下载清单与验收门槛见
-[`event_study_final_runbook.md`](event_study_final_runbook.md)（封版记录见
-§7）；服务器训练前置检查与 checklist 见
+waiver）。四族封版按规范窗口重跑 `run_all_method_event_study.py`（每个
+family 在两个 donor scope 下独立分析，样本不足的组合记为 `no_data`），
+再由 `export_event_study_final.py` 生成 `mit_event_study_final.zip`
+（validation 通过）。完整命令、下载清单与验收门槛见
+[`event_study_final_runbook.md`](event_study_final_runbook.md)；服务器训练
+前置检查与 checklist 见
 [`training_release_checklist.md`](training_release_checklist.md)。

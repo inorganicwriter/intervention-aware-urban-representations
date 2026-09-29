@@ -191,6 +191,8 @@ OUTPUT_TRANSIT_COMPARISON_DIR = OUTPUT_DIR / "transit_comparison"
 OUTPUT_VIIRS_MONTHLY_DIR = OUTPUT_DIR / "viirs_monthly"
 OUTPUT_VIIRS_PARTITION_AUDITS_DIR = OUTPUT_VIIRS_MONTHLY_DIR / "partition_audits"
 OUTPUT_STREETVIEW_DIR = OUTPUT_DIR / "streetview"
+STREETVIEW_DIR = ACTIVE_DIR / "streetview"
+STREETVIEW_INDEX = STREETVIEW_DIR / "streetview_index.parquet"
 
 # ── Scripts ─────────────────────────────────────────────────────────
 

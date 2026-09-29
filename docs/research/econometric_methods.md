@@ -1,6 +1,5 @@
 # 计量经济学方法与因果识别手册
 
-更新：2026-08-28
 状态：当前计量方法主文档
 适用范围：地铁站开通事件、500m × 500m 网格、housing、VIIRS、POI 和 population 结果族
 
@@ -607,16 +606,16 @@ MC 标签为：
 L_i,t = Y_i,t - Y_hat_i,t(0)
 ```
 
-正式 MC 使用单位 leave-one-out jackknife。对每个 donor 单位 `j` 删除该单位，固定已经选择的 \(\lambda\)，重新拟合 MC 并得到目标效应路径 \(\widehat\tau_t^{(-j)}\)。令总单位数为 `N`，伪值为：
+正式 MC 使用单位 leave-one-out jackknife。对每个 donor 单位 `j` 删除该单位，固定已经选择的 \(\lambda\)，重新拟合 MC 并得到目标效应路径 \(\widehat\tau_t^{(-j)}\)。令 \(N_t\) 为事件期 \(t\) 的**有效重拟合次数**（有限且收敛的删除重拟合数，按事件期分别计数），伪值为：
 
 ```text
-p_t^(-j) = N * τ_hat_t - (N - 1) * τ_hat_t^(-j)
+p_t^(-j) = N_t * τ_hat_t - (N_t - 1) * τ_hat_t^(-j)
 ```
 
 jackknife 标准误为有效伪值的样本方差除以有效数量：
 
 ```text
-SE_t^JK = sqrt(var({p_t^(-j)}) / n_valid,t)
+SE_t^JK = sqrt(var({p_t^(-j)}) / N_t)
 ```
 
 当前实现使用 (N-1) 个 donor 删除重拟合，处理目标本身保留在每次拟合中。有效重拟合数量和失败原因写入推断记录。
@@ -683,7 +682,7 @@ Y_it = α_i + γ_t + Σ_(h∈H, h≠h0) β_h [Treated_i * 1(event_time=h)] + ε_
 
 ### 7.3 平行趋势联合 Wald 检验
 
-主检验取最近 5 个清洁处理前期。最后一期作为参考期，\(\widehat\beta_{pre}\) 最多包含其余 4 个 lead。\(\widehat V\) 为相应聚类协方差矩阵。检验：
+主检验取参考期之前最近 5 个清洁处理前 lead（参考期为 `-1`，即事件期 `-6:-2`），联合检验包含这 5 个系数。\(\widehat V\) 为相应聚类协方差矩阵。检验：
 
 ```text
 H0: β_h = 0 for every h in the prespecified recent clean-pre window
@@ -718,7 +717,7 @@ V_hat = correction * (X'X)^(-1) [Σ_g X_g' e_g e_g' X_g] (X'X)^(-1)
 G / (G - 1) * (n - 1) / (n - p)
 ```
 
-其中 `G` 是聚类数量，`n` 是样本量，`p` 是事件系数数量。每个系数使用聚类数减 1 的 t 分布计算 p 值和 95% 置信区间。
+其中 `G` 是聚类数量，`n` 是样本量，`p` 是**有效参数数**：事件研究设计列数加上未被当前聚类嵌套的吸收固定效应（单位、日历期）数量。该数值按聚类层级分别写入诊断文件（`grid_ssc_parameters`、`city_ssc_parameters`）。每个系数使用聚类数减 1 的 t 分布计算 p 值和 95% 置信区间。
 
 项目同时输出两种聚类：
 
@@ -779,6 +778,14 @@ within_var_h = mean(SE_i,h^2) / N_h
 between_var_h = var(gap_i,h)
 SE_h = sqrt(within_var_h + between_var_h / N_h)
 ```
+
+城市聚类标准误按聚类得分计算（\(G\) 为城市数，\(s_{g,h}\) 为城市 \(g\) 内各网格相对总体均值的偏差之和）：
+
+```text
+city_cluster_SE_h = sqrt( (G / (G - 1)) * Σ_g s_g,h^2 / N_h^2 )
+```
+
+置信区间使用 \(t_{G-1}\) 临界值；城市数小于 2 时该统计量写为缺失。
 
 没有任务层标准误时，使用 `sd(gap_i,h) / sqrt(N_h)`。处理前联合检验先在每个网格或城市内部对选定 clean pre 期取均值，再在聚类层级上做 one-sample t 检验。
 
@@ -850,7 +857,7 @@ p = 2 * P(T_(G-1) >= |t|)
 事件研究通常包含多个 lead 和 lag。单期 5% 显著性会产生多重检验问题。项目报告使用以下层次：
 
 1. 动态系数图和 95% 置信区间；
-2. 最近 5 个 clean pre periods 的低维联合检验；
+2. 参考期之前最近 5 个 clean pre lead 的低维联合检验（`-6..-2`，参考期 `-1`）；
 3. 关键处理后期的单期结果；
 4. Sun-Abraham、空间半径和 anticipation 敏感性；
 5. 方法和结果族分开汇总。

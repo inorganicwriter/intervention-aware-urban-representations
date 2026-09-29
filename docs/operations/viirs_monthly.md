@@ -1,6 +1,5 @@
 # VIIRS monthly processing contract
 
-Updated: 2026-07-22
 
 ## Raw batch
 

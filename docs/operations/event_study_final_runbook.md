@@ -85,8 +85,7 @@ python scripts/causal_python/export_event_study_final.py `
 
 ## 5. 旧结果
 
-旧的 `mit_event_study_results/` 与 `.zip` 已清理；后续引用只使用
-`mit_event_study_final.zip`。
+早期导出视为历史分析，不再引用；封版产物为 `mit_event_study_final.zip`。
 
 ## 6. 附：队列状态被代码包覆盖时的恢复
 

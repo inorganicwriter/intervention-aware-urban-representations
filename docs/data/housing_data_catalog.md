@@ -1,6 +1,5 @@
 # Housing raw-data catalog
 
-Updated: 2026-07-22
 
 The canonical outcome panel is documented in
 [`housing_price_panel.md`](housing_price_panel.md). This catalog describes

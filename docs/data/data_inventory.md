@@ -1,6 +1,5 @@
 # 数据资产总览（Data Inventory）
 
-更新：2026-08-27
 
 本文档汇总当前项目的数据资产。与 `data/active/catalog/datasets.yaml` 互补：
 本文档说明"有什么、在哪、干什么用"，datasets.yaml 记录每条目的 schema/质量/状态。

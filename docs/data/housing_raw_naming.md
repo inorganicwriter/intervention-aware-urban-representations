@@ -1,6 +1,5 @@
 # Housing raw-data organization and naming
 
-Updated: 2026-07-22
 
 ## Canonical layout
 

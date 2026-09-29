@@ -1,6 +1,5 @@
 # Housing acquisition contract
 
-Updated: 2026-07-22
 
 ## Objective
 

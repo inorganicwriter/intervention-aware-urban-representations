@@ -1,6 +1,5 @@
 # 计量公式索引
 
-更新：2026-08-28
 状态：公式导航页
 
 完整的估计对象、识别假设、参数含义、推断规则和结果解释见
@@ -52,8 +51,8 @@
 | 核范数目标 | \(\min_L |\Omega|^{-1}\sum_{(i,t)\in\Omega}(Y_{it}-L_{it})^2+\lambda\|L\|_*\) | [3.7](econometric_methods.md#37-mc-的低秩结构) |
 | MC 标签 | \(L_{i,t}=Y_{i,t}-\widehat L_{i,t}\) | [6.1](econometric_methods.md#61-矩阵结构) |
 | CV 误差 | \(MSPE(\lambda)=|S|^{-1}\sum_{(i,t)\in S}[Y_{it}-\widehat Y_{it}(\lambda)]^2\) | [6.2](econometric_methods.md#62-lambda-交叉验证) |
-| Jackknife 伪值 | \(p_t^{(-j)}=N\widehat τ_t-(N-1)\widehat τ_t^{(-j)}\) | [6.3](econometric_methods.md#63-mc-标签和-jackknife) |
-| Jackknife 标准误 | \(SE_t^{JK}=\sqrt{var(p_t^{(-j)})/n_{valid,t}}\) | [6.3](econometric_methods.md#63-mc-标签和-jackknife) |
+| Jackknife 伪值 | \(p_t^{(-j)}=N_t\widehat τ_t-(N_t-1)\widehat τ_t^{(-j)}\)，\(N_t\) 为事件期 \(t\) 的有效重拟合次数 | [6.3](econometric_methods.md#63-mc-标签和-jackknife) |
+| Jackknife 标准误 | \(SE_t^{JK}=\sqrt{var(p_t^{(-j)})/N_t}\) | [6.3](econometric_methods.md#63-mc-标签和-jackknife) |
 
 代码入口：[`src/urban_intervention/causal/gpu/matrix_completion.py`](../../src/urban_intervention/causal/gpu/matrix_completion.py)。
 
@@ -63,11 +62,12 @@
 |---|---|---|
 | 2×2 DID | \(ATT_{DID}=E[ΔY_i\mid T_i=1]-E[ΔY_j\mid C_j=1]\) | [7.1](econometric_methods.md#71-匹配样本上的-twfe) |
 | TWFE 事件研究 | \(Y_{it}=\alpha_i+\gamma_t+\sum_{h\ne h_0}\beta_h[Treated_i\times1(event\_time=h)]+\epsilon_{it}\) | [7.1](econometric_methods.md#71-匹配样本上的-twfe) |
-| 清洁 pre 原假设 | \(H_0:\beta_h=0\) for every \(h\) in the prespecified recent clean-pre window（最近 5 期，最后一期为参考） | [7.3](econometric_methods.md#73-平行趋势联合-wald-检验) |
-| Wald/F 统计量 | \(F=q^{-1}\widehat\beta_{pre}'\widehat V_{pre}^{-1}\widehat\beta_{pre}\) | [7.3](econometric_methods.md#73-平行趋势联合-wald-检验) |
-| 聚类协方差 | \(\widehat V=correction(X'X)^{-1}[\sum_gX_g'e_ge_g'X_g](X'X)^{-1}\) | [7.4](econometric_methods.md#74-聚类协方差) |
+| 清洁 pre 原假设 | \(H_0:\beta_h=0\) for every \(h\) in the prespecified recent clean-pre window（参考期 `-1` 之前最近 5 个 lead，即 `-6..-2`） | [7.3](econometric_methods.md#73-平行趋势联合-wald-检验) |
+| Wald/F 统计量 | \(F=q^{-1}\widehat\beta_{pre}'\widehat V_{pre}^{-1}\widehat\beta_{pre}\)，\(q=5\) | [7.3](econometric_methods.md#73-平行趋势联合-wald-检验) |
+| 聚类协方差 | \(\widehat V=correction(X'X)^{-1}[\sum_gX_g'e_ge_g'X_g](X'X)^{-1}\)，\(p\) 为含未嵌套固定效应的有效参数数 | [7.4](econometric_methods.md#74-聚类协方差) |
 | GSC/MC pooled gap | \(\widehat μ_h=N_h^{-1}\sum_i gap_{i,h}\) | [7.6](econometric_methods.md#76-gsc-和-mc-的事件路径诊断) |
 | pooled 标准误 | \(SE_h=\sqrt{mean(SE_{i,h}^2)/N_h+var(gap_{i,h})/N_h}\) | [7.6](econometric_methods.md#76-gsc-和-mc-的事件路径诊断) |
+| pooled 城市聚类标准误 | \(SE_h=\sqrt{\frac{G}{G-1}\cdot\frac{\sum_g s_{g,h}^2}{N_h^2}}\)，\(s_{g,h}\) 为城市内偏差之和 | [7.6](econometric_methods.md#76-gsc-和-mc-的事件路径诊断) |
 
 代码入口：[`src/urban_intervention/causal/event_study.py`](../../src/urban_intervention/causal/event_study.py)、[`src/urban_intervention/causal/pooled_event_study.py`](../../src/urban_intervention/causal/pooled_event_study.py)。
 
@@ -78,7 +78,7 @@
 | TWFE grid/city cluster | CRV1，聚类数减 1 的 t 分布 | 系数 ± t 临界值 × SE |
 | GSC | 200 次参数 bootstrap 的有效路径 | 正态近似 |
 | MC | donor 单位 jackknife 伪值 | 正态近似 |
-| pooled GSC/MC | 任务层 within 方差和网格间 between 方差 | 95% 正态区间 |
+| pooled GSC/MC | 每格：任务层 within 方差 + 网格间 between 方差；城市聚类：聚类得分方差 | 正态区间；城市聚类用 \(t_{G-1}\) 临界值 |
 
 完整的有效重复次数、聚类层级和多重检验要求见
 [`econometric_methods.md`](econometric_methods.md#9-统计推断和多重检验)。

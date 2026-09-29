@@ -1,6 +1,5 @@
 # Housing price panel
 
-Updated: 2026-07-22
 
 ## Outcome contract
 

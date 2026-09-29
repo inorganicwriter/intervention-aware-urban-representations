@@ -68,26 +68,31 @@ blocker。详见 `docs/research/label_reliability_weights.md`。
    tests/unit/test_event_study_release.py tests/unit/test_pretraining_dataset.py -q`。
 3. **ES 封版**：按 `event_study_final_runbook.md` 重跑四族并导出
    `mit_event_study_final.zip`。
-4. **数据集构建**（design-only 主版本）：
+4. **数据集构建**（逐族独立、同城、matched+GSC；完整流程见
+   [`per_family_training_runbook.md`](per_family_training_runbook.md)）：
 
    ```bash
    python scripts/causal_r/build_pretraining_dataset.py \
        --response-release data/active/causal/releases/production \
-       --dataset-id viirs-poi-design \
-       --families viirs,poi \
-       --weight-alpha 0
+       --dataset-id viirs-mg-design --families viirs \
+       --methods matched,gsc --weight-alpha 0
+   python scripts/causal_r/build_pretraining_dataset.py \
+       --response-release data/active/causal/releases/production \
+       --dataset-id poi-mg-design --families poi \
+       --methods matched,gsc --weight-alpha 0
    ```
 
-   W-full 消融版本使用同一命令加 `--weight-alpha 0.5`、dataset-id 用
-   `viirs-poi-full`。封版路径不带日期：release 固定为
-   `data/active/causal/releases/production`，数据集 id 用内容命名。
+   W-full 消融把 `--weight-alpha` 换成 `0.5`、dataset-id 用 `*-mg-full`；
+   W0 用 `--weight-gamma 0 --weight-alpha 0`、dataset-id 用 `*-mg-w0`；
+   三方法对照去掉 `--methods`、dataset-id 用 `*-3m-design`。
+   封版路径不带日期：release 固定为 `data/active/causal/releases/production`。
 
 5. **权重分布核验清单**（逐条贴回结果）：
    - `response_weight` 在 `(method, family)` 内 eligible 均值 = 1；
    - `eligible = false` 的行 `response_weight` 全为 0；
-   - matched ties（同 outcome 同分位）与 GSC/MC 分布合理，无冻结常量；
-   - MC `p_validation`（cv_mspe）覆盖足够、无大面积缺失；
-   - POI 四个 outcome 的权重独立（不因 task-level min 被拉平）；
+   - matched ties（同 outcome 同分位）与 GSC 分布合理，无冻结常量；
+   - VIiRS 1 个 outcome；POI 四个 outcome 的权重独立（不因 task-level min 被拉平）；
    - percentile pooling 在 n≥30 分层生效（小 outcome 上溯 family）。
-6. **训练**：W0 / W-design / W-full 三版，实验表使用第 1 节命名。
+6. **训练**：逐族独立模型（VIiRS、POI 各一），主版本 W-design；
+   消融 W0 / W-full / 三方法 / 后续融合对照，实验表使用第 1 节命名。
 7. **性能 profiling**：正式大规模训练时再记录吞吐与显存曲线（非当前阻塞）。

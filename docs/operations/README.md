@@ -8,7 +8,8 @@
 - [`server_runtime_profile.md`](server_runtime_profile.md)：生产服务器资源、容器配额、NFS 配置与并发测试基线。
 - [`current_project_status.md`](current_project_status.md)：固定研究资产、生产入口、队列状态和待执行任务。
 - [`event_study_final_runbook.md`](event_study_final_runbook.md)：四族 event-study 封版流程（服务器重跑、下载、导出、验收门槛）。
-- [`training_release_checklist.md`](training_release_checklist.md)：本地闭环顺序、Historical/W0/W-design 命名约定与服务器训练 checklist（服务器暂缓）。
+- [`training_release_checklist.md`](training_release_checklist.md)：本地闭环顺序、Historical/W0/W-design 命名约定与服务器训练 checklist。
+- [`per_family_training_runbook.md`](per_family_training_runbook.md)：逐族独立表示学习的数据集构建、核验、冒烟、训练与消融流程。
 - [`streetview_pipeline.md`](streetview_pipeline.md)：街景索引构建、带街景数据集与 `--use-images` 训练流程。
 - [`station_data.md`](station_data.md)：站点人工决议及三个可追溯产品。
 - [`housing_price_collection.md`](housing_price_collection.md)：房价采集、开放数据导入与验收。

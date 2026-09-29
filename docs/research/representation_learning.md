@@ -45,6 +45,10 @@
     `log_var = log 2` 即默认 0.5/0.5 平衡；开启后 `pred_weight` 被忽略。
 - **训练协议**：城市级划分（train/validation/test），只读 `final_training_mask` 网格；
   CosineAnnealing、按验证 loss 保存最佳 checkpoint、`--seeds` 多 seed 汇总。
+- **逐族独立口径**：VIiRS 与 POI 分别单独训练模型，监督只使用同城的
+  matched 与 GSC 标签（数据上 MC 与跨城样本不足或未通过平行趋势诊断）；
+  housing / population 不进入下游监督。共享嵌入的融合模型作为后续对照，
+  操作流程见 [`../operations/per_family_training_runbook.md`](../operations/per_family_training_runbook.md)。
 
 ## 3. 评估协议（`evaluation_report.json`）
 

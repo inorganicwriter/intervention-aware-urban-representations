@@ -9,7 +9,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from urban_intervention.causal.event_study import EventStudyResult
+from urban_intervention.causal.event_study import EventStudyResult, canonical_event_window
 from urban_intervention.causal.pooled_event_study import PooledPathEventStudyResult
 
 FAMILIES = ("housing", "viirs", "poi", "population")
@@ -111,6 +111,17 @@ def _draw_path(
                 linewidth=1.15,
             )
     return float(lower.min()), float(upper.max())
+
+
+def _set_panel_ylim(axis: Any, limits: list[tuple[float, float]]) -> None:
+    """Scale one panel to its own plotted values, always including zero."""
+    values = [0.0]
+    for lower, upper in limits:
+        values.extend([lower, upper])
+    lower_value = float(min(values))
+    upper_value = float(max(values))
+    span = max(upper_value - lower_value, 1e-9)
+    axis.set_ylim(lower_value - 0.08 * span, upper_value + 0.08 * span)
 
 
 def _matching_frame(result: EventStudyResult, *, family: str) -> pd.DataFrame:
@@ -403,9 +414,6 @@ def write_pooled_outcome_event_studies(
         }
     )
     written: list[Path] = []
-    support_table = event_study_support_table(
-        matching_results, pooled, donor_scope=donor_scope
-    )
     reference_candidates = {
         int(result.diagnostics["reference_event_time"])
         for result in matching_results.values()
@@ -421,22 +429,17 @@ def write_pooled_outcome_event_studies(
     reference_event_time = next(iter(reference_candidates), -1)
     for family in FAMILIES:
         outcome = PRIMARY_OUTCOMES[family]
-        family_support = support_table.loc[support_table["outcome_family"].eq(family)]
+        pre_min, post_max = canonical_event_window(family)
         common = {
-            column: (
-                None
-                if family_support.empty or pd.isna(family_support[column].iloc[0])
-                else int(family_support[column].iloc[0])
-            )
-            for column in (
-                "common_pre_min",
-                "common_pre_max",
-                "common_post_min",
-                "common_post_max",
-            )
+            "common_pre_min": pre_min,
+            "common_pre_max": reference_event_time,
+            "common_post_min": 1,
+            "common_post_max": post_max,
         }
-        figure, axes = plt.subplots(1, 3, figsize=(7.2, 3.05), sharey=True)
-        limits: list[tuple[float, float]] = []
+        figure, axes = plt.subplots(1, 3, figsize=(7.2, 3.05), sharey=False)
+        test_min = reference_event_time - 5
+        test_max = reference_event_time - 1
+        panel_limits: list[tuple[float, float]] = []
         matching = matching_results.get(family)
         axis = axes[0]
         _style_axis(
@@ -461,20 +464,22 @@ def write_pooled_outcome_event_studies(
                 color=METHOD_COLORS["matching"],
             )
             if limit:
-                limits.append(limit)
+                panel_limits.append(limit)
             p_value = matching.city_cluster_pretrend["p_value"].iloc[0]
             axis.text(
                 0.02,
                 0.98,
-                "Joint clean-lead test\n"
+                f"Joint clean-lead test ({test_min}..{test_max})\n"
                 f"city p={_format_p(p_value)}; G={matching.diagnostics['city_clusters']}",
                 transform=axis.transAxes,
                 va="top",
                 fontsize=7,
             )
+        _set_panel_ylim(axis, panel_limits)
 
         for panel_index, method_family in enumerate(("gsc", "mc"), start=1):
             axis = axes[panel_index]
+            panel_limits = []
             _style_axis(
                 axis, family=family, reference_event_time=reference_event_time
             )
@@ -513,7 +518,7 @@ def write_pooled_outcome_event_studies(
                     label=str(method) if candidates["method"].nunique() > 1 else None,
                 )
                 if limit:
-                    limits.append(limit)
+                    panel_limits.append(limit)
                 p_value = _pooled_pretrend_p(
                     pooled,
                     family=family,
@@ -535,40 +540,30 @@ def write_pooled_outcome_event_studies(
                 axis.text(
                     0.02,
                     0.98,
-                    f"Mean clean-pre gap test\ncity p={_format_p(p_value)}; G≤{city_count}",
+                    f"Mean clean-pre gap test ({test_min}..{test_max})\n"
+                    f"city p={_format_p(p_value)}; G≤{city_count}",
                     transform=axis.transAxes,
                     va="top",
                     fontsize=7,
                 )
             if candidates["method"].nunique() > 1:
                 axis.legend(fontsize=6, loc="best")
+            _set_panel_ylim(axis, panel_limits)
 
-        if limits:
-            lower = min(value[0] for value in limits)
-            upper = max(value[1] for value in limits)
-            span = max(upper - lower, 1e-9)
-            for axis in axes:
-                axis.set_ylim(lower - 0.08 * span, upper + 0.08 * span)
-        x_values = [0]
-        for key in ("common_pre_min", "common_pre_max", "common_post_min", "common_post_max"):
-            value = common[key]
-            if value is not None:
-                x_values.append(int(value))
-        x_min, x_max = min(x_values), max(x_values)
-        padding = max((x_max - x_min) * 0.02, 0.5)
+        padding = max((post_max - pre_min) * 0.02, 0.5)
         for axis in axes:
-            axis.set_xlim(x_min - padding, x_max + padding)
+            axis.set_xlim(pre_min - padding, post_max + padding)
         axes[0].set_ylabel("Causal response (transformed outcome scale)")
         figure.suptitle(f"{FAMILY_TITLES[family]} pooled event study", fontsize=11, y=0.97)
         figure.text(
             0.5,
             0.035,
-            "For monthly robustness results, gray marks anticipation months when present; "
-            "amber marks "
-            "the opening period (t=0, shown but excluded from the pre-trend test).\n"
-            "Each outcome uses its longest overlap across available methods; anticipation is "
-            "shown but excluded from the clean-lead test. Error bars are 95% city-cluster "
-            "intervals when available.",
+            "Panels are restricted to the pre-registered canonical window (monthly families "
+            "+/-24 months; annual families -6..+3) and each panel uses its own y-scale.\n"
+            "Pre-trend tests use the five clean pre leads before the reference "
+            "(reference-5..reference-1); gray marks anticipation months when present and amber "
+            "marks the opening period (t=0, shown but excluded from the pre-trend test). "
+            "Error bars are 95% city-cluster intervals when available.",
             ha="center",
             va="bottom",
             fontsize=7,

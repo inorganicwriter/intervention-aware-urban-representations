@@ -1,6 +1,7 @@
 # Architecture
 
 - [`research_architecture.md`](research_architecture.md)：反事实标签层与表示学习层的研究边界。
+- [`estimator_package_plan.md`](estimator_package_plan.md)：把 Python/GPU 估计器整理为独立开源包（额外 contribution）的范围、约束与里程碑。
 - [`data_layout.md`](data_layout.md)：`active` / `archive` 分层以及 reference、curated、labels、panels 和 causal 的数据职责。
 - [`code_standards.md`](code_standards.md)：代码放置、数据合同、可复现性和生产安全规则。
 

@@ -11,6 +11,8 @@
 \setbeamerfont{block title}{size=\small}
 \setbeamersize{text margin left=6mm,text margin right=6mm}
 \setlength{\tabcolsep}{4pt}
+\usepackage{graphicx}
+\graphicspath{{./}{figures/}{docs/presentations/figures/}}
 
 \newcommand{\key}[1]{\textbf{\color{blue!55!black}#1}}
 
@@ -203,6 +205,72 @@
   \begin{itemize}
     \item 联合检验均未拒绝；housing / VIIRS / POI 为边缘（$p<0.1$）
     \item 覆盖 $=$ 规范窗口内最大 $n_{\text{treated}}$ / 可用性阶段处理事件数
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{事件研究图：同城三方法对比（阅读指引）}
+  \small
+  \begin{itemize}
+    \item 每页一张结果族图，三个面板分别为 \key{匹配（Matching TWFE）}、
+      \key{GSC}、\key{MC}
+    \item 纵轴为变换后结果尺度上的响应，横轴为相对开通时间
+    \item 月度族的灰带为预期期；琥珀色带为开通期 $t=0$（图中保留、不进 pre-trend 检验）
+    \item 面板内标注各自检验：匹配为 clean-lead 联合 Wald（city $p$）；
+      GSC/MC 为城市层 clean-pre gap 检验（city $p$，$G\le$ 为城市数上界）
+    \item 跨城匹配样本量太小（VIIRS 13 / POI 16 / population 61），
+      本组图只放同城结果
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{事件研究图（1/4）：housing（同城）}
+  \begin{center}
+    \includegraphics[width=0.98\textwidth]{housing_pooled_event_study.pdf}
+  \end{center}
+  \vspace{-0.4em}
+  \small
+  \begin{itemize}
+    \item 匹配：pre 贴近 0、post 平稳；city $p=0.055$（边缘）
+    \item GSC：housing 无生产标签（面板显示 ``No production labels''）
+    \item MC：pre 噪声大（$G\le6$）、post 略正；city $p=0.955$
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{事件研究图（2/4）：VIIRS（同城）}
+  \begin{center}
+    \includegraphics[width=0.98\textwidth]{viirs_pooled_event_study.pdf}
+  \end{center}
+  \vspace{-0.4em}
+  \small
+  \begin{itemize}
+    \item 匹配：pre 贴近 0、post 轻微正向；city $p=0.063$
+    \item GSC：中心趋势与匹配一致（近 0）；city $p=0.278$
+    \item MC：城市簇过少（$G\le2$），区间很宽，仅作参考
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{事件研究图（3/4）：POI（同城）}
+  \begin{center}
+    \includegraphics[width=0.98\textwidth]{poi_pooled_event_study.pdf}
+  \end{center}
+  \vspace{-0.4em}
+  \small
+  \begin{itemize}
+    \item 匹配：pre 平稳、post 正向抬升；city $p=0.072$
+    \item GSC：水平近 0；city $p=0.217$
+    \item MC：明显 pre-trend（city $p=0.000$）——该标签会在权重 $p_{trend}$ 上被降权
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{事件研究图（4/4）：population（同城）}
+  \begin{center}
+    \includegraphics[width=0.98\textwidth]{population_pooled_event_study.pdf}
+  \end{center}
+  \vspace{-0.4em}
+  \small
+  \begin{itemize}
+    \item 匹配：pre 平稳、post 接近 0；city $p=0.328$
+    \item GSC：pre 偏负、post 转正；city $p=0.002$（pre-trend 报警）
+    \item MC：pre 偏负、post 抬升；city $p=0.001$
   \end{itemize}
 \end{frame}
 

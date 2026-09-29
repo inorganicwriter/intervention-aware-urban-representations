@@ -6,13 +6,16 @@
 \usepackage{array}
 \usetheme{Madrid}
 \setbeamertemplate{navigation symbols}{}
-\setbeamertemplate{caption}[numbered]
-\setbeamercolor{title}{fg=white}
-\setbeamercolor{frametitle}{fg=white}
-\setbeamercolor{structure}{fg=blue!55!black}
+\setbeamertemplate{itemize items}[circle]
+\setbeamercolor{frametitle}{bg=blue!45!black}
+\setbeamerfont{block title}{size=\small}
+\setbeamersize{text margin left=6mm,text margin right=6mm}
+\setlength{\tabcolsep}{4pt}
+
+\newcommand{\key}[1]{\textbf{\color{blue!55!black}#1}}
 
 \title{因果响应标签：方法、结果与权重分配}
-\subtitle{阶段进展汇报：因果论证、标签获取、权重逻辑与表示学习}
+\subtitle{阶段进展汇报}
 \author{}
 \institute{}
 \date{}
@@ -23,279 +26,324 @@
   \titlepage
 \end{frame}
 
-\begin{frame}{汇报提纲}
-  \begin{enumerate}
-    \item 因果论证：对象、识别假设与估计器
-    \item 事件研究与平行趋势：方法与结果
-    \item 标签获取：任务结构、标签定义与发布
-    \item 权重分配：可靠性权重的生成逻辑
-    \item 表示学习：监督目标与评测（简述）
-    \item 阶段状态与下一步
-  \end{enumerate}
+\begin{frame}{提纲}
+  \tableofcontents
 \end{frame}
 
-\begin{frame}{总体流程}
+\section{因果论证：方法与设计}
+
+\begin{frame}{整体流程}
   \begin{center}
-    \small
-    5{,}048 个站点 \ $\rightarrow$ \ 控制设计（同城匹配、GSC、MC）
-    \ $\rightarrow$ \ 逐任务响应标签 \\
-    $\rightarrow$ \ Response Artifact 发布
-    \ $\rightarrow$ \ 四族事件研究验证
-    \ $\rightarrow$ \ 逐标签可靠性权重
-    \ $\rightarrow$ \ 表示学习监督
+    5{,}048 站点 $\;\to\;$ 控制设计（匹配 / GSC / MC）$\;\to\;$ 逐任务标签
+    $\;\to\;$ 发布 release $\;\to\;$ 事件研究验证 $\;\to\;$ 权重 $\;\to\;$ 表示学习
   \end{center}
-  \vspace{0.5em}
-  \begin{itemize}
-    \item 每个任务 = 站点 $\times$ 结果族 $\times$ 方法 $\times$ donor scope
-    \item 标签与诊断（方法、标准误、处理前拟合）一起保存，全链路可溯源
-    \item 事件研究是标签质量的聚合验证；标签本身来自逐任务估计
-  \end{itemize}
+  \medskip
+  \begin{columns}[T]
+    \begin{column}{0.48\textwidth}
+      \begin{block}{分析单元}
+        \small 站点 $\times$ 结果族 $\times$ 方法 $\times$ donor scope
+      \end{block}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \begin{block}{标签随附}
+        \small 方法、标准误、可用性、质量分级、处理前拟合诊断
+      \end{block}
+    \end{column}
+  \end{columns}
 \end{frame}
 
-\begin{frame}{因果对象与潜在结果}
+\begin{frame}{因果对象与记号}
+  \small
+  \begin{tabular}{ll}
+    \toprule
+    记号 & 含义 \\
+    \midrule
+    $Y_{ikt}(0),\,Y_{ikt}(1)$ & 网格 $i$、结果 $k$、$t$ 期的潜在结果 \\
+    $G_i$，$h$ & 开通期；相对事件期（$h=0$ 为冲击期） \\
+    $T_i=1$，$C_j=1$ & 处理网格；donor 网格 \\
+    $\tau_{ikh}=Y(1)-Y(0)$ & 动态处理效应 \\
+    $L_{ikh}=Y-\hat Y(0)$ & 响应标签（观测减反事实） \\
+    $ATT_k(h)$ & 处理网格上的期望动态效应 \\
+    \bottomrule
+  \end{tabular}
+  \medskip
   \begin{itemize}
-    \item 一致性：$Y_{ikt}=D_{it}Y_{ikt}(1)+(1-D_{it})Y_{ikt}(0)$
-    \item 动态处理效应：$\tau_{ikh}=Y_{ik,G_i+h}(1)-Y_{ik,G_i+h}(0)$
-    \item 响应标签：$L_{ikh}=Y_{ik,G_i+h}-\hat Y_{ik,G_i+h}(0)$
-    \item 队列动态 ATT：
-      $ATT_k(h)=E\!\left[Y_{ik,G_i+h}(1)-Y_{ik,G_i+h}(0)\mid T_i=1\right]$
-  \end{itemize}
-  \vspace{0.5em}
-  \begin{itemize}
-    \item $h=0$ 是开通期冲击（保留真实观测），$h\ge 1$ 为之后的完整期
-    \item 逐网格标签用于表示学习；队列 ATT 用于计量报告，两者分开
+    \item 一致性：$Y=D\,Y(1)+(1-D)\,Y(0)$
+    \item 逐网格标签用于表示学习，队列 ATT 用于计量报告，两者分开
   \end{itemize}
 \end{frame}
 
 \begin{frame}{识别假设}
-  \begin{itemize}
-    \item \textbf{无提前反应}：清洁处理前窗口内 $Y(1)=Y(0)$（开通前 6 个月为预期缓冲）
-    \item \textbf{匹配路径的条件平行趋势}：
-      \[
-        E[\Delta Y_{i,t}(0)\mid T_i=1, X_i=x]
-        = E[\Delta Y_{j,t}(0)\mid C_j=1, X_j=x]
-      \]
-    \item \textbf{donor 未受处理与空间排除}：站点 1\,km 内网格不进入风险集
-    \item \textbf{共同支持}：逐特征区间覆盖；Mahalanobis 距离与 holdout 误差描述高维支持
-    \item \textbf{GSC 交互固定效应结构}：
-      $Y_{it}(0)=\alpha_i+\delta_t+\lambda_i'F_t+\varepsilon_{it}$，载荷稳定
-    \item \textbf{MC 低秩结构}：$Y(0)=L+E$，缺失模式保留处理前与 donor 支持
-  \end{itemize}
+  \small
+  \begin{tabular}{p{0.24\textwidth}p{0.68\textwidth}}
+    \toprule
+    假设 & 内容 \\
+    \midrule
+    无提前反应 & 清洁处理前窗口内 $Y(1)=Y(0)$；开通前 6 个月为预期缓冲 \\
+    条件平行趋势 & $E[\Delta Y_i(0)\mid T_i=1,X_i=x]=E[\Delta Y_j(0)\mid C_j=1,X_j=x]$ \\
+    空间排除 & 站点 1\,km 内的网格不进入 donor 风险集 \\
+    共同支持 & 逐特征区间覆盖；Mahalanobis 与 holdout 描述高维支持 \\
+    GSC 结构 & $Y_{it}(0)=\alpha_i+\delta_t+\lambda_i'F_t+\varepsilon_{it}$，载荷稳定 \\
+    MC 结构 & $Y(0)=L+E$ 低秩；缺失模式保留处理前与 donor 支持 \\
+    \bottomrule
+  \end{tabular}
 \end{frame}
 
-\begin{frame}{估计器（1）：匹配与 Abadie--Imbens ATT}
-  \begin{itemize}
-    \item Mahalanobis 距离
-      $d_{ij}=\sqrt{(X_i-X_j)'\hat\Sigma^{-1}(X_i-X_j)}$
-    \item 控制设计：M=5 候选 $\rightarrow$ 静态特征精炼 $\rightarrow$ 冻结控制身份
-    \item 质量门禁：训练距离、holdout $RMS$、$MAX$ 均不超过 placebo 的 95\% 分位
-    \item 月度标签（$B$ 为开通前 12 个清洁月均值）：
-      \[
-        L_{ikh}=(Y_{i,h}-B_i)-(Y_{j(i),h}-B_{j(i)})
-      \]
-    \item 完整趋势 ATT（Abadie--Imbens 偏差修正）：
-      \[
-        ATT=\frac{1}{N_T}\sum_i
-        \left[\Delta Y_i-\Delta Y_{j(i)}+(X_i-X_{j(i)})'\hat\beta\right]
-      \]
-  \end{itemize}
+\section{估计器与事件研究}
+
+\begin{frame}{估计器一览}
+  \small
+  \begin{tabular}{p{0.13\textwidth}p{0.41\textwidth}p{0.38\textwidth}}
+    \toprule
+    方法 & 反事实结构 & 推断 \\
+    \midrule
+    匹配 & M=5 候选 + 静态精炼，冻结控制身份 & placebo 门禁；完整 ATT 用 Abadie--Imbens 解析方差 \\
+    GSC & 交互固定效应；目标用处理前观测拟合 & 因子数 CV；200 次参数 bootstrap \\
+    MC & 核范数 + $\lambda$ 交叉验证 & 单位 jackknife（fect 等价） \\
+    \bottomrule
+  \end{tabular}
+  \medskip
+  \begin{block}{匹配质量门禁}
+    \small 训练距离、holdout $RMS$、$MAX$ 均不超过 placebo 分布的 95\% 分位
+  \end{block}
 \end{frame}
 
-\begin{frame}{估计器（2）：广义合成控制（Xu GSC）}
-  \begin{itemize}
-    \item 未处理结果由单位效应、时间效应与低维共同因子决定：
-      $Y_{it}(0)=\alpha_i+\delta_t+\lambda_i'F_t+\varepsilon_{it}$
-    \item 目标拟合：$Y_{i,t}=a_i+F_t'b_i+\varepsilon_{i,t}$，
-      $\hat Y_{i,t}(0)=\hat a_i+\hat F_t'\hat b_i$
-    \item 因子数：rolling CV，候选 $r=0,\dots,5$（MSPE + 1SE 规则）
-    \item 不确定性：200 次参数 bootstrap，$SE_t=sd(\tau_t^{(b)})$，正态区间
-    \item 跨城版本用城市内 median/MAD 标准化，再在目标尺度上反标准化
-  \end{itemize}
+\begin{frame}{匹配：距离、标签与完整 ATT}
+  \small
+  \begin{block}{Mahalanobis 距离}
+    \[
+      d_{ij}=\sqrt{(X_i-X_j)'\hat\Sigma^{-1}(X_i-X_j)}
+    \]
+  \end{block}
+  \begin{block}{月度标签（$B$ 为开通前 12 个清洁月均值）}
+    \[
+      L_{ikh}=(Y_{i,h}-B_i)-(Y_{j(i),h}-B_{j(i)})
+    \]
+  \end{block}
+  \begin{block}{完整趋势 ATT（Abadie--Imbens 偏差修正）}
+    \[
+      ATT=\frac{1}{N_T}\sum_i
+      \left[\Delta Y_i-\Delta Y_{j(i)}+(X_i-X_{j(i)})'\hat\beta\right]
+    \]
+  \end{block}
 \end{frame}
 
-\begin{frame}{估计器（3）：矩阵补全（MC）}
+\begin{frame}{GSC 与 MC：核心公式}
+  \begin{columns}[T]
+    \begin{column}{0.48\textwidth}
+      \begin{block}{GSC：因子结构与目标拟合}
+        \small
+        \[ Y_{it}(0)=\alpha_i+\delta_t+\lambda_i'F_t+\varepsilon_{it} \]
+        \[ Y_{i,t}=a_i+F_t'b_i+\varepsilon_{i,t} \]
+        因子 $r=0,\dots,5$：CV + 1SE
+      \end{block}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \begin{block}{MC：核范数与 jackknife}
+        \small
+        \[ \min_L\ \tfrac{1}{|\Omega|}\sum_{\Omega}(Y_{it}-L_{it})^2
+        +\lambda\|L\|_* \]
+        \[ SE_t^{JK}=\sqrt{\operatorname{var}(p_t^{(-j)})/N_t} \]
+        $N_t$：事件期有效重拟合次数
+      \end{block}
+    \end{column}
+  \end{columns}
+  \medskip
   \begin{itemize}
-    \item 核范数目标：
-      \[
-        \min_L\ \frac{1}{|\Omega|}\sum_{(i,t)\in\Omega}(Y_{it}-L_{it})^2
-        +\lambda\|L\|_*
-      \]
-    \item 两向固定效应初始化 + 奇异值软阈值
-      $s_l^{\text{shrunk}}=\max(s_l-\lambda TN,\,0)$
-    \item $\lambda$：rolling CV（20 折、1SE 规则），$\lambda=0$ 为合法端点
-    \item 单位 jackknife 推断：$N_t$ 为事件期有效重拟合次数
-      \[
-        p_t^{(-j)}=N_t\hat\tau_t-(N_t-1)\hat\tau_t^{(-j)},\qquad
-        SE_t^{JK}=\sqrt{\operatorname{var}(p_t^{(-j)})/N_t}
-      \]
+    \item GSC：$\hat Y(0)=\hat a_i+\hat F_t'\hat b_i$；$SE_t=sd(\tau_t^{(b)})$
+    \item MC：奇异值软阈值；$\lambda=0$ 为合法端点
   \end{itemize}
 \end{frame}
 
 \begin{frame}{事件研究与平行趋势}
+  \small
+  \begin{block}{TWFE 事件研究，参考期 $h_0=-1$}
+    \[
+      Y_{it}=\alpha_i+\gamma_t+\sum_{h\neq h_0}\beta_h
+      \left[Treated_i\cdot\mathbf{1}(\text{event\_time}=h)\right]+\varepsilon_{it}
+    \]
+  \end{block}
+  \begin{block}{规范窗口与联合检验}
+    月度族 $\pm24$；年度族 $[-6,+3]$；参考期前 5 个 clean lead（$-6..-2$）
+    \[
+      F=q^{-1}\hat\beta_{pre}'\hat V_{pre}^{-1}\hat\beta_{pre}
+      \sim F(q,\,G-1)
+    \]
+  \end{block}
   \begin{itemize}
-    \item TWFE 事件研究（匹配样本）：
-      \[
-        Y_{it}=\alpha_i+\gamma_t+\sum_{h\neq h_0}\beta_h
-        \left[Treated_i\cdot \mathbf{1}(\text{event\_time}=h)\right]+\varepsilon_{it}
-      \]
-    \item 参考期 $h_0=-1$；$t=0$ 为正式冲击期；干净 lead 只用 $t<0$
-    \item 预注册规范窗口：月度族 $\pm 24$；年度族 $[-6,\,+3]$
-    \item 平行趋势联合检验：参考期前 5 个 clean lead（$-6..-2$）
-      \[
-        F=q^{-1}\hat\beta_{pre}'\hat V_{pre}^{-1}\hat\beta_{pre}
-        \sim F(q,\,G-1)
-      \]
-    \item 聚类：CRV1（grid / city）；主解释使用城市聚类
+    \item 聚类：CRV1（grid / city），主解释用城市聚类
+    \item pre-trend 是诊断，不作为标签门槛
   \end{itemize}
 \end{frame}
 
-\begin{frame}{生产与发布}
-  \begin{itemize}
-    \item 5{,}048 个站点；20{,}192 个 family 级任务全部终态
-    \item 终态队列：9{,}162 skipped；7{,}553 matched；2{,}322 GSC；1{,}155 MC
-    \item 226 个零提前期锚点的 MC 任务降级为 skipped
-      （housing 2 / POI 131 / population 93）
-    \item Response Artifact：136{,}296 行，覆盖四族、方法、scope 与规格指纹
-    \item 发布带输入哈希与资格凭证，标签与诊断可逐行溯源
-  \end{itemize}
-\end{frame}
+\section{结果}
 
 \begin{frame}{独立聚合原则}
   \begin{itemize}
-    \item 分析单元 = \textbf{family $\times$ method $\times$ donor scope}，各自独立聚合
-    \item Matching：同城与跨城两个 scope 分别估计
-    \item Pooled GSC/MC：同城与跨城行分别聚合，不跨 scope 混用
-    \item 样本量不足以估计的组合记为 \texttt{no\_data} 并写明原因，
-      不主动舍弃、不影响其他组合
-    \item 本例：跨城匹配 VIIRS 13、POI 16、population 61；
-      housing 无跨城 matched 标签，记 \texttt{no\_data}
+    \item 分析单元：\key{family $\times$ method $\times$ donor scope}，各自独立聚合
+    \item 匹配与 pooled GSC/MC 均按 same-city / cross-city 分开
+    \item 样本不足以估计的组合记 \texttt{no\_data} 并写明原因，不主动舍弃
+    \item 本例：跨城匹配 VIIRS 13、POI 16、population 61；housing 记 \texttt{no\_data}
   \end{itemize}
 \end{frame}
 
-\begin{frame}{结果（1）：同城匹配事件研究}
-  \begin{table}
-    \centering
-    \small
-    \begin{tabular}{lrrrr}
-      \toprule
-      结果族 & 处理事件数 & 城市簇 & 城市聚类 pre-trend $p$ & 窗口覆盖 \\
-      \midrule
-      housing    & 110  & 17 & 0.055 & 0.727 \\
-      VIIRS      & 2{,}267 & 43 & 0.063 & 1.000 \\
-      POI        & 2{,}478 & 44 & 0.072 & 0.9996 \\
-      population & 2{,}608 & 44 & 0.328 & 1.000 \\
-      \bottomrule
-    \end{tabular}
-  \end{table}
-  \vspace{0.4em}
+\begin{frame}{结果：同城匹配事件研究}
+  \small
+  \begin{tabular}{lrrrr}
+    \toprule
+    结果族 & 处理事件数 & 城市簇 & 城市聚类 pre-trend $p$ & 窗口覆盖 \\
+    \midrule
+    housing & 110 & 17 & 0.055 & 0.727 \\
+    VIIRS & 2{,}267 & 43 & 0.063 & 1.000 \\
+    POI & 2{,}478 & 44 & 0.072 & 0.9996 \\
+    population & 2{,}608 & 44 & 0.328 & 1.000 \\
+    \bottomrule
+  \end{tabular}
+  \medskip
   \begin{itemize}
-    \item 覆盖 = 规范窗口内最大 $n_{\text{treated}}$ / 可用性阶段处理事件数
-    \item 城市聚类联合检验均未拒绝；housing/ VIIRS / POI 为边缘（$p<0.1$）
+    \item 联合检验均未拒绝；housing / VIIRS / POI 为边缘（$p<0.1$）
+    \item 覆盖 $=$ 规范窗口内最大 $n_{\text{treated}}$ / 可用性阶段处理事件数
   \end{itemize}
 \end{frame}
 
-\begin{frame}{结果（2）：跨城与 pooled 路径}
+\begin{frame}{结果：跨城与 pooled}
+  \small
   \begin{itemize}
-    \item 跨城匹配：VIIRS 13、POI 16、population 61 个处理事件独立成面板
-    \item Pooled GSC/MC：1{,}582 个处理任务；方法与 scope 分行聚合
-    \item pooled 准入拒绝 46/7{,}221：
-      {\small unsupported\_estimator 3；labels\_hash\_mismatch 3；reference\_period\_missing 40}
-    \item 四族方法对比图与支持/覆盖表随套件一并产出
+    \item 跨城匹配独立面板：VIIRS 13、POI 16、population 61
+    \item pooled GSC/MC：1{,}582 个处理任务，方法/scope 分行聚合
+    \item pooled 准入拒绝 46/7{,}221（unsupported 3；hash 3；reference 缺失 40）
+    \item 四族方法对比图、事件期支持表与覆盖表随套件产出
   \end{itemize}
-  \vspace{0.5em}
-  \begin{block}{解读要点}
-    事件研究是聚合诊断而非标签门槛；跨城与 pooled 样本有限，
-    保持独立报告，不与同城主规格混合。
+  \medskip
+  \begin{block}{解读}
+    \small 事件研究是聚合诊断；跨城与 pooled 样本有限，保持独立报告，不并入主规格。
   \end{block}
 \end{frame}
 
-\begin{frame}{结果（3）：封版与下游选择}
+\begin{frame}{封版与下游选择}
+  \small
   \begin{itemize}
-    \item 统一长表：565 行 = family $\times$ method $\times$ scope $\times$ outcome $\times$ event time
-      （规范窗口内）
-    \item 可用性：24 格 = 20 available + 4 \texttt{no\_data}（全部为 housing：
-      跨城匹配 + pooled 缺失格），原因逐行写清
-    \item 一致性校验通过：窗口内最大 $n_{\text{treated}}$ 从不超过可用性计数
-    \item 下游 causal supervision 选择 \textbf{VIIRS + POI}；
-      housing / population 已分析但不进入下游监督
+    \item 统一长表 565 行：family $\times$ method $\times$ scope $\times$ outcome $\times$ event time
+    \item 可用性 24 格 $=$ 20 available $+$ 4 \texttt{no\_data}（均为 housing），逐行写原因
+    \item 一致性校验：窗口内最大 $n_{\text{treated}}$ 不超过可用性计数
+    \item 下游监督选择 \key{VIIRS $+$ POI}；housing / population 已分析但不进入
   \end{itemize}
 \end{frame}
 
-\begin{frame}{标签获取：任务、标签定义与发布}
+\section{标签与权重}
+
+\begin{frame}{标签获取}
+  \small
   \begin{itemize}
-    \item 每个任务产出同一结果族、同一事件期的观测与反事实，标签
-      $L=Y-\hat Y(0)$
-    \item 期限：housing / VIIRS $\{1,3,6,12,18,24\}$ 个月；
-      population $\{1,2,3\}$ 年；POI 四个 outcome $\times$ $\{1,2,3\}$ 年
-    \item 方法：冻结匹配（\texttt{frozen\_matched\_change}）、
-      GSC（\texttt{xu\_2017\_gsynth}）、MC（\texttt{athey\_2021\_mc}）
-    \item 每个标签伴随：方法、标准误、可用性、质量分级与处理前拟合诊断
-    \item 发布后形成 27 维响应签名；本次训练只启用 VIIRS 与 POI 的维度
+    \item 每任务：观测减反事实，$L=Y-\hat Y(0)$
+    \item 期限：housing / VIIRS 月 $\{1,3,6,12,18,24\}$；population 年 $\{1,2,3\}$；
+      POI 四个 outcome $\times$ 年 $\{1,2,3\}$
+    \item 方法：冻结匹配、GSC、MC；同城与跨城 scope 独立
+    \item 每个标签保存方法、标准误、可用性、质量分级与处理前拟合诊断
+    \item 发布后形成 27 维响应签名；本次仅启用 VIIRS 与 POI 维度
   \end{itemize}
 \end{frame}
 
-\begin{frame}{权重分配：可靠性权重}
+\begin{frame}{权重生成逻辑}
+  \small
   \[
-    W_i=A_i\cdot\exp(-\gamma D_i)\cdot\left(p_i^{SE}\right)^{\alpha}
+    W_i=A_i\cdot\exp(-\gamma D_i)\cdot(p_i^{SE})^{\alpha}
+  \]
+  \begin{tabular}{p{0.2\textwidth}p{0.74\textwidth}}
+    \toprule
+    项 & 规则 \\
+    \midrule
+    资格 $A_i$ & 不可用 / 零提前期锚点 / 匹配 holdout 越界 $\rightarrow 0$；其余为 1 \\
+    设计 $D_i$ & 可用诊断百分位的行均值（trend / holdout / validation），
+      分层 $(method,outcome)\to(method,family)\to method\to global$，$n\ge30$ \\
+    精度 $p_i^{SE}$ & $1/SE^2$ 在 $method\times outcome$ 内 1\%/99\% 缩尾并均值归一；
+      匹配与无 SE 标签取 1 \\
+    收尾 & $method\times family$ 内缩尾 $+$ 均值归一；仅资格失败恰为 0 \\
+    \bottomrule
+  \end{tabular}
+  \medskip
+  \begin{itemize}
+    \item task sampling weight $=$ eligible 标签权重的最小值（仅供采样）
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{权重版本与数据集}
+  \small
+  \begin{tabular}{llll}
+    \toprule
+    版本 & 权重 & 用途 & 数据集 \\
+    \midrule
+    W0 & 单位（$\gamma=0,\alpha=0$） & 基线 & 待建 \\
+    W-design & design-only（$\alpha=0$） & \key{主训练} & \texttt{viirs-poi-design} \\
+    W-full & design $\times$ precision（$\alpha=0.5$） & 消融 & \texttt{viirs-poi-full} \\
+    \bottomrule
+  \end{tabular}
+  \medskip
+  \begin{itemize}
+    \item 核验：各方法 $\times$ 族内 eligible 均值 $1$；eligible 无零、ineligible 无正值
+    \item POI 四个 outcome 权重独立；W-full 的 precision 覆盖 19{,}726 / 90{,}864 单元
+  \end{itemize}
+\end{frame}
+
+\section{表示学习}
+
+\begin{frame}{表示学习（1）：目标与监督信号}
+  \small
+  \begin{block}{学习目标}
+    $f:$ 处理前特征 $\to \mathbb{R}^d$，使嵌入近邻与
+    \key{因果响应签名相似度}一致，并迁移到未见城市
+  \end{block}
+  \begin{itemize}
+    \item 响应签名 $r_i=(L_{i,k,h})$：跨 outcome 与 horizon 的估计效应向量
+    \item 相似度：共同观测单元上的加权相关；本案仅启用 VIIRS 与 POI 维度
+    \item 输入只用处理前特征（lag 1--3，训练城市拟合标准化），无泄漏
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{表示学习（2）：模型与损失}
+  \small
+  \begin{itemize}
+    \item 结构：表格 MLP（可选 DINOv2 街景分支）$\to$ 融合 $\to$ 128 维归一化嵌入
+      $\to$ 每族预测头
+    \item 配对权重 $a_{ijk}=m_{ijk}\sqrt{w_{ik}w_{jk}}$；无共同可靠 support 的 pair
+      从 InfoNCE 分母剔除
+  \end{itemize}
+  \[
+    L=(1-\lambda)\,L_{rep}+\lambda\,L_{pred},\qquad
+    L_{pred}=\frac{\sum m\,w\,\ell}{\sum m\,w}
   \]
   \begin{itemize}
-    \item \textbf{资格 $A_i$}（硬边界）：标签不可用 / 零提前期锚点 /
-      匹配 holdout 越界 $\rightarrow 0$；其余为 1
-    \item \textbf{设计不可靠度 $D_i$}：可用诊断百分位的行均值
-      \begin{itemize}
-        \item \texttt{p\_trend}：前趋势偏离 $\sqrt{\max(\text{pre\_rmspe}^2-\text{pre\_mean\_effect}^2,0)}$
-        \item \texttt{p\_holdout}：匹配 holdout 比率；\texttt{p\_validation}：MC 的 CV MSPE
-        \item 分层 $(method,outcome)\to(method,family)\to method\to global$，$n\ge 30$
-      \end{itemize}
-    \item \textbf{精度项 $p_i^{SE}$}：$1/SE^2$ 在 $(method,outcome)$ 内
-      1\%/99\% 缩尾并均值归一；匹配与无 SE 标签取 1
-    \item 最终：$(method,family)$ 内缩尾 + 均值归一；只有资格失败恰为 0
+    \item $L_{rep}$：InfoNCE（正样本权重 $=$ 响应相似度，按 $1/(1+SE^2)$ 收缩）
+      $+$ 嵌入--相似度 MSE
+    \item 协议：城市级划分、\texttt{final\_training\_mask}、AdamW + cosine、
+      按验证 loss 选优、多 seed
   \end{itemize}
 \end{frame}
 
-\begin{frame}{权重版本与训练数据集}
-  \begin{table}
-    \centering
-    \small
-    \begin{tabular}{llll}
-      \toprule
-      版本 & 权重 & 用途 & 数据集 \\
-      \midrule
-      W0 & 单位（$\gamma=0,\alpha=0$） & 无设计区分基线 & 待建 \\
-      W-design & design-only（$\alpha=0$） & \textbf{主训练} & \texttt{viirs-poi-design} \\
-      W-full & design $\times$ precision（$\alpha=0.5$） & 消融 & \texttt{viirs-poi-full} \\
-      \bottomrule
-    \end{tabular}
-  \end{table}
-  \vspace{0.4em}
+\begin{frame}{表示学习（3）：评测协议与判据}
+  \small
   \begin{itemize}
-    \item 核验：各方法 $\times$ 结果族内 eligible 均值恰为 1；
-      eligible 无零、ineligible 无正值
-    \item POI 四个 outcome 权重独立（不被 task 级最小值拉平）
-    \item W-full 中 precision 覆盖 19{,}726 / 90{,}864 个标签单元，权重与 design 不同
+    \item 检索：\texttt{nn\_corr@k}（总体 + 逐族）与随机近邻基线
+    \item 对照基线：随机投影（机会）、PCA（外观几何）、冻结 DINOv2、外观自编码器
+    \item 稳健性：置换检验 $p$ 值、bootstrap 区间
+    \item 迁移：城市留出 \texttt{per\_city}、少样本探针曲线、交叉验证探针、
+      响应方向 AUC
+    \item 成功判据：显著超过全部基线、未见城市一致、跨 seed 稳定
   \end{itemize}
-\end{frame}
-
-\begin{frame}{表示学习（简述）}
-  \begin{itemize}
-    \item 目标：$f:$ 处理前特征 $\rightarrow$ 嵌入；嵌入近邻与
-      \textbf{因果响应签名相似度}一致，并迁移到未见城市
-    \item 监督：响应签名相关（共同观测单元上的相关）；配对权重
-      $\sqrt{w_i w_j}$（设计可靠性），并按 $1/(1+SE^2)$ 收缩噪声标签
-    \item 损失：InfoNCE（正样本权重 = 响应相似度）+ 嵌入距离 MSE + 多任务预测 MSE
-    \item 评测：\texttt{nn\_corr@k} + 机会水平/PCA/冻结 DINOv2/外观自编码器基线，
-      置换检验、bootstrap、城市留出迁移探针与响应方向 AUC
-    \item 当前：正跑 W-design 主版本，随后 W0 / W-full 消融
-  \end{itemize}
+  \medskip
+  \begin{block}{当前}
+    \small W-design 主版本训练中，随后 W0 / W-full 消融；估计器开源包在规划中。
+  \end{block}
 \end{frame}
 
 \begin{frame}{阶段状态与下一步}
+  \small
   \begin{itemize}
-    \item 已完成：四族事件研究封版（含跨城与 pooled）、严格发布、
-      两个逐标签权重数据集（design / full）
+    \item 已完成：四族事件研究封版（同城 + 跨城 + pooled）、严格发布、
+      两个权重数据集
     \item 进行中：表示学习训练与消融（W-design / W0 / W-full）
-    \item 计划：把 Python/GPU 估计器整理为独立开源包
-      （R parity 认证、Apache-2.0），作为额外 contribution
+    \item 计划：Python/GPU 估计器开源包（R parity 认证、Apache-2.0），
+      作为额外 contribution
   \end{itemize}
 \end{frame}
 

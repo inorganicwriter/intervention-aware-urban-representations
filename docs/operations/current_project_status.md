@@ -121,20 +121,32 @@ multiple independent writers.
 ## Current phase (analysis closure, 2026-09)
 
 Phase 1 and Phase 2 are complete and the strict causal release is published
-(`data/active/causal/releases/production`, 136,296 rows, server
-working copy).  The remaining work is the analysis-stage closure, then
-training:
+(`data/active/causal/releases/production`, 136,296 rows, server working copy).
+The terminal queue was recovered from the QC pre-demotion backup plus the 226
+MC demotions (skipped 9,162 / matched_labelled 7,553 / gsc_labelled 2,322 /
+mc_labelled 1,155) and the code-package unzip is always applied with
+`-x 'data/active/causal/*queue*.csv'` so server state is never rolled back.
 
-1. Four-family event-study final release
-   ([`event_study_final_runbook.md`](event_study_final_runbook.md));
-2. VIIRS+POI pretraining dataset build with design-only weights
-   (`build_pretraining_dataset.py --families viirs,poi --weight-alpha 0`);
-3. per-label weight verification and the `training_ready` freeze
-   ([`training_release_checklist.md`](training_release_checklist.md));
-4. server training (W0 / W-design / W-full) after the local freeze.
+Completed analysis stage (2026-09-29):
 
-Server deployment does not start before the local release is frozen; the
-checklist is kept in `training_release_checklist.md`.
+1. Four-family event-study suite re-run with the recovered queues
+   (`outputs/event_study_suite` on the server): same-city matching completed
+   for housing 110 / viirs 2,267 / poi 2,478 / population 2,608; cross-city
+   matching completed for viirs 13 / poi 16 / population 61 with housing
+   `no_data` (no cross-city matched labels); pooled GSC/MC 1,582 treatments;
+   four-family figures completed.  The frozen release was exported locally
+   (`outputs/event_study_final`, validation ok, 24 availability cells with
+   4 housing `no_data` reasons, downstream families viirs + poi; see
+   [`event_study_final_runbook.md`](event_study_final_runbook.md) §7).
+2. Pretraining datasets built with per-label reliability weights:
+   `data/active/model_inputs/viirs-poi-design` (`alpha=0`, main) and
+   `viirs-poi-full` (`alpha=0.5`, ablation); per-stratum eligible means are
+   exactly 1, ineligible labels are exactly 0, and POI keeps four independent
+   outcome weights (see [`../research/label_reliability_weights.md`](../research/label_reliability_weights.md)).
+
+Next: representation training (W-design main, then W0 / W-full ablations) and
+evaluation; the server checklist lives in
+[`training_release_checklist.md`](training_release_checklist.md).
 
 The code checks are in place: all queue entry points default to `python_gpu`,
 startup prints the selected backend, and Response Artifact publication validates

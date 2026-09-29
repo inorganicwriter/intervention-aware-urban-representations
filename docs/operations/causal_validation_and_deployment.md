@@ -237,9 +237,11 @@ Phase 2 已完成并发布严格 release（见
 
 Phase 1/Phase 2 已在服务器完成，严格 release
 `data/active/causal/releases/production` 已发布（含两个 drift
-waiver）。分析阶段最后一步是四族统一封版：按规范窗口重跑
-`run_all_method_event_study.py`，再用 `export_event_study_final.py` 生成
-`mit_event_study_final.zip`。完整命令、下载清单与验收门槛见
-[`event_study_final_runbook.md`](event_study_final_runbook.md)；服务器训练
-前置检查与 checklist 见
+waiver）。四族封版已于 2026-09-29 完成：按规范窗口重跑
+`run_all_method_event_study.py`（同城四族 + 跨城 viirs/poi/population，
+housing 跨城无 matched 标签记 `no_data`），再由
+`export_event_study_final.py` 生成 `mit_event_study_final.zip`
+（validation ok）。完整命令、下载清单与验收门槛见
+[`event_study_final_runbook.md`](event_study_final_runbook.md)（封版记录见
+§7）；服务器训练前置检查与 checklist 见
 [`training_release_checklist.md`](training_release_checklist.md)。

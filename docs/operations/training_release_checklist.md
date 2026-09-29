@@ -39,12 +39,16 @@ blocker。详见 `docs/research/label_reliability_weights.md`。
   （512×8192）也无 OOM、无碎片尖峰。**无需 queue chunking**，权重数学
   定义保持不变。脚本可复跑：
   `python scripts/representation/smoke_weighted_training.py --batch-size 256 --queue-size 4096 --steps 30`。
-- [ ] 四族 ES 服务器重跑与封版（见
-  `docs/operations/event_study_final_runbook.md`）
-- [ ] VIIRS+POI label 提取（见第 3 节命令）
-- [ ] 逐标签权重核验（见第 3 节清单）
-- [ ] 冻结 `training_ready` 发布（名称按内容，不带版本号）
-- [ ] 服务器部署（第 3 节）
+- [x] 四族 ES 服务器重跑与封版（2026-09-29；10 组件 9 completed +
+  housing 跨城 `no_data`；本地封版 `outputs/event_study_final`，validation
+  ok；记录见 `docs/operations/event_study_final_runbook.md` §7）
+- [x] VIIRS+POI label 提取：`data/active/model_inputs/viirs-poi-design`
+  （`--families viirs,poi --weight-alpha 0`）
+- [x] 逐标签权重核验：每层 eligible 均值 1.0、eligible zero 0、ineligible
+  non-zero 0、POI 4 个 outcome 独立；W-full 另测 precision 覆盖
+  19,726/90,864 cells 且权重与 design 不同
+- [x] 冻结 `training_ready` 发布（代码 `dca5e43` + 文档 `a88517d`，名称按内容）
+- [ ] 服务器训练（W-design 主版本进行中；随后 W0 / W-full 消融）
 
 ## 3. 服务器 checklist（暂不执行）
 

@@ -123,3 +123,21 @@ python scripts/analysis/recover_causal_queues.py \
 
 生产任务根仍用原来的 `--matching-task-root`（默认
 `outputs/causal_labels/tasks`）；不重算任何匹配。
+
+## 7. 封版记录（2026-09-29 首次完整运行）
+
+- 服务器 suite：`outputs/event_study_suite`，10 个组件 9 completed + 1 no_data：
+  - same-city matching：housing 110 / viirs 2,267 / poi 2,478 / population 2,608
+  - cross-city matching：viirs 13 / poi 16 / population 61；housing `no_data`
+    （没有跨城 matched 标签）
+  - pooled GSC/MC：1,582 treatments；四族合并图完成
+- pooled 准入拒绝 46/7,221（`unsupported_estimator=3`、`labels_hash_mismatch=3`、
+  `reference_period_missing=40`），计数写入 `gsc_mc_paths/diagnostics.csv`
+- 本地封版：`outputs/event_study_final`（panel 565 / availability 24 /
+  pretrend 64 / selection 4），`validation.json` ok，
+  `outputs/mit_event_study_final.zip`
+- availability：24 格 = 20 available + 4 housing `no_data`（跨城 matching、
+  pooled GSC 的两个 scope、MC 跨城）；housing 与 viirs 的 MC same-city 带
+  `insufficient_clusters` 警告（部分事件期城市簇 <3）
+- 同城 city-cluster 平行趋势 p：housing 0.055、viirs 0.063、poi 0.072、
+  population 0.328；downstream 选择 viirs + poi

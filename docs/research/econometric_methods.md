@@ -406,10 +406,10 @@ MAX_i <= q95(MAX_placebo)
 L_ikh = (Y_i,k,G_i+h - B_i,k) - (Y_j(i),k,G_i+h - B_j,k)
 ```
 
-月度 (B) 使用最近的清洁处理前块统计量。年度主标签使用开通前一年作为 baseline：
+月度 \(B_{i,k}\) 为该网格在 `baseline_12m`（开通前 12 个清洁处理前月）上的结果均值。年度主标签使用开通前一年（`opening_year - 1`）作为 baseline：
 
 ```text
-L_ikh = (Y_i,k,G_i+h - Y_i,k,G_i-1) - (Y_j(i),k,G_i+h - Y_j(i),G_i-1)
+L_ikh = (Y_i,k,G_i+h - Y_i,k,G_i-1) - (Y_j(i),k,G_i+h - Y_j(i),k,G_i-1)
 ```
 
 缺失目标期和缺失 donor 期会使该期 `label_available = FALSE`。可用标签保留 0 值和接近 0 的值。

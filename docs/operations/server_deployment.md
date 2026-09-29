@@ -212,7 +212,7 @@ conda run -n mit python scripts/causal_r/build_pretraining_dataset.py \
 
 ```bash
 conda run -n mit urban-train-representation \
-  data/model_inputs/viirs-poi-design \
+  data/active/model_inputs/viirs-poi-design \
   --output outputs/representation/viirs-poi-design \
   --epochs 100 --device cuda \
   2>&1 | tee outputs/representation/viirs-poi-design.log

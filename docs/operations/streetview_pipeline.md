@@ -42,9 +42,12 @@ python scripts/collection/build_streetview_index.py --city all
 ```bash
 python scripts/causal_r/build_pretraining_dataset.py \
   --response-release data/active/causal/releases/production \
-  --dataset-id viirs-poi-design-sv --families viirs,poi --weight-alpha 0 \
+  --dataset-id viirs-mg-design-sv --families viirs --methods matched,gsc --weight-alpha 0 \
   --streetview-index data/active/streetview/streetview_index.parquet
 ```
+
+逐族构建：`viirs-mg-design-sv` / `poi-mg-design-sv`（`--families viirs|poi`，
+方法与权重与主数据集一致）。
 
 `unit_features.parquet` 会多出 `streetview_assets`（JSON 路径列表）与
 `streetview_available`。拍摄日期严格早于开通月的图片才会写入；同格多图按日期
@@ -53,7 +56,7 @@ python scripts/causal_r/build_pretraining_dataset.py \
 ```bash
 python - <<'PY'
 import pandas as pd
-u = pd.read_parquet("data/active/model_inputs/viirs-poi-design-sv/unit_features.parquet")
+u = pd.read_parquet("data/active/model_inputs/viirs-mg-design-sv/unit_features.parquet")
 ok = u["streetview_assets"].ne("[]")
 print("coverage:", int(ok.sum()), "/", len(u))
 print(u.loc[ok, "streetview_assets"].head(2).tolist())
@@ -63,8 +66,8 @@ PY
 ## 4. 训练
 
 ```bash
-conda run -n mit urban-train-representation data/active/model_inputs/viirs-poi-design-sv \
-  --output outputs/representation/viirs-poi-design-sv \
+conda run -n mit urban-train-representation data/active/model_inputs/viirs-mg-design-sv \
+  --output outputs/representation/viirs-mg-design-sv \
   --use-images --max-images 4 --image-pooling max \
   --batch-size 64 --device cuda --epochs 100 --seeds 1 2 3
 ```

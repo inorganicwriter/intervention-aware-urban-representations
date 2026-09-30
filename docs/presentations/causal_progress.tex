@@ -343,14 +343,15 @@
     版本 & 权重 & 用途 & 数据集 \\
     \midrule
     W0 & 单位（$\gamma=0,\alpha=0$） & 基线 & 待建 \\
-    W-design & design-only（$\alpha=0$） & \key{主训练} & \texttt{viirs-poi-design} \\
-    W-full & design $\times$ precision（$\alpha=0.5$） & 消融 & \texttt{viirs-poi-full} \\
+    W-design & design-only（$\alpha=0$） & \key{主训练} & \texttt{viirs-mg-design}、\texttt{poi-mg-design} \\
+    W-full & design $\times$ precision（$\alpha=0.5$） & 消融 & \texttt{*-mg-full} \\
     \bottomrule
   \end{tabular}
   \medskip
   \begin{itemize}
+    \item 逐族独立：VIIRS（6 维监督）与 POI（12 维监督）各训一个模型
     \item 核验：各方法 $\times$ 族内 eligible 均值 $1$；eligible 无零、ineligible 无正值
-    \item POI 四个 outcome 权重独立；W-full 的 precision 覆盖 19{,}726 / 90{,}864 单元
+    \item POI 四个 outcome 权重独立；构建后按 runbook 逐项记录
   \end{itemize}
 \end{frame}
 

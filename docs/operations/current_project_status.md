@@ -133,12 +133,13 @@ The analysis stage is closed:
 2. the frozen release is exported through `export_event_study_final.py`
    (canonical windows, availability, pre-trends, family selection, manifest)
    with validation passing;
-3. pretraining datasets are built with per-label reliability weights:
-   `data/active/model_inputs/viirs-poi-design` (design-only, main) and
-   `viirs-poi-full` (`alpha = 0.5`, ablation).
+3. pretraining datasets carry per-label reliability weights; the earlier joint
+   build (`viirs-poi-design` / `viirs-poi-full`) is superseded by the
+   per-family, same-city matched+GSC pipeline (`viirs-mg-design` /
+   `poi-mg-design`; ablations `*-mg-w0` / `*-mg-full` / `*-3m-design`).
 
-Next: representation training (W-design main, then W0 / W-full ablations) and
-evaluation; the server checklist lives in
+Next: per-family representation training (W-design main, then the ablation
+matrix) and evaluation; the server checklist lives in
 [`training_release_checklist.md`](training_release_checklist.md).
 
 The code checks are in place: all queue entry points default to `python_gpu`,

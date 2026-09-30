@@ -42,11 +42,12 @@ blocker。详见 `docs/research/label_reliability_weights.md`。
 - [x] 四族 ES 服务器重跑与封版（跨城 `no_data` 属正常；本地封版
   `outputs/event_study_final`，validation 通过；见
   `docs/operations/event_study_final_runbook.md`）
-- [x] VIIRS+POI label 提取：`data/active/model_inputs/viirs-poi-design`
-  （`--families viirs,poi --weight-alpha 0`）
-- [x] 逐标签权重核验（第 3 节清单全部通过；`viirs-poi-full` 消融版一并核验）
+- [ ] 逐族数据集构建（服务器，同城 matched+GSC）：`viirs-mg-design` /
+  `poi-mg-design`（`--families viirs|poi --methods matched,gsc --weight-alpha 0`）；
+  消融 `*-mg-w0` / `*-mg-full` / `*-3m-design` 随后
+- [ ] 逐标签权重核验（每个数据集单独跑第 3 节清单）
 - [x] 冻结 `training_ready` 发布（名称按内容，不带版本号）
-- [ ] 服务器训练（W-design 主版本；随后 W0 / W-full 消融）
+- [ ] 服务器训练（逐族独立、W-design 主版本；随后消融）
 
 ## 3. 服务器 checklist
 

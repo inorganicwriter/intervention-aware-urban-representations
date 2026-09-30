@@ -198,7 +198,10 @@ conda run -n mit python scripts/causal_r/run_parallel_production.py \
 conda run -n mit python scripts/causal_r/build_response_artifact.py --release-id production
 conda run -n mit python scripts/causal_r/build_pretraining_dataset.py \
   --response-release data/active/causal/releases/production \
-  --dataset-id viirs-poi-design --families viirs,poi --weight-alpha 0
+  --dataset-id viirs-mg-design --families viirs --methods matched,gsc --weight-alpha 0
+conda run -n mit python scripts/causal_r/build_pretraining_dataset.py \
+  --response-release data/active/causal/releases/production \
+  --dataset-id poi-mg-design --families poi --methods matched,gsc --weight-alpha 0
 ```
 
 封版路径固定为 `data/active/causal/releases/production`，不要在目录名里加日期。
@@ -212,11 +215,20 @@ conda run -n mit python scripts/causal_r/build_pretraining_dataset.py \
 
 ```bash
 conda run -n mit urban-train-representation \
-  data/active/model_inputs/viirs-poi-design \
-  --output outputs/representation/viirs-poi-design \
-  --epochs 100 --device cuda \
-  2>&1 | tee outputs/representation/viirs-poi-design.log
+  data/active/model_inputs/viirs-mg-design \
+  --output outputs/representation/viirs-mg-design \
+  --epochs 100 --device cuda --seeds 1 2 3 \
+  2>&1 | tee outputs/representation/viirs-mg-design.log
+conda run -n mit urban-train-representation \
+  data/active/model_inputs/poi-mg-design \
+  --output outputs/representation/poi-mg-design \
+  --epochs 100 --device cuda --seeds 1 2 3 \
+  2>&1 | tee outputs/representation/poi-mg-design.log
 ```
+
+逐族独立训练是当前口径：VIIRS（6 维监督）与 POI（12 维监督）各训一个模型；
+核验、冒烟与消融矩阵见
+[`per_family_training_runbook.md`](per_family_training_runbook.md)。
 
 每轮输出 `Epoch x/100 | train/val loss | nn_corr@5 | lr`；终局产物
 `best_model.pt`、`training_history.json`、`test_metrics.json`。

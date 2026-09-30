@@ -86,21 +86,32 @@
 
 ## 5. 复现命令
 
+逐族独立训练（当前主口径；数据集构建、核验、冒烟与消融矩阵见
+[`../operations/per_family_training_runbook.md`](../operations/per_family_training_runbook.md)）：
+
 ```powershell
 conda run -n mit python scripts/causal_r/build_pretraining_dataset.py `
   --response-release data/active/causal/releases/production `
-  --dataset-id viirs-poi-design --families viirs,poi --weight-alpha 0
-conda run -n mit urban-train-representation data/active/model_inputs/viirs-poi-design `
-  --output outputs/representation/main --epochs 100 --use-images --seeds 1 2 3
-conda run -n mit urban-run-ablation data/active/model_inputs/viirs-poi-design --specs specs.json
-conda run -n mit urban-build-model-card outputs/representation/main
-conda run -n mit urban-export-embeddings outputs/representation/main/best_model.pt `
-  data/active/model_inputs/viirs-poi-design --output outputs/representation/embeddings.parquet
-conda run -n mit urban-run-ablation data/active/model_inputs/viirs-poi-design `
+  --dataset-id viirs-mg-design --families viirs --methods matched,gsc --weight-alpha 0
+conda run -n mit python scripts/causal_r/build_pretraining_dataset.py `
+  --response-release data/active/causal/releases/production `
+  --dataset-id poi-mg-design --families poi --methods matched,gsc --weight-alpha 0
+conda run -n mit urban-train-representation data/active/model_inputs/viirs-mg-design `
+  --output outputs/representation/viirs-mg-design --epochs 100 --seeds 1 2 3
+conda run -n mit urban-train-representation data/active/model_inputs/poi-mg-design `
+  --output outputs/representation/poi-mg-design --epochs 100 --seeds 1 2 3
+conda run -n mit urban-summarize-runs outputs/representation/viirs-mg-design/seed_* `
+  outputs/representation/poi-mg-design/seed_* --output outputs/representation/summary
+conda run -n mit urban-build-model-card outputs/representation/viirs-mg-design/seed_1
+conda run -n mit urban-export-embeddings outputs/representation/viirs-mg-design/seed_1/best_model.pt `
+  data/active/model_inputs/viirs-mg-design --output outputs/representation/viirs_embeddings.parquet
+conda run -n mit urban-run-ablation data/active/model_inputs/viirs-mg-design `
   --specs configs/representation/ablation_specs.example.json
-conda run -n mit urban-summarize-runs outputs/representation/main `
-  outputs/representation/seed_1 outputs/representation/seed_2 --output outputs/representation/summary
 ```
+
+街景是可选输入（默认关闭）：数据集构建加 `--streetview-index`，训练与导出
+加 `--use-images`（与 checkpoint 架构一致），见
+[`../operations/streetview_pipeline.md`](../operations/streetview_pipeline.md)。
 
 ## 6. 与因果管线的边界
 

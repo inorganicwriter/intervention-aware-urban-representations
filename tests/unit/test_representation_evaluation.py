@@ -83,6 +83,23 @@ class TestRetrievalMetrics:
             assert "baseline_corr" in block
             assert block["n_units"] == 16
 
+    def test_empty_family_is_reported_as_unmeasured(self) -> None:
+        rng = np.random.RandomState(5)
+        emb = torch.from_numpy(rng.randn(20, 8).astype(np.float32))
+        emb = emb / emb.norm(p=2, dim=1, keepdim=True)
+        resp = torch.from_numpy(rng.randn(20, RESPONSE_DIM).astype(np.float32))
+        mask = torch.ones(20, RESPONSE_DIM, dtype=torch.bool)
+        start, end, _ = RESPONSE_OFFSETS["poi"]
+        mask[:, start:end] = False
+
+        metrics = evaluation.retrieval_metrics(emb, resp, mask, k=4)
+
+        block = metrics["poi"]
+        assert block["nn_corr@k"] is None
+        assert block["baseline_corr"] is None
+        assert block["n_comparable_units"] == 0
+        assert isinstance(metrics["overall"]["nn_corr@k"], (int, float))
+
     def test_cluster_signal_beats_random_neighbour_baseline(self) -> None:
         emb, resp = _cluster_pool()
         mask = torch.ones_like(resp, dtype=torch.bool)

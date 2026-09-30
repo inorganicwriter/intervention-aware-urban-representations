@@ -243,19 +243,27 @@ def _metric_block(
     k: int,
 ) -> dict[str, object]:
     n = emb_cos.shape[0]
+    unmeasured: dict[str, object] = {
+        "nn_corr@k": None,
+        "baseline_corr": None,
+        "n_units": n,
+        "n_comparable_units": 0,
+        "ratio": None,
+    }
     if n < 2:
-        return {"nn_corr@k": 0.0, "baseline_corr": 0.0, "n_units": n, "ratio": None}
-    nn = nn_corr_at_k(emb_cos, sim_resp, k, valid_pairs)
+        return unmeasured
     off_diagonal = ~torch.eye(n, dtype=torch.bool, device=emb_cos.device)
     valid_off_diagonal = valid_pairs & off_diagonal
     row_count = valid_off_diagonal.sum(dim=1)
     valid_rows = row_count > 0
+    if not bool(valid_rows.any()):
+        # A family without a single comparable pair (typically the inactive
+        # families of a per-family dataset) is reported as unmeasured rather
+        # than as a measured zero.
+        return unmeasured
+    nn = nn_corr_at_k(emb_cos, sim_resp, k, valid_pairs)
     row_sum = (sim_resp * valid_off_diagonal.to(sim_resp.dtype)).sum(dim=1)
-    baseline = (
-        float((row_sum[valid_rows] / row_count[valid_rows]).mean())
-        if valid_rows.any()
-        else 0.0
-    )
+    baseline = float((row_sum[valid_rows] / row_count[valid_rows]).mean())
     ratio = round(nn / baseline, 3) if baseline > 0 else None
     return {
         "nn_corr@k": round(nn, 6),

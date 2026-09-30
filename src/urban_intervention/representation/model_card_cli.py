@@ -254,8 +254,12 @@ def _render_markdown(card: dict) -> str:
         for row in summary["families"]:
             ratio = row.get("ratio")
             ratio_text = "—" if ratio is None else f"{ratio:.3f}"
+            nn_corr = row.get("nn_corr@k")
+            baseline = row.get("baseline_corr")
+            nn_text = "—" if nn_corr is None else nn_corr
+            baseline_text = "—" if baseline is None else baseline
             lines.append(
-                f"| {row['family']} | {row['nn_corr@k']} | {row['baseline_corr']} | {ratio_text} |"
+                f"| {row['family']} | {nn_text} | {baseline_text} | {ratio_text} |"
             )
         lines.append("")
         ci = summary.get("bootstrap_ci", {})

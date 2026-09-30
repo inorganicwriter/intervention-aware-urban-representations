@@ -549,7 +549,7 @@ def test_plot_segments_never_bridge_a_missing_t0() -> None:
 
 
 def test_support_table_uses_longest_overlap_across_available_methods() -> None:
-    matching_times = [-7, -6, -5, -4, -3, -2, 0, 1, 2, 3, 4]
+    matching_times = [-7, -6, -5, -4, -3, -2, 0, 1, 2, 3, 4, 30]
     coefficients = pd.DataFrame(
         {
             "event_time": matching_times,
@@ -588,7 +588,11 @@ def test_support_table_uses_longest_overlap_across_available_methods() -> None:
     matching_coverage = coverage.loc[
         coverage["outcome_family"].eq("viirs") & coverage["method"].eq("matching")
     ].set_index("event_time")
-    assert not bool(matching_coverage.loc[-7, "included_in_comparison_figure"])
+    # The coverage flag follows the canonical comparison window (monthly
+    # families: -24..+24), while the support table keeps reporting the longest
+    # three-method overlap.
+    assert bool(matching_coverage.loc[-7, "included_in_comparison_figure"])
     assert bool(matching_coverage.loc[-4, "included_in_comparison_figure"])
     assert bool(matching_coverage.loc[0, "included_in_comparison_figure"])
-    assert not bool(matching_coverage.loc[4, "included_in_comparison_figure"])
+    assert bool(matching_coverage.loc[4, "included_in_comparison_figure"])
+    assert not bool(matching_coverage.loc[30, "included_in_comparison_figure"])

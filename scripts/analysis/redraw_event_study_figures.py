@@ -7,6 +7,11 @@ estimators::
     python scripts/analysis/redraw_event_study_figures.py \
         --suite-root outputs/event_study_suite \
         --output-directory outputs/presentations/figures_canonical
+
+Pass ``--write-coverage`` to also refresh the suite's
+``event_time_coverage.csv`` (its ``included_in_comparison_figure`` flag then
+follows the canonical windows of the redrawn figures instead of the legacy
+three-method intersection).
 """
 
 from __future__ import annotations
@@ -22,6 +27,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from urban_intervention.causal.diagnostic_figures import (  # noqa: E402
     FAMILIES,
+    event_study_coverage_table,
     write_pooled_outcome_event_studies,
 )
 from urban_intervention.causal.event_study import EventStudyResult  # noqa: E402
@@ -87,6 +93,15 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated families to redraw.",
     )
     parser.add_argument("--donor-scope", default="same_city")
+    parser.add_argument(
+        "--write-coverage",
+        action="store_true",
+        help=(
+            "Also rewrite <suite-root>/event_time_coverage.csv so its "
+            "included_in_comparison_figure flag follows the canonical windows "
+            "of the redrawn figures."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -105,6 +120,12 @@ def main() -> int:
     )
     for path in written:
         print(path)
+    if args.write_coverage:
+        coverage_path = args.suite_root / "event_time_coverage.csv"
+        event_study_coverage_table(
+            matching_results, pooled, donor_scope=args.donor_scope
+        ).to_csv(coverage_path, index=False, encoding="utf-8-sig")
+        print(coverage_path)
     return 0
 
 

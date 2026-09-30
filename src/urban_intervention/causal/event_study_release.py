@@ -485,7 +485,9 @@ def _matching_availability(
         row["warnings"] = "insufficient_clusters"
     if pd.notna(availability_treated) and np.isfinite(window_max) and availability_treated > 0:
         row["coverage"] = window_max / float(availability_treated)
-    if support is not None:
+    # ``event_time_support.csv`` is estimated on the same-city panel only; it
+    # must not gate cross-city cells whose own canonical-window rows exist.
+    if support is not None and donor_scope == "same_city":
         match = support.loc[
             support["outcome_family"].eq(family) & support["method"].eq("matching")
         ]
@@ -577,7 +579,9 @@ def _pooled_availability(
                 )
                 if np.isfinite(n_cities.min()) and n_cities.min() < MIN_INTERPRETABLE_CLUSTERS:
                     row["warnings"] = "insufficient_clusters"
-                if support is not None:
+                # The support table is same-city only; cross-city availability
+                # is evidenced by the canonical-window rows in ``subset``.
+                if support is not None and scope == "same_city":
                     match = support.loc[
                         support["outcome_family"].eq(family) & support["method"].eq(method)
                     ]

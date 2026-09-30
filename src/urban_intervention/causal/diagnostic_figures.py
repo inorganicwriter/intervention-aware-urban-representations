@@ -295,9 +295,6 @@ def event_study_coverage_table(
 ) -> pd.DataFrame:
     """Report changing treated-grid support at every plotted event time."""
     rows: list[dict[str, object]] = []
-    support = event_study_support_table(
-        matching_results, pooled, donor_scope=donor_scope
-    )
     for family, matching_result in matching_results.items():
         frame = _matching_frame(matching_result, family=family)
         counts = (
@@ -351,17 +348,23 @@ def event_study_coverage_table(
                 "included_in_comparison_figure",
             ]
         )
-    bounds = support.drop_duplicates("outcome_family").set_index("outcome_family")
-
     def included(row: pd.Series) -> bool:
-        family_bounds = bounds.loc[str(row["outcome_family"])]
+        # The comparison figure plots each method across the pre-registered
+        # canonical window, not across the three-method intersection, so the
+        # flag has to follow the canonical bounds (see
+        # ``write_pooled_outcome_event_studies``).
+        family = str(row["outcome_family"])
         event_time = int(row["event_time"])
         if event_time == 0:
             return True
-        side = "pre" if event_time < 0 else "post"
-        lower = family_bounds[f"common_{side}_min"]
-        upper = family_bounds[f"common_{side}_max"]
-        return bool(pd.notna(lower) and pd.notna(upper) and lower <= event_time <= upper)
+        result = matching_results.get(family)
+        reference = (
+            int(result.diagnostics["reference_event_time"]) if result is not None else -1
+        )
+        pre_min, post_max = canonical_event_window(family)
+        if event_time < 0:
+            return pre_min <= event_time <= reference
+        return 1 <= event_time <= post_max
 
     coverage["included_in_comparison_figure"] = coverage.apply(included, axis=1)
     return coverage.sort_values(["outcome_family", "method", "event_time"]).reset_index(
@@ -437,8 +440,6 @@ def write_pooled_outcome_event_studies(
             "common_post_max": post_max,
         }
         figure, axes = plt.subplots(1, 3, figsize=(7.2, 3.05), sharey=False)
-        test_min = reference_event_time - 5
-        test_max = reference_event_time - 1
         panel_limits: list[tuple[float, float]] = []
         matching = matching_results.get(family)
         axis = axes[0]
@@ -466,6 +467,9 @@ def write_pooled_outcome_event_studies(
             if limit:
                 panel_limits.append(limit)
             p_value = matching.city_cluster_pretrend["p_value"].iloc[0]
+            window = int(matching.diagnostics.get("pretrend_window") or 5)
+            test_min = reference_event_time - window
+            test_max = reference_event_time - 1
             axis.text(
                 0.02,
                 0.98,
@@ -540,7 +544,7 @@ def write_pooled_outcome_event_studies(
                 axis.text(
                     0.02,
                     0.98,
-                    f"Mean clean-pre gap test ({test_min}..{test_max})\n"
+                    "Mean clean-pre gap test\n(up to five latest clean pre leads)\n"
                     f"city p={_format_p(p_value)}; G≤{city_count}",
                     transform=axis.transAxes,
                     va="top",
@@ -560,8 +564,9 @@ def write_pooled_outcome_event_studies(
             0.035,
             "Panels are restricted to the pre-registered canonical window (monthly families "
             "+/-24 months; annual families -6..+3) and each panel uses its own y-scale.\n"
-            "Pre-trend tests use the five clean pre leads before the reference "
-            "(reference-5..reference-1); gray marks anticipation months when present and amber "
+            "Pre-trend tests use the latest clean pre leads before the reference (matching: the "
+            "pre-registered five-lead window when available; pooled: up to five latest leads per "
+            "task); gray marks anticipation months when present and amber "
             "marks the opening period (t=0, shown but excluded from the pre-trend test). "
             "Error bars are 95% city-cluster intervals when available.",
             ha="center",

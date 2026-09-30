@@ -36,6 +36,24 @@ class TestRepresentationDataset:
         assert len(test_ds) == 3
         assert len(train_ds) + len(val_ds) + len(test_ds) == len(full_ds)
 
+    def test_unit_without_labels_stays_sampled(self, tmp_path: Path) -> None:
+        ds_dir, n_grids = build_synthetic_model_inputs(tmp_path)
+        targets = pd.read_parquet(ds_dir / "response_targets.parquet")
+        dropped = int(targets["treatment_order"].iloc[0])
+        targets.loc[targets["treatment_order"].ne(dropped)].to_parquet(
+            ds_dir / "response_targets.parquet", index=False
+        )
+        index = pd.read_parquet(ds_dir / "sample_index.parquet")
+        index.loc[index["treatment_order"].eq(dropped), "final_training_mask"] = False
+        index.to_parquet(ds_dir / "sample_index.parquet", index=False)
+
+        ds = RepresentationDataset(ds_dir)
+
+        assert len(ds) == n_grids
+        sample = ds[ds.treatment_orders().index(dropped)]
+        assert not sample.response_mask.any()
+        assert not sample.final_training_mask
+
     def test_sample_structure(self, tmp_path: Path) -> None:
         ds_dir, _ = build_synthetic_model_inputs(tmp_path)
         ds = RepresentationDataset(ds_dir)

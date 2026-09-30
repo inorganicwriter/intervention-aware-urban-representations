@@ -66,6 +66,10 @@ class EmbeddingQueue:
         supplied = [value is not None for value in metadata]
         if any(supplied) and not all(supplied):
             raise ValueError("Queue response metadata and ids must be supplied together")
+        if response_weight is not None and not all(supplied):
+            raise ValueError(
+                "Queue response_weight requires the full response metadata and ids"
+            )
         labeled = all(supplied)
         currently_labeled = self._responses is not None
         if self._embeddings is not None and labeled != currently_labeled:

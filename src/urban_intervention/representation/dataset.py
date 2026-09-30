@@ -128,6 +128,7 @@ class RepresentationDataset(torch.utils.data.Dataset[GridSample]):
         self.normalization = json.loads((root / "normalization.json").read_text(encoding="utf-8"))
 
         self._validate()
+        self._treatment_orders = self.sample_index["treatment_order"].tolist()
         self._build_feature_columns()
         self._build_response_tensor()
         self._station_tokens: dict[int, int] = {}
@@ -254,9 +255,14 @@ class RepresentationDataset(torch.utils.data.Dataset[GridSample]):
         )
 
         grouped = self.response_targets.groupby("treatment_order", sort=False)
+        grouped_orders = set(grouped.groups)
         records: list[dict] = []
         sample_lookup = self.sample_index.set_index("treatment_order")
-        for order, group in grouped:
+        # Iterate the sample index, not the labels: a filtered response domain
+        # (for example a VIIRS-only build) can leave sampled units without any
+        # label row, and those units must still yield an all-missing record so
+        # the dataset, loaders and exports stay aligned.
+        for order in self._treatment_orders:
             row: dict[str, object] = {"treatment_order": order}
             meta = lookup.get(order, {})
             row["city_key"] = str(meta.get("city_key", ""))
@@ -273,50 +279,56 @@ class RepresentationDataset(torch.utils.data.Dataset[GridSample]):
             response = np.full(RESPONSE_DIM, np.nan, dtype=np.float64)
             response_se = np.full(RESPONSE_DIM, np.nan, dtype=np.float64)
             response_weight = np.zeros(RESPONSE_DIM, dtype=np.float64)
-            has_weight_column = "response_weight" in group.columns
 
-            for family, (start, end, cols) in RESPONSE_OFFSETS.items():
-                del end
-                family_group = group[group["outcome_family"].eq(family)]
-                for _, task_row in family_group.iterrows():
-                    outcome = str(task_row["outcome"])
-                    horizon = int(task_row["event_time"])
-                    col_name = f"{outcome}__t{horizon}"
-                    if col_name in cols:
-                        idx = cols.index(col_name) + start
-                        # The sample-level mask says whether this grid can be
-                        # used at all; it must not promote every response
-                        # dimension.  A release may contain a valid label for
-                        # one outcome and an ineligible/held-out label for
-                        # another outcome on the same grid.
-                        label_eligible = task_row.get("final_training_mask", False)
-                        label_eligible = bool(label_eligible) if pd.notna(label_eligible) else False
-                        if label_eligible:
-                            response[idx] = pd.to_numeric(
-                                task_row.get("causal_response_label", np.nan), errors="coerce"
+            if order in grouped_orders:
+                group = grouped.get_group(order)
+                has_weight_column = "response_weight" in group.columns
+                for family, (start, end, cols) in RESPONSE_OFFSETS.items():
+                    del end
+                    family_group = group[group["outcome_family"].eq(family)]
+                    for _, task_row in family_group.iterrows():
+                        outcome = str(task_row["outcome"])
+                        horizon = int(task_row["event_time"])
+                        col_name = f"{outcome}__t{horizon}"
+                        if col_name in cols:
+                            idx = cols.index(col_name) + start
+                            # The sample-level mask says whether this grid can be
+                            # used at all; it must not promote every response
+                            # dimension.  A release may contain a valid label for
+                            # one outcome and an ineligible/held-out label for
+                            # another outcome on the same grid.
+                            label_eligible = task_row.get("final_training_mask", False)
+                            label_eligible = (
+                                bool(label_eligible) if pd.notna(label_eligible) else False
                             )
-                            response_se[idx] = pd.to_numeric(
-                                task_row.get("standard_error", np.nan), errors="coerce"
+                            if label_eligible:
+                                response[idx] = pd.to_numeric(
+                                    task_row.get("causal_response_label", np.nan),
+                                    errors="coerce",
+                                )
+                                response_se[idx] = pd.to_numeric(
+                                    task_row.get("standard_error", np.nan), errors="coerce"
+                                )
+                                if has_weight_column:
+                                    weight_value = pd.to_numeric(
+                                        task_row.get("response_weight", np.nan),
+                                        errors="coerce",
+                                    )
+                                    response_weight[idx] = (
+                                        float(weight_value) if pd.notna(weight_value) else 0.0
+                                    )
+                                else:
+                                    # Datasets built before the weight columns
+                                    # existed carry no weight column; treat every
+                                    # eligible label as equally reliable so the
+                                    # loader stays compatible.
+                                    response_weight[idx] = 1.0
+                        else:
+                            logger.warning(
+                                "Skipping unknown outcome/horizon: %s in family %s",
+                                col_name,
+                                family,
                             )
-                            if has_weight_column:
-                                weight_value = pd.to_numeric(
-                                    task_row.get("response_weight", np.nan), errors="coerce"
-                                )
-                                response_weight[idx] = (
-                                    float(weight_value) if pd.notna(weight_value) else 0.0
-                                )
-                            else:
-                                # Datasets built before the weight columns
-                                # existed carry no weight column; treat every
-                                # eligible label as equally reliable so the
-                                # loader stays compatible.
-                                response_weight[idx] = 1.0
-                    else:
-                        logger.warning(
-                            "Skipping unknown outcome/horizon: %s in family %s",
-                            col_name,
-                            family,
-                        )
 
             row["response"] = response.astype(np.float32)
             row["response_se"] = response_se.astype(np.float32)

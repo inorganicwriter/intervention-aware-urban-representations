@@ -533,6 +533,21 @@ def test_response_weights_zero_anchor_and_unavailable_labels() -> None:
     assert per_task["task_sampling_weight"].iloc[0] == pytest.approx(1.0)
 
 
+def test_response_weights_treat_nonfinite_se_as_neutral() -> None:
+    frame = _weight_frame()
+    gsc = frame["method"].eq("xu_2017_gsynth_same_city")
+    first = frame.index[gsc][:3]
+    frame.loc[first, "standard_error"] = np.inf
+
+    weighted = response_label_weights(frame, gamma=1.0, alpha=0.5)
+
+    assert weighted.loc[first, "eligible"].all()
+    assert not weighted.loc[first, "has_precision_weight"].any()
+    assert weighted.loc[first, "precision_weight"].eq(1.0).all()
+    eligible = weighted.loc[weighted["eligible"], "response_weight"]
+    assert (eligible > 0).all()
+
+
 def test_pretraining_release_family_filter_and_response_weights(tmp_path: Path) -> None:
     treatments = _treatments()
     _write_sources(tmp_path, treatments)

@@ -335,7 +335,9 @@ def attach_streetview_assets(
         raise ValueError(f"Street-view index lacks columns: {sorted(missing)}")
     index["capture_date"] = pd.to_datetime(index["capture_date"], errors="coerce")
     opening = features[["treatment_order", "city_key", "grid_id", "opening_month"]].copy()
-    opening["opening_date"] = pd.to_datetime(opening["opening_month"].astype(str) + "-01")
+    opening["opening_date"] = pd.to_datetime(
+        opening["opening_month"].astype(str).str.slice(0, 7) + "-01"
+    )
     eligible = opening.merge(index, on=["city_key", "grid_id"], how="left")
     eligible = eligible.loc[eligible["capture_date"] < eligible["opening_date"]]
     assets = (
@@ -577,7 +579,11 @@ def response_label_weights(
 
     standard_error = _numeric_column(frame, "standard_error")
     inverse_variance = 1.0 / (standard_error**2 + 1e-12)
-    model_eligible = eligible & ~matched & standard_error.notna()
+    # A missing, non-positive or non-finite SE cannot earn a precision bonus;
+    # such labels are treated exactly like matching labels (neutral 1.0) so an
+    # eligible label can never end up with a zero weight under alpha > 0.
+    se_valid = standard_error.gt(0).fillna(False) & np.isfinite(standard_error)
+    model_eligible = eligible & ~matched & se_valid
     winsor_source = inverse_variance.where(model_eligible)
     lower = winsor_source.groupby(design_stratum).transform(
         lambda values: values.quantile(0.01)
@@ -702,6 +708,14 @@ def publish_pretraining_dataset(
                 f"response artifact has no rows for methods: {list(selected_methods)}"
             )
     targets = response_label_weights(targets, gamma=weight_gamma, alpha=weight_alpha)
+    eligible_weights = targets.loc[targets["eligible"], "response_weight"]
+    if eligible_weights.empty:
+        raise ValueError(
+            "Filtered response artifact has no eligible labels; refusing to publish "
+            "a model-input release without supervision"
+        )
+    if not bool(eligible_weights.gt(0).all()):
+        raise ValueError("Eligible labels received non-positive reliability weights")
     features, source_paths = build_pretreatment_features(
         treatments, project_root, strict_sources=strict_production
     )
@@ -763,6 +777,8 @@ def publish_pretraining_dataset(
     )
 
     dataset_id = dataset_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    if Path(str(dataset_id)).name != str(dataset_id) or str(dataset_id) in {"", ".", ".."}:
+        raise ValueError(f"dataset_id must be a single path segment: {dataset_id!r}")
     destination = output_root / dataset_id
     if destination.exists():
         raise FileExistsError(f"Refusing to overwrite model-input release: {destination}")

@@ -142,6 +142,11 @@ class TestEmbeddingQueue:
         with pytest.raises(ValueError):
             queue.enqueue(torch.randn(2, 5))
 
+    def test_weight_metadata_cannot_be_supplied_alone(self) -> None:
+        queue = EmbeddingQueue(dim=4, capacity=8)
+        with pytest.raises(ValueError, match="response_weight requires"):
+            queue.enqueue(torch.randn(2, 4), response_weight=torch.ones(2, 5))
+
     def test_negative_capacity_rejected(self) -> None:
         with pytest.raises(ValueError):
             EmbeddingQueue(dim=4, capacity=-1)

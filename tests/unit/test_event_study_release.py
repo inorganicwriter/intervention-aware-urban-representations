@@ -267,6 +267,8 @@ def test_export_builds_unified_release(release_inputs, tmp_path: Path) -> None:
     assert housing_gsc["status"].eq("no_data").all()
     cross = availability.loc[availability["donor_scope"].eq("all_city_standardized")]
     assert cross["warnings"].fillna("").str.contains("insufficient_clusters").any()
+    assert cross["source_pre_min"].isna().all()
+    assert cross["t0_available"].isna().all()
 
     selection = pd.read_csv(output / "family_selection.csv", encoding="utf-8-sig")
     downstream = dict(

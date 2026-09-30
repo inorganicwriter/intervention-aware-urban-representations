@@ -546,7 +546,9 @@ def _pooled_availability(
                     "warnings": "",
                     "source_file": "",
                 }
-                if support is not None:
+                # The support table is same-city only; cross-city cells must not
+                # inherit its source bounds (matching handles this the same way).
+                if support is not None and scope == "same_city":
                     match = support.loc[
                         support["outcome_family"].eq(family) & support["method"].eq(method)
                     ]

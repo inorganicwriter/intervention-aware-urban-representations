@@ -121,3 +121,21 @@ python scripts/analysis/recover_causal_queues.py \
 
 生产任务根仍用原来的 `--matching-task-root`（默认
 `outputs/causal_labels/tasks`）；不重算任何匹配。
+
+## 7. 附：只重画合成图（不重跑估计）
+
+绘图口径修正（规范窗口、每面板独立纵轴、pre-trend 窗口标注、
+`included_in_comparison_figure` 与图一致）后，可直接从已存 suite 重画，
+无需重跑任何估计：
+
+```bash
+python scripts/analysis/redraw_event_study_figures.py \
+  --suite-root outputs/event_study_suite \
+  --output-directory outputs/event_study_suite/pooled_outcomes \
+  --write-coverage
+```
+
+- 输出四族 `*_pooled_event_study.{png,pdf,svg,tiff}`，覆盖原合成图；
+- `--write-coverage` 同时重写 `event_time_coverage.csv`；不加则保留原表；
+- 若已导出封版 zip，重画后需重新运行导出脚本以刷新包内图与源表
+  （`matching_twfe`/`gsc_mc_paths` 的估计产物本身不变）。

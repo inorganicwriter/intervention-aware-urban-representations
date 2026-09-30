@@ -57,6 +57,20 @@ for name in ("viirs-mg-design", "poi-mg-design"):
 PY
 ```
 
+发布端已强制：过滤后无 eligible 标签、或 eligible 权重非正，都会直接拒绝出集。
+W-full 前另按方法统计 release 的两列覆盖（非有限 SE 现在按中性精度处理，
+不再产生零权重）：
+
+```bash
+python - <<'PY'
+import pandas as pd
+x = pd.read_parquet("data/active/causal/releases/production/response_artifact.parquet",
+                    columns=["method", "pre_observed_periods", "standard_error"])
+print(x.groupby("method")[["pre_observed_periods", "standard_error"]]
+       .agg(["count", "isna"]).to_string())
+PY
+```
+
 ## 3. 训练前冒烟（先跑 VIiRS，再跑 POI）
 
 ```bash
@@ -65,10 +79,11 @@ conda run -n mit urban-train-representation data/active/model_inputs/viirs-mg-de
   --epochs 10 --device cuda --seeds 1 --batch-size 256 --queue-size 4096
 ```
 
-看 `evaluation_report.json`：
-- `raw_feature_baseline` 的 `nn_corr@k`：原始特征是否已含信号；
-- `retrieval.overall.nn_corr@k` 是否高于随机基线并随 epoch 上升；
-- `permutation` 的 p 值是否显著。
+看 `evaluation_report.json`（按 split 分组）：
+- `test.raw_feature_baseline.overall.nn_corr@k`：原始特征是否已含信号；
+- `test.retrieval.overall.nn_corr@k` 是否高于该基线并随 epoch 上升；
+- `test.permutation.p_value` 是否显著；
+- `test_metrics.json` 的汇总字段名是 `mean_nn_corr@k`（不是 `nn_corr@k`）。
 
 ## 4. 正式训练
 

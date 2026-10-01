@@ -332,7 +332,11 @@ def appearance_autoencoder_baseline(
     n_train = train_features.shape[0]
     if n_train < 8 or test_features.shape[0] < 2:
         return {"note": "train or test pool too small for autoencoder baseline"}
-    dev = device or torch.device("cpu")
+    # Deliberately CPU-only: the autoencoder is tiny, and CPU kernels replay
+    # bit-identically under ``seed`` while accelerator reduction order can vary
+    # between processes.  A baseline used for paper comparisons must be
+    # reproducible across runs, so the ``device`` argument is ignored here.
+    dev = torch.device("cpu")
     torch.manual_seed(seed)
     model = AppearanceAutoencoder(
         feature_dim=train_features.shape[1],
@@ -366,5 +370,6 @@ def appearance_autoencoder_baseline(
         "train_units": int(n_train),
         "response_supervision": False,
         "seed": int(seed),
+        "device": str(dev),
     }
     return entry

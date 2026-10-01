@@ -65,6 +65,21 @@ class TestAppearanceAutoencoder:
         assert isinstance(retrieval, dict)
         assert "overall" in retrieval
 
+    def test_seed_reproducible(self) -> None:
+        features, responses = _cluster_pool(n_per_cluster=12)
+        masks = torch.ones_like(responses, dtype=torch.bool)
+        first = appearance_autoencoder_baseline(
+            features, features, responses, masks, epochs=3, k=4, n_perm=10, n_boot=10
+        )
+        second = appearance_autoencoder_baseline(
+            features, features, responses, masks, epochs=3, k=4, n_perm=10, n_boot=10
+        )
+        assert (
+            first["retrieval"]["overall"]["nn_corr@k"]
+            == second["retrieval"]["overall"]["nn_corr@k"]
+        )
+        assert first["training"]["device"] == "cpu"
+
     def test_captures_appearance_structure(self) -> None:
         features, responses = _cluster_pool(n_per_cluster=12)
         masks = torch.ones_like(responses, dtype=torch.bool)

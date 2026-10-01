@@ -146,6 +146,15 @@ class RepresentationDataset(torch.utils.data.Dataset[GridSample]):
                     f"Station attributes lack columns: {sorted(required_attr - set(attributes.columns))}"
                 )
             attr_frame = attributes[list(required_attr)].copy()
+            attr_frame["treatment_order"] = pd.to_numeric(
+                attr_frame["treatment_order"], errors="coerce"
+            )
+            # The attributes table covers every canonical station; only rows
+            # that carry a treatment_order can join dataset units.
+            attr_frame = attr_frame.loc[attr_frame["treatment_order"].notna()].copy()
+            attr_frame["treatment_order"] = attr_frame["treatment_order"].astype(int)
+            if attr_frame["treatment_order"].duplicated().any():
+                raise ValueError("Station attributes have duplicate treatment_order")
             for column in (
                 "is_transfer_at_opening",
                 "is_new_line_opening",

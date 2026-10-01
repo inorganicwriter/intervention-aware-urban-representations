@@ -54,6 +54,43 @@ class TestRepresentationDataset:
         assert not sample.response_mask.any()
         assert not sample.final_training_mask
 
+    def test_station_attribute_tokens_ignore_non_treated_rows(self, tmp_path: Path) -> None:
+        ds_dir, _ = build_synthetic_model_inputs(tmp_path)
+        index = pd.read_parquet(ds_dir / "sample_index.parquet")
+        orders = index["treatment_order"].tolist()
+        attributes_path = tmp_path / "station_attributes.parquet"
+        pd.DataFrame(
+            [
+                {
+                    "treatment_order": orders[0],
+                    "is_transfer_at_opening": True,
+                    "is_new_line_opening": False,
+                    "is_extension_opening": False,
+                    "is_terminal_at_opening": True,
+                },
+                {
+                    "treatment_order": orders[1],
+                    "is_transfer_at_opening": False,
+                    "is_new_line_opening": True,
+                    "is_extension_opening": True,
+                    "is_terminal_at_opening": np.nan,
+                },
+                {
+                    "treatment_order": np.nan,
+                    "is_transfer_at_opening": True,
+                    "is_new_line_opening": False,
+                    "is_extension_opening": False,
+                    "is_terminal_at_opening": False,
+                },
+            ]
+        ).to_parquet(attributes_path, index=False)
+
+        ds = RepresentationDataset(ds_dir, station_attributes_path=attributes_path)
+
+        assert ds._station_tokens[orders[0]] == 9
+        assert ds._station_tokens[orders[1]] == 6
+        assert len(ds._station_tokens) == 2
+
     def test_sample_structure(self, tmp_path: Path) -> None:
         ds_dir, _ = build_synthetic_model_inputs(tmp_path)
         ds = RepresentationDataset(ds_dir)

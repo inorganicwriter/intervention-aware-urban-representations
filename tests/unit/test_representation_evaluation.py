@@ -61,6 +61,28 @@ class TestResponseSimilarity:
         with pytest.raises(ValueError):
             evaluation.response_similarity(resp, mask, families=["nope"])
 
+    def test_float64_precision_on_flat_paths(self) -> None:
+        rng = np.random.RandomState(13)
+        base = torch.from_numpy((0.5 + 1e-4 * rng.randn(32, 6)).astype(np.float32))
+        mask = torch.ones_like(base, dtype=torch.bool)
+        sim32, valid32 = evaluation.response_similarity_with_validity(base, mask)
+        sim64, valid64 = evaluation.response_similarity_with_validity(
+            base, mask, precision="float64"
+        )
+        off = ~torch.eye(32, dtype=torch.bool)
+        supported = off & valid64
+        assert int(supported.sum()) > 0
+        assert int((supported & ~valid32).sum()) > 0
+        error = float((sim32.double() - sim64)[supported].abs().mean())
+        assert error > 0.01
+        assert sim64.dtype == torch.float64
+
+    def test_unknown_precision_rejected(self) -> None:
+        resp = torch.zeros(4, 3)
+        mask = torch.ones_like(resp, dtype=torch.bool)
+        with pytest.raises(ValueError):
+            evaluation.response_similarity_with_validity(resp, mask, precision="float16")
+
     def test_ragged_dimension_uses_single_segment(self) -> None:
         resp = torch.randn(5, 7)
         mask = torch.ones(5, 7, dtype=torch.bool)
@@ -202,6 +224,35 @@ class TestProbeRmse:
         result = evaluation.probe_rmse(x, y, mask, x, y, mask, ridge=1.0, min_obs=16)
         assert result["fitted_cells"] == 0
         assert result["rmse_overall"] is None
+
+    def test_center_recovers_constant_target(self) -> None:
+        x = torch.tensor([[-1.0], [1.0]]).repeat(10, 1)
+        y = torch.full((20, 1), 2.0)
+        mask = torch.ones_like(y, dtype=torch.bool)
+        result = evaluation.probe_rmse(x, y, mask, x, y, mask, min_obs=2)
+        assert result["centered"] is True
+        assert result["rmse_overall"] == pytest.approx(0.0, abs=1e-6)
+        assert result["mean_baseline_overall"] == pytest.approx(0.0, abs=1e-6)
+
+    def test_uncentered_probe_reports_mean_baseline(self) -> None:
+        x = torch.tensor([[-1.0], [1.0]]).repeat(10, 1)
+        y = torch.full((20, 1), 2.0)
+        mask = torch.ones_like(y, dtype=torch.bool)
+        result = evaluation.probe_rmse(x, y, mask, x, y, mask, min_obs=2, center=False)
+        assert result["rmse_overall"] == pytest.approx(2.0, abs=1e-5)
+        assert result["mean_baseline_overall"] == pytest.approx(0.0, abs=1e-6)
+
+    def test_select_probe_ridge_returns_candidate(self) -> None:
+        rng = np.random.RandomState(11)
+        x = torch.from_numpy(rng.randn(60, 5).astype(np.float32))
+        w = torch.from_numpy(rng.randn(5, 3).astype(np.float32))
+        y = x @ w + 0.1
+        mask = torch.ones(60, 3, dtype=torch.bool)
+        selection = evaluation.select_probe_ridge(
+            x, y, mask, x, y, mask, candidates=(0.01, 1.0, 100.0), min_obs=8
+        )
+        assert selection["selected_ridge"] in {0.01, 1.0, 100.0}
+        assert set(selection["validation_rmse"]) == {"0.01", "1.0", "100.0"}
 
 
 class TestTrainerEvaluation:

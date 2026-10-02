@@ -18,6 +18,8 @@ Provides:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import numpy as np
 import torch
 
@@ -29,6 +31,7 @@ def response_similarity(
     masks: torch.Tensor,
     families: list[str] | None = None,
     weights: torch.Tensor | None = None,
+    precision: str = "float32",
 ) -> torch.Tensor:
     """Vectorized pairwise correlation over commonly-observed response cells.
 
@@ -38,8 +41,14 @@ def response_similarity(
     ``weights`` applies the per-label design reliability: cell ``k`` of pair
     ``(i, j)`` carries weight ``sqrt(w_i w_j)``.  Without weights the plain
     correlation is returned.
+
+    ``precision="float64"`` recomputes the covariances in double precision,
+    which avoids the cancellation error of the one-pass sum-of-squares formula
+    on response paths whose level dominates their variation.
     """
-    similarity, _ = response_similarity_with_validity(responses, masks, families, weights)
+    similarity, _ = response_similarity_with_validity(
+        responses, masks, families, weights, precision=precision
+    )
     return similarity
 
 
@@ -48,6 +57,7 @@ def response_similarity_with_validity(
     masks: torch.Tensor,
     families: list[str] | None = None,
     weights: torch.Tensor | None = None,
+    precision: str = "float32",
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Return response correlation and whether each pair is comparable.
 
@@ -57,7 +67,7 @@ def response_similarity_with_validity(
     zero response similarity.
     """
     return response_similarity_between(
-        responses, masks, responses, masks, families, weights, weights
+        responses, masks, responses, masks, families, weights, weights, precision=precision
     )
 
 
@@ -69,6 +79,7 @@ def response_similarity_between(
     families: list[str] | None = None,
     weights_a: torch.Tensor | None = None,
     weights_b: torch.Tensor | None = None,
+    precision: str = "float32",
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Rectangular response similarity without constructing a square joint pool.
 
@@ -77,8 +88,11 @@ def response_similarity_between(
     ``sqrt(w_i w_j)``; a pair whose weighted common support is below two cells
     (or whose weighted variance is degenerate) is reported as invalid instead
     of receiving a zero similarity, because zero would mean "orthogonal", not
-    "no evidence".
+    "no evidence".  ``precision="float64"`` upcasts the inputs so the
+    one-pass covariance formula cannot lose the signal to cancellation.
     """
+    if precision not in {"float32", "float64"}:
+        raise ValueError(f"Unknown precision: {precision}")
     n_a, dim = responses_a.shape
     n_b = responses_b.shape[0]
     if responses_b.shape[1] != dim:
@@ -87,6 +101,13 @@ def response_similarity_between(
         raise ValueError("Each response mask must match its response tensor")
     if responses_a.device != responses_b.device:
         raise ValueError("Response pools must be on the same device")
+    if precision == "float64" and responses_a.dtype != torch.float64:
+        responses_a = responses_a.to(torch.float64)
+        responses_b = responses_b.to(torch.float64)
+        if weights_a is not None:
+            weights_a = weights_a.to(torch.float64)
+        if weights_b is not None:
+            weights_b = weights_b.to(torch.float64)
     weighted = weights_a is not None or weights_b is not None
     if weighted:
         if weights_a is None:
@@ -395,6 +416,7 @@ def probe_rmse(
     ridge: float = 1.0,
     min_obs: int = 16,
     families: list[str] | None = None,
+    center: bool = True,
 ) -> dict[str, object]:
     """Linear-probe transfer metric: per-response-cell ridge, fitted on train.
 
@@ -403,6 +425,13 @@ def probe_rmse(
     features) to that cell, then applied to the target pool. The reported RMSE
     is over observed test cells only; cells with insufficient training support
     are excluded and counted in ``fitted_cells``.
+
+    With ``center`` (the default) train-pool feature and target means are
+    removed before the ridge solve and re-added to predictions, which is
+    equivalent to fitting an intercept.  The report also carries the
+    train-mean prediction baseline (``mean_baseline_rmse``) computed on the
+    same test cells, so a probe that does not beat predicting the training mean
+    cannot be read as evidence of predictability.
     """
     n_train, dim = y_train.shape
     if x_train.shape[0] != n_train or y_test.shape[1] != dim:
@@ -420,7 +449,16 @@ def probe_rmse(
         family_cells = {"raw": list(range(dim))}
     all_cells = [cell for cells in family_cells.values() for cell in cells]
 
+    if center:
+        x_mean = x_train.mean(dim=0, keepdim=True)
+        x_fit = x_train - x_mean
+        x_target = x_test - x_mean
+    else:
+        x_fit = x_train
+        x_target = x_test
+
     mse_by_cell: dict[int, float] = {}
+    baseline_by_cell: dict[int, float] = {}
     for j in all_cells:
         train_rows = m_train[:, j]
         fitted_n = int(train_rows.sum())
@@ -430,19 +468,27 @@ def probe_rmse(
         tested_n = int(test_rows.sum())
         if tested_n == 0:
             continue
-        x_j = x_train[train_rows]
         y_j = y_train[train_rows, j].unsqueeze(1)
+        y_mean = y_j.mean()
+        y_target = y_test[test_rows, j].unsqueeze(1)
+        baseline_by_cell[j] = float(((y_mean.expand_as(y_target) - y_target) ** 2).mean())
+        x_j = x_fit[train_rows]
         design = x_j.T @ x_j + ridge * torch.eye(x_j.shape[1], dtype=x_j.dtype, device=x_j.device)
         try:
-            beta = torch.linalg.solve(design, x_j.T @ y_j)
+            if center:
+                beta = torch.linalg.solve(design, x_j.T @ (y_j - y_mean))
+            else:
+                beta = torch.linalg.solve(design, x_j.T @ y_j)
         except RuntimeError:
             continue
-        pred = x_test[test_rows] @ beta
-        mse = float(((pred - y_test[test_rows, j].unsqueeze(1)) ** 2).mean())
+        pred = x_target[test_rows] @ beta
+        if center:
+            pred = pred + y_mean
+        mse = float(((pred - y_target) ** 2).mean())
         mse_by_cell[j] = mse
 
-    def _cell_mse(cells: list[int]) -> float | None:
-        values = [mse_by_cell[cell] for cell in cells if cell in mse_by_cell]
+    def _cell_mse(cells: list[int], values_by_cell: dict[int, float]) -> float | None:
+        values = [values_by_cell[cell] for cell in cells if cell in values_by_cell]
         if not values:
             return None
         return round(float(np.sqrt(np.mean(values))), 6)
@@ -450,14 +496,57 @@ def probe_rmse(
     per_family: dict[str, dict[str, object]] = {}
     for name, cells in family_cells.items():
         per_family[name] = {
-            "rmse": _cell_mse(cells),
+            "rmse": _cell_mse(cells, mse_by_cell),
+            "mean_baseline_rmse": _cell_mse(cells, baseline_by_cell),
             "fitted_cells": sum(1 for cell in cells if cell in mse_by_cell),
             "total_cells": len(cells),
         }
-    overall = _cell_mse(all_cells)
+    overall = _cell_mse(all_cells, mse_by_cell)
     return {
         "rmse_overall": overall,
+        "mean_baseline_overall": _cell_mse(all_cells, baseline_by_cell),
         "fitted_cells": len(mse_by_cell),
         "total_cells": len(all_cells),
+        "centered": bool(center),
+        "ridge": float(ridge),
         "per_family": per_family,
     }
+
+
+def select_probe_ridge(
+    x_train: torch.Tensor,
+    y_train: torch.Tensor,
+    m_train: torch.Tensor,
+    x_val: torch.Tensor,
+    y_val: torch.Tensor,
+    m_val: torch.Tensor,
+    candidates: Sequence[float] = (0.01, 0.1, 1.0, 10.0, 100.0),
+    min_obs: int = 16,
+    families: list[str] | None = None,
+) -> dict[str, object]:
+    """Pick the ridge strength with the lowest validation probe RMSE.
+
+    The comparison is per representation (raw features or an embedding):
+    callers should select a separate ridge for each so that the probe
+    regularisation is not silently favouring one input scale.
+    """
+    scores: dict[str, float] = {}
+    for candidate in candidates:
+        result = probe_rmse(
+            x_train,
+            y_train,
+            m_train,
+            x_val,
+            y_val,
+            m_val,
+            ridge=float(candidate),
+            min_obs=min_obs,
+            families=families,
+        )
+        rmse = result["rmse_overall"]
+        if isinstance(rmse, (int, float)):
+            scores[str(float(candidate))] = float(rmse)
+    if not scores:
+        return {"selected_ridge": None, "validation_rmse": {}}
+    selected = min(scores, key=scores.__getitem__)
+    return {"selected_ridge": float(selected), "validation_rmse": scores}

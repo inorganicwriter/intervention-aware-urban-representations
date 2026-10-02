@@ -155,6 +155,10 @@ class RepresentationDataset(torch.utils.data.Dataset[GridSample]):
             attr_frame["treatment_order"] = attr_frame["treatment_order"].astype(int)
             if attr_frame["treatment_order"].duplicated().any():
                 raise ValueError("Station attributes have duplicate treatment_order")
+            terminal_values = pd.to_numeric(
+                attr_frame["is_terminal_at_opening"], errors="coerce"
+            )
+            attr_frame["_terminal_missing"] = terminal_values.isna().astype(int)
             for column in (
                 "is_transfer_at_opening",
                 "is_new_line_opening",
@@ -164,11 +168,14 @@ class RepresentationDataset(torch.utils.data.Dataset[GridSample]):
                 attr_frame[column] = (
                     pd.to_numeric(attr_frame[column], errors="coerce").fillna(0).astype(int)
                 )
+            # Four attribute bits plus one missing indicator: an unknown
+            # terminal status must not be conflated with "not terminal".
             attr_frame["_code"] = (
-                attr_frame["is_transfer_at_opening"] * 8
-                + attr_frame["is_new_line_opening"] * 4
-                + attr_frame["is_extension_opening"] * 2
-                + attr_frame["is_terminal_at_opening"]
+                attr_frame["is_transfer_at_opening"] * 16
+                + attr_frame["is_new_line_opening"] * 8
+                + attr_frame["is_extension_opening"] * 4
+                + attr_frame["is_terminal_at_opening"] * 2
+                + attr_frame["_terminal_missing"]
             )
             self._station_tokens = dict(
                 zip(

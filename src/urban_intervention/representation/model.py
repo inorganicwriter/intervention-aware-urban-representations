@@ -13,6 +13,11 @@ from .encoder import ImageEncoder, TabularEncoder
 
 FAMILY_DIMS = {family: end - start for family, (start, end, _) in RESPONSE_OFFSETS.items()}
 
+# Fixed initial mixing scale for explicit conditioning tokens.  The token
+# embedding direction is learned, but this bounds how much a random
+# initialization may distort the tabular geometry (see forward()).
+CONDITIONING_MIX_SCALE = 0.1
+
 
 class MultiHeadPredictor(nn.Module):
     def __init__(self, embedding_dim: int = 128, hidden_dim: int = 64):
@@ -80,14 +85,14 @@ class ResponseEmbeddingModel(nn.Module):
         # into the tabular stream.  ``opening_year`` is pre-treatment
         # information available at inference for any new station; ``station``
         # tokens encode treatment-level attributes (transfer / new-line /
-        # extension / terminal, 4 bits) that are likewise known ex ante.
-        # Disabled by default; the response-aligned objective alone is the
-        # "implicit conditioning".
+        # extension / terminal, 4 bits plus a terminal-missing bit) that are
+        # likewise known ex ante.  Disabled by default; the response-aligned
+        # objective alone is the "implicit conditioning".
         self.conditioning_embedding = (
             nn.Embedding(30, embedding_dim) if conditioning in {"opening_year", "opening_year_station"} else None
         )
         self.station_embedding = (
-            nn.Embedding(16, embedding_dim) if conditioning in {"station", "opening_year_station"} else None
+            nn.Embedding(32, embedding_dim) if conditioning in {"station", "opening_year_station"} else None
         )
 
         self.projector = nn.Sequential(
@@ -191,22 +196,35 @@ class ResponseEmbeddingModel(nn.Module):
         tab_emb = self.tab_encoder(features)
 
         if self.conditioning_embedding is not None or self.station_embedding is not None:
-            added = torch.zeros_like(tab_emb)
+            # Token embeddings are L2-normalized and mixed at a small fixed
+            # scale: a raw nn.Embedding row has norm ~sqrt(dim) and would
+            # otherwise swamp the unit-norm tabular embedding at
+            # initialization and collapse cross-location geometry.  Directions
+            # remain trainable; the constant only bounds the initial influence.
+            added: torch.Tensor | None = None
             if self.conditioning_embedding is not None:
                 if conditioning_tokens is None:
                     raise ValueError(
                         "Model is conditioning-enabled but no conditioning tokens given"
                     )
-                added = added + self.conditioning_embedding(
-                    conditioning_tokens.to(tab_emb.device)
+                added = functional.normalize(
+                    self.conditioning_embedding(conditioning_tokens.to(tab_emb.device)),
+                    p=2,
+                    dim=1,
                 )
             if self.station_embedding is not None:
                 if station_tokens is None:
                     raise ValueError(
                         "Model is station-conditioning-enabled but no station tokens given"
                     )
-                added = added + self.station_embedding(station_tokens.to(tab_emb.device))
-            tab_emb = functional.normalize(tab_emb + added, p=2, dim=1)
+                token_emb = functional.normalize(
+                    self.station_embedding(station_tokens.to(tab_emb.device)), p=2, dim=1
+                )
+                added = token_emb if added is None else added + token_emb
+            assert added is not None
+            tab_emb = functional.normalize(
+                tab_emb + CONDITIONING_MIX_SCALE * added, p=2, dim=1
+            )
 
         if self.image_encoder is not None and images is not None:
             img_emb = self._pool_images(images, image_mask)

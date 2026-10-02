@@ -40,6 +40,28 @@ class TestModelOptions:
         with pytest.raises(ValueError):
             model(torch.randn(2, 12))
 
+    def test_station_conditioning_preserves_initial_geometry(self) -> None:
+        model = ResponseEmbeddingModel(
+            feature_dim=12, embedding_dim=32, use_image_encoder=False, conditioning="station"
+        )
+        model.eval()
+        features = torch.randn(32, 12)
+        tokens = torch.zeros(32, dtype=torch.long)
+        with torch.no_grad():
+            tab = model.encode_tabular(features)
+            token_emb = model.station_embedding(tokens)
+            # Mirrors forward(): normalized token, small fixed mix scale.
+            mixed = torch.nn.functional.normalize(
+                tab + 0.1 * torch.nn.functional.normalize(token_emb, p=2, dim=1), p=2, dim=1
+            )
+            off = ~torch.eye(32, dtype=torch.bool)
+            tab_cos = float((tab @ tab.T)[off].mean())
+            mixed_cos = float((mixed @ mixed.T)[off].mean())
+        # A raw nn.Embedding row (norm ~sqrt(dim)) used to swamps the unit-norm
+        # tabular embedding; the token must only perturb the geometry slightly.
+        assert mixed_cos < tab_cos + 0.2
+        assert mixed_cos < 0.95
+
     def test_meanmax_pooling_forward_without_images(self) -> None:
         model = ResponseEmbeddingModel(
             feature_dim=12, embedding_dim=16, use_image_encoder=False, image_pooling="meanmax"

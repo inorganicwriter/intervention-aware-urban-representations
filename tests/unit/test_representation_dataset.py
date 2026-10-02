@@ -87,8 +87,10 @@ class TestRepresentationDataset:
 
         ds = RepresentationDataset(ds_dir, station_attributes_path=attributes_path)
 
-        assert ds._station_tokens[orders[0]] == 9
-        assert ds._station_tokens[orders[1]] == 6
+        # transfer + terminal -> 16 + 2 = 18
+        assert ds._station_tokens[orders[0]] == 18
+        # new_line + extension + terminal missing -> 8 + 4 + 1 = 13
+        assert ds._station_tokens[orders[1]] == 13
         assert len(ds._station_tokens) == 2
 
     def test_sample_structure(self, tmp_path: Path) -> None:

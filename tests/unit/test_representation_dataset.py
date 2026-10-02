@@ -93,6 +93,38 @@ class TestRepresentationDataset:
         assert ds._station_tokens[orders[1]] == 13
         assert len(ds._station_tokens) == 2
 
+    def test_station_attribute_tokens_v1_schema(self, tmp_path: Path) -> None:
+        ds_dir, _ = build_synthetic_model_inputs(tmp_path)
+        index = pd.read_parquet(ds_dir / "sample_index.parquet")
+        orders = index["treatment_order"].tolist()
+        attributes_path = tmp_path / "station_attributes.parquet"
+        pd.DataFrame(
+            [
+                {
+                    "treatment_order": orders[0],
+                    "is_transfer_at_opening": True,
+                    "is_new_line_opening": False,
+                    "is_extension_opening": False,
+                    "is_terminal_at_opening": True,
+                },
+                {
+                    "treatment_order": orders[1],
+                    "is_transfer_at_opening": False,
+                    "is_new_line_opening": True,
+                    "is_extension_opening": True,
+                    "is_terminal_at_opening": np.nan,
+                },
+            ]
+        ).to_parquet(attributes_path, index=False)
+
+        ds = RepresentationDataset(
+            ds_dir, station_attributes_path=attributes_path, station_schema="v1"
+        )
+
+        # Legacy 4-bit codes: terminal-missing falls back to not-terminal.
+        assert ds._station_tokens[orders[0]] == 9
+        assert ds._station_tokens[orders[1]] == 6
+
     def test_sample_structure(self, tmp_path: Path) -> None:
         ds_dir, _ = build_synthetic_model_inputs(tmp_path)
         ds = RepresentationDataset(ds_dir)

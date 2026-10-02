@@ -64,6 +64,10 @@ def export_embeddings(
         raise ValueError(
             "Checkpoint uses station conditioning; pass --station-attributes"
         )
+    conditioning_schema = str(
+        checkpoint.get("conditioning_schema")
+        or ("v1" if checkpoint_conditioning else "v2")
+    )
 
     dataset = RepresentationDataset(
         model_inputs_dir,
@@ -72,6 +76,7 @@ def export_embeddings(
         load_images=effective_use_images,
         only_training_mask=False,
         station_attributes_path=station_attributes_path,
+        station_schema=conditioning_schema,
     )
     expected_columns = checkpoint.get("feature_columns")
     if not isinstance(expected_columns, (list, tuple)):
@@ -129,6 +134,7 @@ def export_embeddings(
         use_image_encoder=effective_use_images,
         image_pooling=str(checkpoint.get("image_pooling", "max")),
         conditioning=checkpoint.get("conditioning"),
+        conditioning_schema=conditioning_schema,
         learnable_temperature=bool(checkpoint.get("learnable_temperature", False)),
         uncertainty_weighted=bool(checkpoint.get("uncertainty_weighted", False)),
     ).to(dev)

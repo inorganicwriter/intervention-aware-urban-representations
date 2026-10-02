@@ -3,18 +3,21 @@
 City-level K-fold cross-validation with an inner city-validation split for
 hyperparameter selection; outer folds are used for evaluation only.  All
 feature standardization and hyperparameter selection are restricted to the
-fold training (fit + inner-validation) cities.  The predictors are:
+fold training (fit + inner-validation) cities, and the same fold-standardized
+matrix is used by both the regressions and the raw-feature retrieval.
+
+The predictors are:
 
 1. raw-feature retrieval (shape: nearest-neighbour ``nn_corr``);
 2. ridge regression with intercept (linear control);
 3. k-NN regression (nonlinear control);
 
-plus the train-mean prediction baseline.  Direction (sign agreement and its
-majority baseline), amplitude (RMSE) and shape retrieval are reported
-separately, never collapsed into one conclusion.  The primary outcome family
-is detected from the labels; for POI the four outcomes are reported
-separately, and every city's fold result is kept so paired increments and
-between-city differences can be inspected.
+plus the refit train-mean prediction baseline.  Direction (sign agreement
+against the majority sign of the refit labels), amplitude (RMSE) and shape
+retrieval are reported separately, never collapsed into one conclusion.  The
+primary outcome family is detected from the labels; for POI the four outcomes
+are reported separately, and every city's fold result is kept so paired
+increments and between-city differences can be inspected.
 
 This script intentionally does not evaluate existing checkpoints: a new fold's
 test cities may have trained an old checkpoint, so the current representation
@@ -91,7 +94,7 @@ class _FoldResult(TypedDict):
     knn: dict[int, _CellMetric]
     retrieval: dict[str, float | None]
     retrieval_per_outcome: dict[str, dict[str, float | None]]
-    per_city: dict[str, dict[str, _CityMetric | dict[str, float | None]]]
+    per_city: dict[str, object]
 
 
 def load_arrays(dataset_dir: Path) -> _Arrays:
@@ -120,6 +123,15 @@ def load_arrays(dataset_dir: Path) -> _Arrays:
         "cities": list(cities),
         "primary_family": primary,
     }
+
+
+def standardize_on_reference(features: np.ndarray, reference_idx: np.ndarray) -> np.ndarray:
+    """Center and scale on the reference (fit + inner-validation) rows only."""
+    reference = features[reference_idx]
+    mean = reference.mean(axis=0)
+    scale = reference.std(axis=0, ddof=0)
+    scale = np.where(scale < 1e-12, 1.0, scale)
+    return (features - mean) / scale
 
 
 def outcome_groups(family: str) -> dict[str, list[int]]:
@@ -176,22 +188,36 @@ def _rmse(prediction: np.ndarray, target: np.ndarray) -> float:
     return float(np.sqrt(np.mean((prediction - target) ** 2)))
 
 
+def _majority_sign(values: np.ndarray) -> float:
+    """Majority sign of non-zero labels; ties resolve to +1."""
+    nonzero = values[np.abs(values) > 1e-12]
+    if nonzero.size == 0:
+        return 1.0
+    positives = int((nonzero > 0).sum())
+    negatives = int((nonzero < 0).sum())
+    return 1.0 if positives >= negatives else -1.0
+
+
 def _direction_metrics(
-    prediction: np.ndarray, target: np.ndarray, baseline_value: float
+    prediction: np.ndarray, target: np.ndarray, majority_sign: float
 ) -> tuple[float | None, float | None]:
     nonzero = np.abs(target) > 1e-12
     if not nonzero.any():
         return None, None
     truth = np.sign(target[nonzero])
     accuracy = float(np.mean(np.sign(prediction[nonzero]) == truth))
-    baseline = float(np.mean(np.sign(np.full(truth.shape, baseline_value)) == truth))
+    baseline = float(np.mean(np.full(truth.shape, majority_sign) == truth))
     return accuracy, baseline
 
 
 def _cell_metrics(
-    prediction: np.ndarray, target: np.ndarray, baseline_value: float, param: float
+    prediction: np.ndarray,
+    target: np.ndarray,
+    baseline_value: float,
+    majority_sign: float,
+    param: float,
 ) -> _CellMetric:
-    direction, direction_baseline = _direction_metrics(prediction, target, baseline_value)
+    direction, direction_baseline = _direction_metrics(prediction, target, majority_sign)
     return {
         "rmse": _rmse(prediction, target),
         "baseline": _rmse(np.full(target.shape, baseline_value), target),
@@ -201,9 +227,7 @@ def _cell_metrics(
     }
 
 
-def _city_metrics(
-    metrics: list[_CellMetric],
-) -> _CityMetric:
+def _city_metrics(metrics: list[_CellMetric]) -> _CityMetric:
     rmses = [m["rmse"] for m in metrics]
     baselines = [m["baseline"] for m in metrics]
     directions = [m["direction"] for m in metrics if m["direction"] is not None]
@@ -223,48 +247,45 @@ def _city_metrics(
 
 def fold_controls(
     arrays: _Arrays,
+    standardized: np.ndarray,
     fit_idx: np.ndarray,
     val_idx: np.ndarray,
     test_idx: np.ndarray,
     min_obs: int,
 ) -> dict[str, object]:
-    features = arrays["features"]
     responses = arrays["responses"]
     masks = arrays["masks"]
     cities = np.asarray(arrays["cities"], dtype=object)
-    # Fold-internal standardization: means/scales come from fit+inner-val only.
-    reference_idx = np.concatenate([fit_idx, val_idx])
-    reference = features[reference_idx]
-    mean = reference.mean(axis=0)
-    scale = reference.std(axis=0, ddof=0)
-    scale = np.where(scale < 1e-12, 1.0, scale)
-    standardized = (features - mean) / scale
-    distance_val_fit = cdist(standardized[val_idx], standardized[fit_idx])
     refit_idx = np.concatenate([fit_idx, val_idx])
+    distance_val_fit = cdist(standardized[val_idx], standardized[fit_idx])
     distance_test_refit = cdist(standardized[test_idx], standardized[refit_idx])
     test_cities = cities[test_idx]
     unique_cities = sorted({str(city) for city in test_cities})
-    results: dict[str, object] = {
-        "ridge": {},
-        "knn": {},
-        "per_city": {city: {"ridge": [], "knn": []} for city in unique_cities},
+    ridge_map: dict[int, _CellMetric] = {}
+    knn_map: dict[int, _CellMetric] = {}
+    per_city: dict[str, dict[str, list[_CellMetric]]] = {
+        city: {"ridge": [], "knn": []} for city in unique_cities
     }
-    ridge_map: dict[int, _CellMetric] = results["ridge"]  # type: ignore[assignment]
-    knn_map: dict[int, _CellMetric] = results["knn"]  # type: ignore[assignment]
-    per_city = results["per_city"]
-    assert isinstance(per_city, dict)
     for cell in range(responses.shape[1]):
         fit_obs = masks[fit_idx, cell]
         val_obs = masks[val_idx, cell]
         test_obs = masks[test_idx, cell]
+        refit_obs = masks[refit_idx, cell]
         n_fit = int(fit_obs.sum())
         n_val = int(val_obs.sum())
         n_test = int(test_obs.sum())
         if n_fit < min_obs or n_test == 0:
             continue
+        if int(refit_obs.sum()) == 0:
+            continue
         y_fit = responses[fit_idx, cell][fit_obs]
         y_val = responses[val_idx, cell][val_obs]
         y_test = responses[test_idx, cell][test_obs]
+        refit_values = responses[refit_idx, cell][refit_obs]
+        # The regression is refit on fit+val, so its fair mean baseline and the
+        # majority-sign baseline must also come from the refit labels.
+        baseline_value = float(refit_values.mean())
+        majority_sign = _majority_sign(refit_values)
         city_rows = test_cities[test_obs]
         ridge_param: float | None = None
         if n_val >= max(min_obs // 2, 4):
@@ -283,20 +304,21 @@ def fold_controls(
                     best_ridge = (ridge, rmse)
             ridge_param = float(best_ridge[0]) if best_ridge is not None else None
         if ridge_param is not None:
-            refit_obs = masks[refit_idx, cell]
             prediction = _ridge_fit_predict(
                 standardized[refit_idx][refit_obs],
-                responses[refit_idx, cell][refit_obs],
+                refit_values,
                 standardized[test_idx][test_obs],
                 ridge_param,
             )
-            metric = _cell_metrics(prediction, y_test, float(y_fit.mean()), ridge_param)
+            metric = _cell_metrics(prediction, y_test, baseline_value, majority_sign, ridge_param)
             ridge_map[cell] = metric
             for city in unique_cities:
                 rows = city_rows == city
                 if rows.any():
                     per_city[city]["ridge"].append(
-                        _cell_metrics(prediction[rows], y_test[rows], float(y_fit.mean()), ridge_param)
+                        _cell_metrics(
+                            prediction[rows], y_test[rows], baseline_value, majority_sign, ridge_param
+                        )
                     )
         knn_param: float | None = None
         if n_val >= max(min_obs // 2, 4):
@@ -308,44 +330,46 @@ def fold_controls(
                     best_knn = (float(k), rmse)
             knn_param = best_knn[0] if best_knn is not None else None
         if knn_param is not None:
-            refit_obs = masks[refit_idx, cell]
-            prediction = _knn_predict(
-                distance_test_refit[:, refit_obs],
-                responses[refit_idx, cell][refit_obs],
-                int(knn_param),
-            )
-            metric = _cell_metrics(prediction, y_test, float(y_fit.mean()), knn_param)
+            prediction = _knn_predict(distance_test_refit[:, refit_obs], refit_values, int(knn_param))
+            metric = _cell_metrics(prediction, y_test, baseline_value, majority_sign, knn_param)
             knn_map[cell] = metric
             for city in unique_cities:
                 rows = city_rows == city
                 if rows.any():
                     per_city[city]["knn"].append(
-                        _cell_metrics(prediction[rows], y_test[rows], float(y_fit.mean()), knn_param)
+                        _cell_metrics(
+                            prediction[rows], y_test[rows], baseline_value, majority_sign, knn_param
+                        )
                     )
-    for city, entry in per_city.items():
-        entry["ridge_summary"] = _city_metrics(entry["ridge"])
-        entry["knn_summary"] = _city_metrics(entry["knn"])
-        entry["n_units"] = int(np.sum(test_cities == city))
-    return results
+    per_city_summary: dict[str, object] = {}
+    for city, bucket in per_city.items():
+        per_city_summary[city] = {
+            "n_units": int(np.sum(test_cities == city)),
+            "ridge": _city_metrics(bucket["ridge"]),
+            "knn": _city_metrics(bucket["knn"]),
+        }
+    return {"ridge": ridge_map, "knn": knn_map, "per_city": per_city_summary}
 
 
 def fold_retrieval(
-    arrays: _Arrays, test_idx: np.ndarray, columns: list[int], k: int
+    standardized: np.ndarray, test_idx: np.ndarray, columns: list[int], responses: np.ndarray,
+    masks: np.ndarray, k: int,
 ) -> dict[str, float | None]:
     import torch
 
-    features = torch.from_numpy(arrays["features"][test_idx]).float()
-    responses = torch.from_numpy(arrays["responses"][test_idx][:, columns]).float()
-    masks = torch.from_numpy(arrays["masks"][test_idx][:, columns])
-    if masks.sum() < 2:
+    features = torch.from_numpy(standardized[test_idx]).float()
+    response_tensor = torch.from_numpy(responses[test_idx][:, columns]).float()
+    mask_tensor = torch.from_numpy(masks[test_idx][:, columns])
+    if mask_tensor.sum() < 2:
         return {"nn_corr": None, "baseline": None, "n_units": 0.0}
-    block = retrieval_metrics(features, responses, masks, k=k)["overall"]
+    block = retrieval_metrics(features, response_tensor, mask_tensor, k=k)["overall"]
     nn_corr = block.get("nn_corr@k")
     baseline = block.get("baseline_corr")
+    n_units = block.get("n_units", 0)
     return {
         "nn_corr": float(nn_corr) if isinstance(nn_corr, (int, float)) else None,
         "baseline": float(baseline) if isinstance(baseline, (int, float)) else None,
-        "n_units": float(block.get("n_units", 0)),
+        "n_units": float(n_units) if isinstance(n_units, (int, float)) else 0.0,
     }
 
 
@@ -384,43 +408,36 @@ def aggregate_cities(fold_results: list[_FoldResult]) -> dict[str, object]:
     per_city: dict[str, dict[str, list[_CityMetric]]] = {}
     for fold in fold_results:
         for city, entry in fold["per_city"].items():
+            assert isinstance(entry, dict)
             bucket = per_city.setdefault(city, {"ridge": [], "knn": []})
-            ridge_summary = entry.get("ridge_summary")
-            knn_summary = entry.get("knn_summary")
-            if isinstance(ridge_summary, dict):
-                bucket["ridge"].append(ridge_summary)  # type: ignore[arg-type]
-            if isinstance(knn_summary, dict):
-                bucket["knn"].append(knn_summary)  # type: ignore[arg-type]
-    summary: dict[str, object] = {}
+            for method in ("ridge", "knn"):
+                summary = entry.get(method)
+                if isinstance(summary, dict):
+                    bucket[method].append(summary)  # type: ignore[arg-type]
+    result: dict[str, object] = {}
     for city, bucket in sorted(per_city.items()):
         city_entry: dict[str, object] = {}
         for method in ("ridge", "knn"):
             values = bucket[method]
             if not values:
                 continue
+            directions = [value["direction_mean"] for value in values if value["direction_mean"] is not None]
+            direction_baselines = [
+                value["direction_baseline_mean"]
+                for value in values
+                if value["direction_baseline_mean"] is not None
+            ]
             city_entry[method] = {
                 "n_units": int(np.mean([value["n"] for value in values])),
                 "rmse_mean": float(np.mean([value["rmse_mean"] for value in values])),
                 "amplitude_improvement": float(np.mean([value["improvement"] for value in values])),
-                "direction_accuracy": float(
-                    np.mean([value["direction_mean"] for value in values if value["direction_mean"] is not None])
-                )
-                if any(value["direction_mean"] is not None for value in values)
-                else None,
-                "direction_baseline": float(
-                    np.mean(
-                        [
-                            value["direction_baseline_mean"]
-                            for value in values
-                            if value["direction_baseline_mean"] is not None
-                        ]
-                    )
-                )
-                if any(value["direction_baseline_mean"] is not None for value in values)
+                "direction_accuracy": float(np.mean(directions)) if directions else None,
+                "direction_baseline": float(np.mean(direction_baselines))
+                if direction_baselines
                 else None,
             }
-        summary[city] = city_entry
-    return summary
+        result[city] = city_entry
+    return result
 
 
 def main() -> int:
@@ -447,11 +464,17 @@ def main() -> int:
         fit_idx = np.array([i for i, city in enumerate(cities) if city in train_set])
         val_idx = np.array([i for i, city in enumerate(cities) if city in val_set])
         test_idx = np.array([i for i, city in enumerate(cities) if city in test_set])
-        controls = fold_controls(arrays, fit_idx, val_idx, test_idx, args.min_obs)
+        reference_idx = np.concatenate([fit_idx, val_idx])
+        standardized = standardize_on_reference(arrays["features"], reference_idx)
+        controls = fold_controls(arrays, standardized, fit_idx, val_idx, test_idx, args.min_obs)
         all_cells = [cell for cells in groups.values() for cell in cells]
-        retrieval = fold_retrieval(arrays, test_idx, all_cells, args.k)
+        retrieval = fold_retrieval(
+            standardized, test_idx, all_cells, arrays["responses"], arrays["masks"], args.k
+        )
         retrieval_per_outcome = {
-            outcome: fold_retrieval(arrays, test_idx, cells, args.k)
+            outcome: fold_retrieval(
+                standardized, test_idx, cells, arrays["responses"], arrays["masks"], args.k
+            )
             for outcome, cells in groups.items()
         }
         fold_result: _FoldResult = {

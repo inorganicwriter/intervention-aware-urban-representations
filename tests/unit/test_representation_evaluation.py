@@ -242,6 +242,16 @@ class TestProbeRmse:
         assert result["rmse_overall"] == pytest.approx(2.0, abs=1e-5)
         assert result["mean_baseline_overall"] == pytest.approx(0.0, abs=1e-6)
 
+    def test_center_uses_cell_observed_rows(self) -> None:
+        # Rows 3-5 carry no label for the cell but have extreme features; the
+        # intercept must be built from the observed rows only.
+        x = torch.tensor([[1.0], [2.0], [3.0], [100.0], [100.0], [100.0]])
+        y = torch.tensor([[2.0], [4.0], [6.0], [0.0], [0.0], [0.0]])
+        mask = torch.tensor([[True], [True], [True], [False], [False], [False]])
+        result = evaluation.probe_rmse(x, y, mask, x, y, mask, ridge=1e-6, min_obs=2)
+        assert result["rmse_overall"] is not None
+        assert result["rmse_overall"] < 1e-3
+
     def test_select_probe_ridge_returns_candidate(self) -> None:
         rng = np.random.RandomState(11)
         x = torch.from_numpy(rng.randn(60, 5).astype(np.float32))

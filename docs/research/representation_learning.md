@@ -27,7 +27,8 @@
     `station`（四个 0/1 开通属性 + 终点点缺失位，32 codes）以 L2 归一化、固定比例 0.1
     混入表格流；比例固定是为了避免随机初始化压缩地点差异。开通年份与站点属性都是
     处理前信息，任何新站点推理时都可得，不破坏跨城市迁移；默认路径的"条件化"由响应
-    对齐目标隐式实现。
+    对齐目标隐式实现。条件化规则带 schema 版本（`v1` = 旧 16 codes 原始相加，
+    `v2` = 现行规则），checkpoint 记录并由加载/导出按 schema 匹配。
 - **目标**：`total = (1-pred_weight)·L_rep + pred_weight·L_pred`
   - `L_rep`：InfoNCE（正样本权重 = 响应相似度）+ 嵌入距离 MSE（`rep_alpha` 混合）；
     self-logit 与无足够共同观测的 pair 均从目标中排除，跨 outcome family 只对可比较

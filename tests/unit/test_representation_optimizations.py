@@ -302,6 +302,8 @@ class TestOptimizedTrainingEndToEnd:
             "queue_size": 64,
             "learnable_temperature": True,
             "uncertainty_weighted": True,
+            "conditioning": None,
+            "conditioning_schema": "v2",
         }
 
         history = json.loads((run_dir / "training_history.json").read_text(encoding="utf-8"))

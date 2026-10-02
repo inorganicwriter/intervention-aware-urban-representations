@@ -696,6 +696,8 @@ def train_representation(
             "queue_size": queue_size,
             "learnable_temperature": learnable_temperature,
             "uncertainty_weighted": uncertainty_weighted,
+            "conditioning": conditioning,
+            "conditioning_schema": "v2",
         },
         "data_splits": {
             "train_units": len(train_ds),
@@ -862,6 +864,7 @@ def train_representation(
                     "max_images_per_grid": max_images_per_grid,
                     "image_pooling": image_pooling,
                     "conditioning": conditioning,
+                    "conditioning_schema": "v2",
                     "learnable_temperature": learnable_temperature,
                     "uncertainty_weighted": uncertainty_weighted,
                 },

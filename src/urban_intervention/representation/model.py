@@ -46,6 +46,7 @@ class ResponseEmbeddingModel(nn.Module):
         predictor_hidden_dim: int = 64,
         image_pooling: str = "max",
         conditioning: str | None = None,
+        conditioning_schema: str = "v2",
         learnable_temperature: bool = False,
         uncertainty_weighted: bool = False,
     ):
@@ -54,11 +55,14 @@ class ResponseEmbeddingModel(nn.Module):
             raise ValueError(f"Unknown image_pooling: {image_pooling!r}")
         if conditioning not in {None, "opening_year", "station", "opening_year_station"}:
             raise ValueError(f"Unknown conditioning: {conditioning!r}")
+        if conditioning_schema not in {"v1", "v2"}:
+            raise ValueError(f"Unknown conditioning_schema: {conditioning_schema!r}")
         self.embedding_dim = embedding_dim
         self.hidden_dims = tuple(hidden_dims)
         self.use_image_encoder = use_image_encoder
         self.image_pooling = image_pooling
         self.conditioning = conditioning
+        self.conditioning_schema = conditioning_schema
         self.learnable_temperature = learnable_temperature
         self.uncertainty_weighted = uncertainty_weighted
 
@@ -84,15 +88,22 @@ class ResponseEmbeddingModel(nn.Module):
         # Explicit intervention conditioning: per-token embeddings injected
         # into the tabular stream.  ``opening_year`` is pre-treatment
         # information available at inference for any new station; ``station``
-        # tokens encode treatment-level attributes (transfer / new-line /
-        # extension / terminal, 4 bits plus a terminal-missing bit) that are
-        # likewise known ex ante.  Disabled by default; the response-aligned
-        # objective alone is the "implicit conditioning".
+        # tokens encode treatment-level attributes that are likewise known ex
+        # ante.  Disabled by default; the response-aligned objective alone is
+        # the "implicit conditioning".
+        # Schema v1 (legacy): 4-bit station codes and raw embedding addition.
+        # Schema v2: 5-bit codes (terminal-missing indicator) and normalized
+        # embeddings mixed at CONDITIONING_MIX_SCALE.
+        station_codes = 16 if conditioning_schema == "v1" else 32
         self.conditioning_embedding = (
-            nn.Embedding(30, embedding_dim) if conditioning in {"opening_year", "opening_year_station"} else None
+            nn.Embedding(30, embedding_dim)
+            if conditioning in {"opening_year", "opening_year_station"}
+            else None
         )
         self.station_embedding = (
-            nn.Embedding(32, embedding_dim) if conditioning in {"station", "opening_year_station"} else None
+            nn.Embedding(station_codes, embedding_dim)
+            if conditioning in {"station", "opening_year_station"}
+            else None
         )
 
         self.projector = nn.Sequential(
@@ -196,35 +207,57 @@ class ResponseEmbeddingModel(nn.Module):
         tab_emb = self.tab_encoder(features)
 
         if self.conditioning_embedding is not None or self.station_embedding is not None:
-            # Token embeddings are L2-normalized and mixed at a small fixed
-            # scale: a raw nn.Embedding row has norm ~sqrt(dim) and would
-            # otherwise swamp the unit-norm tabular embedding at
-            # initialization and collapse cross-location geometry.  Directions
-            # remain trainable; the constant only bounds the initial influence.
-            added: torch.Tensor | None = None
-            if self.conditioning_embedding is not None:
-                if conditioning_tokens is None:
-                    raise ValueError(
-                        "Model is conditioning-enabled but no conditioning tokens given"
+            if self.conditioning_schema == "v1":
+                # Legacy rule: 4-bit station codes, raw embedding addition.
+                added = torch.zeros_like(tab_emb)
+                if self.conditioning_embedding is not None:
+                    if conditioning_tokens is None:
+                        raise ValueError(
+                            "Model is conditioning-enabled but no conditioning tokens given"
+                        )
+                    added = added + self.conditioning_embedding(
+                        conditioning_tokens.to(tab_emb.device)
                     )
-                added = functional.normalize(
-                    self.conditioning_embedding(conditioning_tokens.to(tab_emb.device)),
-                    p=2,
-                    dim=1,
-                )
-            if self.station_embedding is not None:
-                if station_tokens is None:
-                    raise ValueError(
-                        "Model is station-conditioning-enabled but no station tokens given"
+                if self.station_embedding is not None:
+                    if station_tokens is None:
+                        raise ValueError(
+                            "Model is station-conditioning-enabled but no station tokens given"
+                        )
+                    added = added + self.station_embedding(station_tokens.to(tab_emb.device))
+                tab_emb = functional.normalize(tab_emb + added, p=2, dim=1)
+            else:
+                # v2: token embeddings are L2-normalized and mixed at a small
+                # fixed scale.  A raw nn.Embedding row has norm ~sqrt(dim) and
+                # would otherwise swamp the unit-norm tabular embedding at
+                # initialization and collapse cross-location geometry.
+                # Directions remain trainable; the constant only bounds the
+                # initial influence.
+                added_v2: torch.Tensor | None = None
+                if self.conditioning_embedding is not None:
+                    if conditioning_tokens is None:
+                        raise ValueError(
+                            "Model is conditioning-enabled but no conditioning tokens given"
+                        )
+                    added_v2 = functional.normalize(
+                        self.conditioning_embedding(conditioning_tokens.to(tab_emb.device)),
+                        p=2,
+                        dim=1,
                     )
-                token_emb = functional.normalize(
-                    self.station_embedding(station_tokens.to(tab_emb.device)), p=2, dim=1
+                if self.station_embedding is not None:
+                    if station_tokens is None:
+                        raise ValueError(
+                            "Model is station-conditioning-enabled but no station tokens given"
+                        )
+                    token_emb = functional.normalize(
+                        self.station_embedding(station_tokens.to(tab_emb.device)),
+                        p=2,
+                        dim=1,
+                    )
+                    added_v2 = token_emb if added_v2 is None else added_v2 + token_emb
+                assert added_v2 is not None
+                tab_emb = functional.normalize(
+                    tab_emb + CONDITIONING_MIX_SCALE * added_v2, p=2, dim=1
                 )
-                added = token_emb if added is None else added + token_emb
-            assert added is not None
-            tab_emb = functional.normalize(
-                tab_emb + CONDITIONING_MIX_SCALE * added, p=2, dim=1
-            )
 
         if self.image_encoder is not None and images is not None:
             img_emb = self._pool_images(images, image_mask)

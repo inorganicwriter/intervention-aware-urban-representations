@@ -40,6 +40,30 @@ class TestModelOptions:
         with pytest.raises(ValueError):
             model(torch.randn(2, 12))
 
+    def test_conditioning_schema_selects_station_embedding_size(self) -> None:
+        model_v1 = ResponseEmbeddingModel(
+            feature_dim=12,
+            embedding_dim=16,
+            use_image_encoder=False,
+            conditioning="station",
+            conditioning_schema="v1",
+        )
+        model_v2 = ResponseEmbeddingModel(
+            feature_dim=12,
+            embedding_dim=16,
+            use_image_encoder=False,
+            conditioning="station",
+            conditioning_schema="v2",
+        )
+        assert model_v1.station_embedding is not None
+        assert model_v1.station_embedding.num_embeddings == 16
+        assert model_v2.station_embedding is not None
+        assert model_v2.station_embedding.num_embeddings == 32
+        with pytest.raises(ValueError):
+            ResponseEmbeddingModel(
+                feature_dim=12, use_image_encoder=False, conditioning_schema="v3"
+            )
+
     def test_station_conditioning_preserves_initial_geometry(self) -> None:
         model = ResponseEmbeddingModel(
             feature_dim=12, embedding_dim=32, use_image_encoder=False, conditioning="station"

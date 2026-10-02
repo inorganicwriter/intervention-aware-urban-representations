@@ -27,10 +27,16 @@
   嵌入存在明显差异，但这不证明差异编码了响应信息，也不排除局部退化
 - **条件化训练**（修复前实现）单 seed 无稳定增益；同配置多 seed 波动大于配置间差异
 
-### 已修复（提交 `b945ed6`、`e8b9248`）
+### 已修复（提交 `b945ed6`、`e8b9248`，以及评估可信度修复轮）
 - `probe_rmse`：训练均值中心化（等价截距）、训练均值基线、`select_probe_ridge` 按表示独立选 ridge
+- `probe_rmse` 的截距改为按每个 cell 的**观测行**中心化（缺失标签时不再混入未观测行）
 - `response_similarity_*`：新增 `precision="float64"` 稳定计算选项
-- station 条件化：token L2 归一化 + 固定混合比例 0.1 + terminal 缺失位（32 codes）
+- station 条件化：token L2 归一化 + 固定混合比例 0.1 + terminal 缺失位（32 codes）；
+  新增 `conditioning_schema` 版本（v1 = 旧 16 codes + 原始相加，v2 = 新规则），
+  checkpoint 记录 schema 且加载/导出按 schema 匹配，旧权重不再被静默重评
+- 对照脚本：最终基线改用**重拟合（fit+val）标签**的均值与多数符号；检索与回归共用
+  **折内标准化**特征；方向基线不再用效应均值符号；逐城市配对增量
+- 新增反例测试：公平基线（X 恒定）、多数符号、缺失标签 probe、v1/v2 schema
 - 新增 `scripts/analysis/representation_diagnostics.py` 与
   `scripts/analysis/representation_controls.py`
 

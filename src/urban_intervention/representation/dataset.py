@@ -110,8 +110,11 @@ class RepresentationDataset(torch.utils.data.Dataset[GridSample]):
         load_images: bool = False,
         only_training_mask: bool = False,
         station_attributes_path: Path | str | None = None,
+        station_schema: str = "v2",
     ):
         root = Path(model_inputs_dir)
+        if station_schema not in {"v1", "v2"}:
+            raise ValueError(f"Unknown station_schema: {station_schema!r}")
         self.root = root
         self.max_images_per_grid = max_images_per_grid
         self.load_images = load_images
@@ -168,15 +171,24 @@ class RepresentationDataset(torch.utils.data.Dataset[GridSample]):
                 attr_frame[column] = (
                     pd.to_numeric(attr_frame[column], errors="coerce").fillna(0).astype(int)
                 )
-            # Four attribute bits plus one missing indicator: an unknown
-            # terminal status must not be conflated with "not terminal".
-            attr_frame["_code"] = (
-                attr_frame["is_transfer_at_opening"] * 16
-                + attr_frame["is_new_line_opening"] * 8
-                + attr_frame["is_extension_opening"] * 4
-                + attr_frame["is_terminal_at_opening"] * 2
-                + attr_frame["_terminal_missing"]
-            )
+            if station_schema == "v1":
+                # Legacy 4-bit codes: terminal-missing is not represented.
+                attr_frame["_code"] = (
+                    attr_frame["is_transfer_at_opening"] * 8
+                    + attr_frame["is_new_line_opening"] * 4
+                    + attr_frame["is_extension_opening"] * 2
+                    + attr_frame["is_terminal_at_opening"]
+                )
+            else:
+                # Four attribute bits plus one missing indicator: an unknown
+                # terminal status must not be conflated with "not terminal".
+                attr_frame["_code"] = (
+                    attr_frame["is_transfer_at_opening"] * 16
+                    + attr_frame["is_new_line_opening"] * 8
+                    + attr_frame["is_extension_opening"] * 4
+                    + attr_frame["is_terminal_at_opening"] * 2
+                    + attr_frame["_terminal_missing"]
+                )
             self._station_tokens = dict(
                 zip(
                     attr_frame["treatment_order"].astype(int),

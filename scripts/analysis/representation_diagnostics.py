@@ -204,6 +204,10 @@ def precision_diagnostics(ds: RepresentationDataset, n_pairs: int = 2000, seed: 
 def _load_model(checkpoint_path: Path, ds: RepresentationDataset) -> ResponseEmbeddingModel:
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     state = checkpoint["model_state_dict"]
+    conditioning = checkpoint.get("conditioning") or None
+    conditioning_schema = str(
+        checkpoint.get("conditioning_schema") or ("v1" if conditioning else "v2")
+    )
     model = ResponseEmbeddingModel(
         feature_dim=ds.feature_dim(),
         hidden_dims=tuple(checkpoint["hidden_dims"]),
@@ -211,7 +215,8 @@ def _load_model(checkpoint_path: Path, ds: RepresentationDataset) -> ResponseEmb
         dropout=float(checkpoint.get("dropout", 0.1)),
         use_image_encoder=False,
         image_pooling=checkpoint.get("image_pooling", "max"),
-        conditioning=checkpoint.get("conditioning") or None,
+        conditioning=conditioning,
+        conditioning_schema=conditioning_schema,
         learnable_temperature=any(key.startswith("logit_scale") for key in state),
         uncertainty_weighted=any(key.startswith("log_var") for key in state),
     )
@@ -386,17 +391,22 @@ def main() -> int:
         "station_tokens": station_token_distribution(args.station_attributes),
     }
     if args.checkpoint is not None:
-        if args.station_attributes is None and "station" in str(
-            torch.load(args.checkpoint, map_location="cpu", weights_only=True).get("conditioning") or ""
-        ):
+        checkpoint_meta = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
+        checkpoint_conditioning = checkpoint_meta.get("conditioning") or None
+        if args.station_attributes is None and "station" in str(checkpoint_conditioning or ""):
             print("Checkpoint is station-conditioned; pass --station-attributes", file=sys.stderr)
             return 2
+        conditioning_schema = str(
+            checkpoint_meta.get("conditioning_schema")
+            or ("v1" if checkpoint_conditioning else "v2")
+        )
         split_ds = RepresentationDataset(
             args.dataset,
             split=args.split,
             only_training_mask=True,
             load_images=False,
             station_attributes_path=args.station_attributes,
+            station_schema=conditioning_schema,
         )
         report["embedding"] = embedding_diagnostics(split_ds, args.checkpoint, args.split, k=args.k)
     args.output_directory.mkdir(parents=True, exist_ok=True)

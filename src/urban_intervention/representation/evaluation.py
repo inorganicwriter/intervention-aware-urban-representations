@@ -449,14 +449,6 @@ def probe_rmse(
         family_cells = {"raw": list(range(dim))}
     all_cells = [cell for cells in family_cells.values() for cell in cells]
 
-    if center:
-        x_mean = x_train.mean(dim=0, keepdim=True)
-        x_fit = x_train - x_mean
-        x_target = x_test - x_mean
-    else:
-        x_fit = x_train
-        x_target = x_test
-
     mse_by_cell: dict[int, float] = {}
     baseline_by_cell: dict[int, float] = {}
     for j in all_cells:
@@ -468,11 +460,21 @@ def probe_rmse(
         tested_n = int(test_rows.sum())
         if tested_n == 0:
             continue
+        x_raw = x_train[train_rows]
+        if center:
+            # The intercept must be built from the rows that actually fit this
+            # cell; centering on all training rows would mix in unobserved
+            # labels and stop being equivalent to an intercept ridge.
+            x_mean = x_raw.mean(dim=0, keepdim=True)
+            x_j = x_raw - x_mean
+            x_target = x_test[test_rows] - x_mean
+        else:
+            x_j = x_raw
+            x_target = x_test[test_rows]
         y_j = y_train[train_rows, j].unsqueeze(1)
         y_mean = y_j.mean()
         y_target = y_test[test_rows, j].unsqueeze(1)
         baseline_by_cell[j] = float(((y_mean.expand_as(y_target) - y_target) ** 2).mean())
-        x_j = x_fit[train_rows]
         design = x_j.T @ x_j + ridge * torch.eye(x_j.shape[1], dtype=x_j.dtype, device=x_j.device)
         try:
             if center:
@@ -481,7 +483,7 @@ def probe_rmse(
                 beta = torch.linalg.solve(design, x_j.T @ y_j)
         except RuntimeError:
             continue
-        pred = x_target[test_rows] @ beta
+        pred = x_target @ beta
         if center:
             pred = pred + y_mean
         mse = float(((pred - y_target) ** 2).mean())

@@ -42,7 +42,9 @@ def test_refit_mean_baseline_matches_refit_model() -> None:
     test_idx = np.array([8, 9])
     standardized = arrays["features"]
 
-    result = controls.fold_controls(arrays, standardized, fit_idx, val_idx, test_idx, min_obs=2)
+    result = controls.fold_controls(
+        arrays, standardized, standardized, fit_idx, val_idx, test_idx, min_obs=2
+    )
 
     metric = result["ridge"][0]
     # Refit mean over fit+val labels is 5.0, exactly the test label, so the
@@ -68,3 +70,22 @@ def test_direction_baseline_uses_majority_sign() -> None:
     assert accuracy is not None and baseline is not None
     assert accuracy == pytest.approx(0.1)
     assert baseline == pytest.approx(0.9)
+
+
+def test_city_summary_keeps_grid_and_cell_counts() -> None:
+    responses = np.zeros((12, 1), dtype=np.float64)
+    cities = ["a"] * 4 + ["b"] * 4 + ["c"] * 2 + ["d"] * 2
+    arrays = _arrays(responses, cities)
+    fit_idx = np.arange(0, 4)
+    val_idx = np.arange(4, 8)
+    test_idx = np.arange(8, 12)
+    standardized = arrays["features"]
+
+    result = controls.fold_controls(
+        arrays, standardized, standardized, fit_idx, val_idx, test_idx, min_obs=2
+    )
+
+    per_city = result["per_city"]
+    assert per_city["c"]["n_units"] == 2
+    assert per_city["c"]["ridge"]["n_cells"] == 1
+    assert per_city["d"]["knn"]["n_cells"] == 1

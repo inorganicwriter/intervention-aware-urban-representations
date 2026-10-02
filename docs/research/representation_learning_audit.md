@@ -36,7 +36,12 @@
   checkpoint 记录 schema 且加载/导出按 schema 匹配，旧权重不再被静默重评
 - 对照脚本：最终基线改用**重拟合（fit+val）标签**的均值与多数符号；检索与回归共用
   **折内标准化**特征；方向基线不再用效应均值符号；逐城市配对增量
-- 新增反例测试：公平基线（X 恒定）、多数符号、缺失标签 probe、v1/v2 schema
+- 对照脚本第二轮：特征从**原始未标准化列**读取（数据集只留 z 列时用
+  `normalization.json` 反演，缺失保留 NaN，彻底切断旧划分的标准化/零填充）；
+  折内预处理分两阶段（内层选参仅用 fit 城市，最终重拟合用 fit+val 并供 test 检索）；
+  城市汇总区分真实网格数 `n_units` 与评估 cell 数 `n_cells`
+- 新增反例测试：公平基线（X 恒定）、多数符号、缺失标签 probe、v1/v2 schema、
+  城市网格数/cell 数
 - 新增 `scripts/analysis/representation_diagnostics.py` 与
   `scripts/analysis/representation_controls.py`
 

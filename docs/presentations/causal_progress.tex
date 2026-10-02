@@ -409,17 +409,17 @@
 \begin{frame}{表示学习（4）：诊断结论}
   \small
   \begin{itemize}
-    \item 已排除：标签噪声（VIIRS 折半信度 0.8）、两点支撑（0\%）、
-      float32 消减（差异 0）、嵌入塌缩（平均余弦 $\approx0.55$，
-      有效秩 $\approx33/128$）
-    \item 已确认：设计权重在各 horizon 恒定，W-design 在成对相似度中被约去；
-      对比损失与距离损失的几何目标互相冲突
-    \item 未决：原始特征的城市外可预测性（城市级 CV 最小对照中）
+    \item 评估问题已确认：probe 无截距、选点与单折噪声；已在代码中修正
+    \item 未发现整体塌缩（平均余弦 $\approx0.55$，有效秩 $\approx33/128$），
+      但差异不证明编码了响应信息；pair 门槛、float32 不再是主要解释
+    \item 已确认：设计权重在各 horizon 恒定，W-design 不重塑成对相似度
+    \item 待验证机制：对比损失与距离损失的几何目标冲突
+    \item 未知：原始特征的城市外可预测性（方向/幅度/形状分开的城市 CV 对照）
   \end{itemize}
   \medskip
-  \begin{block}{下一步}
-    \small 对照结果决定：补充处理前特征 / 改论文定位，或采用"保留 raw 几何 +
-    紧凑响应块"重构目标；确认前不启动多 seed 正式矩阵。
+  \begin{block}{下一步（门禁）}
+    \small 先交付可预测性对照；若存在稳定城市外信号，再按 fold 重训当前模型与
+    raw+响应块（多 seed，λ 含 0 且仅内层选）；旧 checkpoint 不用于新折评估。
   \end{block}
 \end{frame}
 

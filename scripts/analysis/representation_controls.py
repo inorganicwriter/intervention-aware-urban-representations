@@ -1,23 +1,26 @@
 """Minimal controls: can raw pre-treatment features predict the frozen labels?
 
 City-level K-fold cross-validation with an inner city-validation split for
-hyperparameter selection; outer folds are used for evaluation only.  The
-predictors are:
+hyperparameter selection; outer folds are used for evaluation only.  All
+feature standardization and hyperparameter selection are restricted to the
+fold training (fit + inner-validation) cities.  The predictors are:
 
-1. raw-feature retrieval (nearest-neighbour ``nn_corr`` on the model input
-   features, i.e. the raw-feature baseline);
+1. raw-feature retrieval (shape: nearest-neighbour ``nn_corr``);
 2. ridge regression with intercept (linear control);
 3. k-NN regression (nonlinear control);
 
-plus the train-mean prediction baseline, so a predictor that does not beat
-predicting the training mean cannot be read as evidence of predictability.
-The primary outcome family is detected from the labels; for POI the four
-outcomes are also reported separately.
+plus the train-mean prediction baseline.  Direction (sign agreement and its
+majority baseline), amplitude (RMSE) and shape retrieval are reported
+separately, never collapsed into one conclusion.  The primary outcome family
+is detected from the labels; for POI the four outcomes are reported
+separately, and every city's fold result is kept so paired increments and
+between-city differences can be inspected.
 
-The current representation model is intentionally not retrained here: with a
-different fold assignment its existing checkpoint would have seen many test
-cities, so a fold-wise neural comparison only makes sense after this ceiling
-test shows that the features carry signal at all.
+This script intentionally does not evaluate existing checkpoints: a new fold's
+test cities may have trained an old checkpoint, so the current representation
+model (and the raw+response-block variant) must be retrained inside each fold;
+that is a formal experiment and is gated on this ceiling test showing stable
+out-of-city signal.
 
 Run on the server from the repository root::
 
@@ -63,15 +66,32 @@ class _Arrays(TypedDict):
     primary_family: str
 
 
+class _CellMetric(TypedDict):
+    rmse: float
+    baseline: float
+    direction: float | None
+    direction_baseline: float | None
+    param: float
+
+
+class _CityMetric(TypedDict):
+    n: int
+    rmse_mean: float
+    improvement: float
+    direction_mean: float | None
+    direction_baseline_mean: float | None
+
+
 class _FoldResult(TypedDict):
     fold: int
     fit_units: int
     val_units: int
     test_units: int
-    ridge: dict[int, dict[str, float]]
-    knn: dict[int, dict[str, float]]
-    retrieval: float | None
-    retrieval_per_outcome: dict[str, float | None]
+    ridge: dict[int, _CellMetric]
+    knn: dict[int, _CellMetric]
+    retrieval: dict[str, float | None]
+    retrieval_per_outcome: dict[str, dict[str, float | None]]
+    per_city: dict[str, dict[str, _CityMetric | dict[str, float | None]]]
 
 
 def load_arrays(dataset_dir: Path) -> _Arrays:
@@ -146,16 +166,59 @@ def _ridge_fit_predict(
     return (x_target - x_mean) @ beta + y_mean
 
 
+def _knn_predict(distance_matrix: np.ndarray, y_fit: np.ndarray, k: int) -> np.ndarray:
+    k_eff = min(k, distance_matrix.shape[1])
+    neighbours = np.argsort(distance_matrix, axis=1)[:, :k_eff]
+    return y_fit[neighbours].mean(axis=1)
+
+
 def _rmse(prediction: np.ndarray, target: np.ndarray) -> float:
     return float(np.sqrt(np.mean((prediction - target) ** 2)))
 
 
-def _knn_predict(
-    distance_matrix: np.ndarray, y_fit: np.ndarray, k: int
-) -> np.ndarray:
-    k_eff = min(k, distance_matrix.shape[1])
-    neighbours = np.argsort(distance_matrix, axis=1)[:, :k_eff]
-    return y_fit[neighbours].mean(axis=1)
+def _direction_metrics(
+    prediction: np.ndarray, target: np.ndarray, baseline_value: float
+) -> tuple[float | None, float | None]:
+    nonzero = np.abs(target) > 1e-12
+    if not nonzero.any():
+        return None, None
+    truth = np.sign(target[nonzero])
+    accuracy = float(np.mean(np.sign(prediction[nonzero]) == truth))
+    baseline = float(np.mean(np.sign(np.full(truth.shape, baseline_value)) == truth))
+    return accuracy, baseline
+
+
+def _cell_metrics(
+    prediction: np.ndarray, target: np.ndarray, baseline_value: float, param: float
+) -> _CellMetric:
+    direction, direction_baseline = _direction_metrics(prediction, target, baseline_value)
+    return {
+        "rmse": _rmse(prediction, target),
+        "baseline": _rmse(np.full(target.shape, baseline_value), target),
+        "direction": direction,
+        "direction_baseline": direction_baseline,
+        "param": param,
+    }
+
+
+def _city_metrics(
+    metrics: list[_CellMetric],
+) -> _CityMetric:
+    rmses = [m["rmse"] for m in metrics]
+    baselines = [m["baseline"] for m in metrics]
+    directions = [m["direction"] for m in metrics if m["direction"] is not None]
+    direction_baselines = [
+        m["direction_baseline"] for m in metrics if m["direction_baseline"] is not None
+    ]
+    return {
+        "n": len(metrics),
+        "rmse_mean": float(np.mean(rmses)),
+        "improvement": float(np.mean(np.subtract(baselines, rmses))),
+        "direction_mean": float(np.mean(directions)) if directions else None,
+        "direction_baseline_mean": float(np.mean(direction_baselines))
+        if direction_baselines
+        else None,
+    }
 
 
 def fold_controls(
@@ -164,14 +227,32 @@ def fold_controls(
     val_idx: np.ndarray,
     test_idx: np.ndarray,
     min_obs: int,
-) -> dict[str, dict[int, dict[str, float]]]:
+) -> dict[str, object]:
     features = arrays["features"]
     responses = arrays["responses"]
     masks = arrays["masks"]
-    distance_val_fit = cdist(features[val_idx], features[fit_idx])
+    cities = np.asarray(arrays["cities"], dtype=object)
+    # Fold-internal standardization: means/scales come from fit+inner-val only.
+    reference_idx = np.concatenate([fit_idx, val_idx])
+    reference = features[reference_idx]
+    mean = reference.mean(axis=0)
+    scale = reference.std(axis=0, ddof=0)
+    scale = np.where(scale < 1e-12, 1.0, scale)
+    standardized = (features - mean) / scale
+    distance_val_fit = cdist(standardized[val_idx], standardized[fit_idx])
     refit_idx = np.concatenate([fit_idx, val_idx])
-    distance_test_refit = cdist(features[test_idx], features[refit_idx])
-    results: dict[str, dict[int, dict[str, float]]] = {"ridge": {}, "knn": {}, "baseline": {}}
+    distance_test_refit = cdist(standardized[test_idx], standardized[refit_idx])
+    test_cities = cities[test_idx]
+    unique_cities = sorted({str(city) for city in test_cities})
+    results: dict[str, object] = {
+        "ridge": {},
+        "knn": {},
+        "per_city": {city: {"ridge": [], "knn": []} for city in unique_cities},
+    }
+    ridge_map: dict[int, _CellMetric] = results["ridge"]  # type: ignore[assignment]
+    knn_map: dict[int, _CellMetric] = results["knn"]  # type: ignore[assignment]
+    per_city = results["per_city"]
+    assert isinstance(per_city, dict)
     for cell in range(responses.shape[1]):
         fit_obs = masks[fit_idx, cell]
         val_obs = masks[val_idx, cell]
@@ -184,15 +265,17 @@ def fold_controls(
         y_fit = responses[fit_idx, cell][fit_obs]
         y_val = responses[val_idx, cell][val_obs]
         y_test = responses[test_idx, cell][test_obs]
-        baseline = _rmse(np.full(n_test, y_fit.mean()), y_test)
-        results["baseline"][cell] = {"rmse": baseline}
+        city_rows = test_cities[test_obs]
         ridge_param: float | None = None
         if n_val >= max(min_obs // 2, 4):
             best_ridge: tuple[float, float] | None = None
             for ridge in RIDGE_CANDIDATES:
                 rmse = _rmse(
                     _ridge_fit_predict(
-                        features[fit_idx][fit_obs], y_fit, features[val_idx][val_obs], ridge
+                        standardized[fit_idx][fit_obs],
+                        y_fit,
+                        standardized[val_idx][val_obs],
+                        ridge,
                     ),
                     y_val,
                 )
@@ -202,23 +285,24 @@ def fold_controls(
         if ridge_param is not None:
             refit_obs = masks[refit_idx, cell]
             prediction = _ridge_fit_predict(
-                features[refit_idx][refit_obs],
+                standardized[refit_idx][refit_obs],
                 responses[refit_idx, cell][refit_obs],
-                features[test_idx][test_obs],
+                standardized[test_idx][test_obs],
                 ridge_param,
             )
-            results["ridge"][cell] = {
-                "rmse": _rmse(prediction, y_test),
-                "baseline": baseline,
-                "param": ridge_param,
-            }
+            metric = _cell_metrics(prediction, y_test, float(y_fit.mean()), ridge_param)
+            ridge_map[cell] = metric
+            for city in unique_cities:
+                rows = city_rows == city
+                if rows.any():
+                    per_city[city]["ridge"].append(
+                        _cell_metrics(prediction[rows], y_test[rows], float(y_fit.mean()), ridge_param)
+                    )
         knn_param: float | None = None
         if n_val >= max(min_obs // 2, 4):
             best_knn: tuple[float, float] | None = None
             for k in KNN_CANDIDATES:
-                prediction = _knn_predict(
-                    distance_val_fit[:, fit_obs], y_fit, k
-                )
+                prediction = _knn_predict(distance_val_fit[:, fit_obs], y_fit, k)
                 rmse = _rmse(prediction[val_obs], y_val)
                 if best_knn is None or rmse < best_knn[1]:
                     best_knn = (float(k), rmse)
@@ -230,40 +314,55 @@ def fold_controls(
                 responses[refit_idx, cell][refit_obs],
                 int(knn_param),
             )
-            results["knn"][cell] = {
-                "rmse": _rmse(prediction, y_test),
-                "baseline": baseline,
-                "param": knn_param,
-            }
+            metric = _cell_metrics(prediction, y_test, float(y_fit.mean()), knn_param)
+            knn_map[cell] = metric
+            for city in unique_cities:
+                rows = city_rows == city
+                if rows.any():
+                    per_city[city]["knn"].append(
+                        _cell_metrics(prediction[rows], y_test[rows], float(y_fit.mean()), knn_param)
+                    )
+    for city, entry in per_city.items():
+        entry["ridge_summary"] = _city_metrics(entry["ridge"])
+        entry["knn_summary"] = _city_metrics(entry["knn"])
+        entry["n_units"] = int(np.sum(test_cities == city))
     return results
 
 
 def fold_retrieval(
     arrays: _Arrays, test_idx: np.ndarray, columns: list[int], k: int
-) -> float | None:
+) -> dict[str, float | None]:
     import torch
 
     features = torch.from_numpy(arrays["features"][test_idx]).float()
     responses = torch.from_numpy(arrays["responses"][test_idx][:, columns]).float()
     masks = torch.from_numpy(arrays["masks"][test_idx][:, columns])
     if masks.sum() < 2:
-        return None
+        return {"nn_corr": None, "baseline": None, "n_units": 0.0}
     block = retrieval_metrics(features, responses, masks, k=k)["overall"]
-    value = block.get("nn_corr@k")
-    return float(value) if isinstance(value, (int, float)) else None
+    nn_corr = block.get("nn_corr@k")
+    baseline = block.get("baseline_corr")
+    return {
+        "nn_corr": float(nn_corr) if isinstance(nn_corr, (int, float)) else None,
+        "baseline": float(baseline) if isinstance(baseline, (int, float)) else None,
+        "n_units": float(block.get("n_units", 0)),
+    }
 
 
-def aggregate(
-    fold_results: list[_FoldResult], cells: list[int], method: str
-) -> dict[str, object]:
-    rmses, baselines, params = [], [], []
+def aggregate(fold_results: list[_FoldResult], cells: list[int], method: str) -> dict[str, object]:
+    rmses, baselines, params, directions, direction_baselines = [], [], [], [], []
     for fold in fold_results:
         method_map = fold["ridge"] if method == "ridge" else fold["knn"]
         for cell in cells:
             if cell in method_map:
-                rmses.append(method_map[cell]["rmse"])
-                baselines.append(method_map[cell]["baseline"])
-                params.append(method_map[cell]["param"])
+                metric = method_map[cell]
+                rmses.append(metric["rmse"])
+                baselines.append(metric["baseline"])
+                params.append(metric["param"])
+                if metric["direction"] is not None:
+                    directions.append(metric["direction"])
+                if metric["direction_baseline"] is not None:
+                    direction_baselines.append(metric["direction_baseline"])
     if not rmses:
         return {"n": 0}
     return {
@@ -271,9 +370,57 @@ def aggregate(
         "rmse_mean": float(np.mean(rmses)),
         "rmse_sd": float(np.std(rmses, ddof=1)) if len(rmses) > 1 else 0.0,
         "baseline_mean": float(np.mean(baselines)),
-        "improvement_vs_baseline": float(np.mean(np.subtract(baselines, rmses))),
+        "amplitude_improvement": float(np.mean(np.subtract(baselines, rmses))),
+        "direction_accuracy": float(np.mean(directions)) if directions else None,
+        "direction_baseline": float(np.mean(direction_baselines)) if direction_baselines else None,
+        "direction_improvement": float(np.mean(np.subtract(directions, direction_baselines)))
+        if directions and direction_baselines
+        else None,
         "selected_params": sorted({float(value) for value in params}),
     }
+
+
+def aggregate_cities(fold_results: list[_FoldResult]) -> dict[str, object]:
+    per_city: dict[str, dict[str, list[_CityMetric]]] = {}
+    for fold in fold_results:
+        for city, entry in fold["per_city"].items():
+            bucket = per_city.setdefault(city, {"ridge": [], "knn": []})
+            ridge_summary = entry.get("ridge_summary")
+            knn_summary = entry.get("knn_summary")
+            if isinstance(ridge_summary, dict):
+                bucket["ridge"].append(ridge_summary)  # type: ignore[arg-type]
+            if isinstance(knn_summary, dict):
+                bucket["knn"].append(knn_summary)  # type: ignore[arg-type]
+    summary: dict[str, object] = {}
+    for city, bucket in sorted(per_city.items()):
+        city_entry: dict[str, object] = {}
+        for method in ("ridge", "knn"):
+            values = bucket[method]
+            if not values:
+                continue
+            city_entry[method] = {
+                "n_units": int(np.mean([value["n"] for value in values])),
+                "rmse_mean": float(np.mean([value["rmse_mean"] for value in values])),
+                "amplitude_improvement": float(np.mean([value["improvement"] for value in values])),
+                "direction_accuracy": float(
+                    np.mean([value["direction_mean"] for value in values if value["direction_mean"] is not None])
+                )
+                if any(value["direction_mean"] is not None for value in values)
+                else None,
+                "direction_baseline": float(
+                    np.mean(
+                        [
+                            value["direction_baseline_mean"]
+                            for value in values
+                            if value["direction_baseline_mean"] is not None
+                        ]
+                    )
+                )
+                if any(value["direction_baseline_mean"] is not None for value in values)
+                else None,
+            }
+        summary[city] = city_entry
+    return summary
 
 
 def main() -> int:
@@ -287,8 +434,8 @@ def main() -> int:
     args = parser.parse_args()
 
     arrays = load_arrays(args.dataset)
-    cities = list(arrays["cities"])
-    primary = str(arrays["primary_family"])
+    cities = arrays["cities"]
+    primary = arrays["primary_family"]
     groups = outcome_groups(primary)
     assignment = make_city_folds(cities, args.folds, args.seed)
     fold_results: list[_FoldResult] = []
@@ -307,28 +454,38 @@ def main() -> int:
             outcome: fold_retrieval(arrays, test_idx, cells, args.k)
             for outcome, cells in groups.items()
         }
-        fold_results.append(
-            {
-                "fold": fold,
-                "fit_units": int(len(fit_idx)),
-                "val_units": int(len(val_idx)),
-                "test_units": int(len(test_idx)),
-                "ridge": controls["ridge"],
-                "knn": controls["knn"],
-                "retrieval": retrieval,
-                "retrieval_per_outcome": retrieval_per_outcome,
-            }
-        )
+        fold_result: _FoldResult = {
+            "fold": fold,
+            "fit_units": int(len(fit_idx)),
+            "val_units": int(len(val_idx)),
+            "test_units": int(len(test_idx)),
+            "ridge": controls["ridge"],  # type: ignore[typeddict-item]
+            "knn": controls["knn"],  # type: ignore[typeddict-item]
+            "retrieval": retrieval,
+            "retrieval_per_outcome": retrieval_per_outcome,
+            "per_city": controls["per_city"],  # type: ignore[typeddict-item]
+        }
+        fold_results.append(fold_result)
         print(
             f"fold {fold}: fit {len(fit_idx)} / val {len(val_idx)} / test {len(test_idx)} | "
-            f"retrieval {retrieval if retrieval is not None else float('nan'):.4f} | "
+            f"shape nn_corr {retrieval['nn_corr'] if retrieval['nn_corr'] is not None else float('nan'):.4f} | "
             f"cities {sorted(test_set)}"
         )
     all_cells = [cell for cells in groups.values() for cell in cells]
-    retrieval_folds = [float(v) for v in (f["retrieval"] for f in fold_results) if v is not None]
+    retrieval_folds = [
+        float(value)
+        for value in (fold["retrieval"]["nn_corr"] for fold in fold_results)
+        if value is not None
+    ]
+    retrieval_baselines = [
+        float(value)
+        for value in (fold["retrieval"]["baseline"] for fold in fold_results)
+        if value is not None
+    ]
     overall: dict[str, object] = {
-        "retrieval": {
-            "mean": float(np.mean(retrieval_folds)) if retrieval_folds else None,
+        "shape_retrieval": {
+            "nn_corr_mean": float(np.mean(retrieval_folds)) if retrieval_folds else None,
+            "baseline_mean": float(np.mean(retrieval_baselines)) if retrieval_baselines else None,
             "n": len(retrieval_folds),
         },
     }
@@ -339,20 +496,31 @@ def main() -> int:
         entry: dict[str, object] = {}
         for method in ("ridge", "knn"):
             entry[method] = aggregate(fold_results, cells, method)
-        retrieval_values = [
-            float(v)
-            for v in (f["retrieval_per_outcome"][outcome] for f in fold_results)
-            if v is not None
+        values = [
+            float(value)
+            for value in (
+                fold["retrieval_per_outcome"][outcome]["nn_corr"] for fold in fold_results
+            )
+            if value is not None
         ]
-        entry["retrieval"] = {
-            "mean": float(np.mean(retrieval_values)) if retrieval_values else None,
-            "n": len(retrieval_values),
+        baselines = [
+            float(value)
+            for value in (
+                fold["retrieval_per_outcome"][outcome]["baseline"] for fold in fold_results
+            )
+            if value is not None
+        ]
+        entry["shape_retrieval"] = {
+            "nn_corr_mean": float(np.mean(values)) if values else None,
+            "baseline_mean": float(np.mean(baselines)) if baselines else None,
+            "n": len(values),
         }
         per_outcome[outcome] = entry
     summary: dict[str, object] = {
         "primary_family": primary,
         "overall": overall,
         "per_outcome": per_outcome,
+        "per_city": aggregate_cities(fold_results),
     }
     report = {
         "dataset": str(args.dataset),

@@ -90,10 +90,17 @@ python scripts/analysis/representation_controls.py \
   --output-directory outputs/representation_controls/poi
 ```
 
-判读：对照中 `ridge` / `knn` 的 `improvement_vs_baseline`（正 = 优于训练均值）
-与 `retrieval.mean` 决定下一步——若两者均 ≈0 且检索 ≈ raw，说明当前特征没有城市外
-可预测信号，停止模型侧调参，转而补充处理前特征或调整论文定位；只有当特征显示可预测
-信号、而表示模型仍不超 raw 时，才处理目标函数冲突。审计与实测记录见
+判读（方向 / 幅度 / 形状分开看，不混为一个结论）：
+- 幅度：`ridge` / `knn` 的 `amplitude_improvement`（正 = 优于训练均值）
+- 方向：`direction_accuracy` 相对 `direction_baseline` 的增量
+- 形状：`shape_retrieval.nn_corr_mean` 相对 `baseline_mean`
+- 逐城市：`per_city` 的配对增量与城市间差异
+
+若这些模型呈现稳定的城市外预测信号，再投入正式实验：当前表示模型与
+raw+紧凑响应块（λ 含 0，仅由内层验证选择）**必须在每个 outer fold 内重新训练**，
+多 seed 比较；现有 checkpoint 不得用于新折评估（测试城市可能参与过其训练）。
+若特征无可预测信号，停止模型侧调参，转向补充处理前特征或调整论文定位。
+审计与实测记录见
 [`../research/representation_learning_audit.md`](../research/representation_learning_audit.md)。
 
 站点条件化实验需先构建属性表：

@@ -99,9 +99,13 @@
   （标签支撑、权重恒定性、float32 风险、嵌入几何、逐城市/逐 outcome）
 - 最小对照：
   [`../../scripts/analysis/representation_controls.py`](../../scripts/analysis/representation_controls.py)
-  （城市级 5 折 CV + 内层选参；raw 检索、含截距 ridge、kNN 对照与训练均值基线）
+  （城市级 5 折 CV + 内层选参 + 折内标准化；raw 检索、含截距 ridge、kNN 对照与训练
+  均值基线；方向、幅度、形状检索分开报告，逐 outcome、逐城市）
 - 结论边界：截至诊断，多 seed 下没有稳定超过 raw 特征或外观基线的增量；
-  在可预测性对照确认前不启动多 seed 正式矩阵。审计与实测记录见
+  优先解释已收敛为"评估问题已确认、目标冲突待验证、特征可预测性未知"。现有
+  checkpoint 不得用于新折评估（其测试城市可能参与过训练），当前表示模型与
+  raw+响应块必须在每个 fold 内重新训练，属正式实验、由最小对照结果放行。
+  审计与实测记录见
   [`representation_learning_audit.md`](representation_learning_audit.md)。
 
 ## 6. 复现命令

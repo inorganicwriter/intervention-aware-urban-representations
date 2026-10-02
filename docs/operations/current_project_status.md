@@ -152,14 +152,16 @@ The representation stage is in diagnosis, not in the formal training matrix:
    appearance baselines; the label support, design-weight cancellation,
    float32, and embedding-geometry checks are recorded in
    [`representation_learning_audit.md`](../research/representation_learning_audit.md);
-3. the next step is the minimal control (raw ridge / k-NN / mean baseline under
-   fixed city-level cross-validation, direction vs amplitude vs shape reported
-   separately, per outcome and per city) to decide whether the bottleneck is
-   the features or the objective; the formal multi-seed matrix starts only
-   after that decision, and the current model plus the raw+response-block
-   variant must be retrained inside every outer fold (old checkpoints must not
-   be reused, their test cities may have trained them). The per-family runbook
-   gates retraining on this control.
+3. the minimal control (raw ridge / k-NN / mean baseline under fixed
+   city-level cross-validation, direction vs amplitude vs shape reported
+   separately, per outcome and per city) passed three review rounds with
+   fold-isolated preprocessing and fair refit baselines; it is cleared to run
+   on the server. The formal multi-seed matrix starts only after the real-data
+   control results decide whether the bottleneck is the features or the
+   objective, and the current model plus the raw+response-block variant must
+   be retrained inside every outer fold (old checkpoints must not be reused,
+   their test cities may have trained them). The per-family runbook gates
+   retraining on this control.
 
 The code checks are in place: all queue entry points default to `python_gpu`,
 startup prints the selected backend, and Response Artifact publication validates

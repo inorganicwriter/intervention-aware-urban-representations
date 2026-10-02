@@ -45,6 +45,16 @@
 - 新增 `scripts/analysis/representation_diagnostics.py` 与
   `scripts/analysis/representation_controls.py`
 
+### 审阅轮次与处置（评估流程）
+| 轮次 | 发现 | 处置 |
+|---|---|---|
+| 1 | 均值基线只用 fit 标签（制造虚假增量）；raw 检索沿用旧划分标准化；条件化规则变更无版本记录；probe 截距用错样本集；方向多数基线误用效应均值符号 | 全部修复（`7e43241`）：refit(fit+val) 均值基线、折内标准化同时供回归与检索、`conditioning_schema` v1/v2 版本与加载匹配、probe 按 cell 观测行中心化、多数符号（平票→+1）；反例测试 |
+| 2 | 缺失值经旧 z 零填充泄漏进新折；内层选参 scaler 混入验证城市；城市 `n_units` 实为响应 cell 数 | 全部修复（`ea7c19f`）：读原始列（仅 z 列时按 `normalization.json` 反演）并保留 NaN；两阶段预处理（内层仅 fit、最终 fit+val 并供 test 检索）；`n_units` 与 `n_cells` 分离；反例测试 |
+| 3 | 无阻断问题：旧标准化依赖反例差异 **1.304 → 0**；含缺失的合成 VIIRS/POI 五折命令行完整跑通 | 通过；评估流程具备运行条件 |
+
+当前结论：方向/幅度/形状分离 + 城市级 CV + 公平基线 + 折内隔离的评估流程已通过三轮审阅，
+可在服务器运行 **raw 检索、ridge、kNN 最小对照**；是否存在稳定的城市外预测增量仍需真实数据结果判断。
+
 ### 仍未解决
 - 目标冲突（对比 vs 距离）的实际影响 → 由最小对照与几何保留方案判别
 - 特征对冻结响应的城市外可预测性上限 → `representation_controls.py`（第一步交付）

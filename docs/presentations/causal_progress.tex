@@ -401,8 +401,25 @@
     \item 成功判据：显著超过全部基线、未见城市一致、跨 seed 稳定
   \end{itemize}
   \medskip
-  \begin{block}{当前}
-    \small W-design 主版本训练中，随后 W0 / W-full 消融；估计器开源包在规划中。
+  \begin{block}{现状}
+    \small 多 seed 下无稳定增量；评估协议正在修正（含截距 probe、城市级 CV）。
+  \end{block}
+\end{frame}
+
+\begin{frame}{表示学习（4）：诊断结论}
+  \small
+  \begin{itemize}
+    \item 已排除：标签噪声（VIIRS 折半信度 0.8）、两点支撑（0\%）、
+      float32 消减（差异 0）、嵌入塌缩（平均余弦 $\approx0.55$，
+      有效秩 $\approx33/128$）
+    \item 已确认：设计权重在各 horizon 恒定，W-design 在成对相似度中被约去；
+      对比损失与距离损失的几何目标互相冲突
+    \item 未决：原始特征的城市外可预测性（城市级 CV 最小对照中）
+  \end{itemize}
+  \medskip
+  \begin{block}{下一步}
+    \small 对照结果决定：补充处理前特征 / 改论文定位，或采用"保留 raw 几何 +
+    紧凑响应块"重构目标；确认前不启动多 seed 正式矩阵。
   \end{block}
 \end{frame}
 
@@ -410,10 +427,11 @@
   \small
   \begin{itemize}
     \item 已完成：四族事件研究封版（同城 + 跨城 + pooled）、严格发布、
-      两个权重数据集
-    \item 进行中：表示学习训练与消融（W-design / W0 / W-full）
-    \item 计划：Python/GPU 估计器开源包（R parity 认证、Apache-2.0），
-      作为额外 contribution
+      逐族权重数据集
+    \item 进行中：表示学习诊断——评估修正、标签/权重/精度/嵌入几何审计、
+      城市级 CV 最小对照
+    \item 待定：最小对照决定特征侧或目标侧修法；负结果准备边界论文叙事
+    \item 计划：Python/GPU 估计器开源包（R parity 认证、Apache-2.0）
   \end{itemize}
 \end{frame}
 

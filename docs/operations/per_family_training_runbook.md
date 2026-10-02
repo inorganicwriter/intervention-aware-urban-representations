@@ -73,6 +73,33 @@ PY
 
 ## 3. 训练前冒烟（先跑 VIiRS，再跑 POI）
 
+**训练前门禁（先诊断，后训练）**：正式训练前必须先跑诊断与最小对照——
+
+```bash
+python scripts/analysis/representation_diagnostics.py \
+  --dataset data/active/model_inputs/viirs-mg-design \
+  --output-directory outputs/representation_diagnostics/viirs
+python scripts/analysis/representation_diagnostics.py \
+  --dataset data/active/model_inputs/poi-mg-design \
+  --output-directory outputs/representation_diagnostics/poi
+python scripts/analysis/representation_controls.py \
+  --dataset data/active/model_inputs/viirs-mg-design \
+  --output-directory outputs/representation_controls/viirs
+python scripts/analysis/representation_controls.py \
+  --dataset data/active/model_inputs/poi-mg-design \
+  --output-directory outputs/representation_controls/poi
+```
+
+判读：对照中 `ridge` / `knn` 的 `improvement_vs_baseline`（正 = 优于训练均值）
+与 `retrieval.mean` 决定下一步——若两者均 ≈0 且检索 ≈ raw，说明当前特征没有城市外
+可预测信号，停止模型侧调参，转而补充处理前特征或调整论文定位；只有当特征显示可预测
+信号、而表示模型仍不超 raw 时，才处理目标函数冲突。审计与实测记录见
+[`../research/representation_learning_audit.md`](../research/representation_learning_audit.md)。
+
+站点条件化实验需先构建属性表：
+`python scripts/analysis/build_station_attributes.py`
+（输出 `outputs/causal_labels/station_attributes/station_attributes.parquet`）。
+
 ```bash
 conda run -n mit urban-train-representation data/active/model_inputs/viirs-mg-design \
   --output outputs/representation/viirs-mg-smoke \

@@ -142,6 +142,21 @@ Next: per-family representation training (W-design main, then the ablation
 matrix) and evaluation; the server checklist lives in
 [`training_release_checklist.md`](training_release_checklist.md).
 
+The representation stage is in diagnosis, not in the formal training matrix:
+
+1. probe/evaluation fixes and the station-conditioning scale fix landed in
+   `b945ed6`; the diagnostics and city-CV control scripts are
+   [`representation_diagnostics.py`](../../scripts/analysis/representation_diagnostics.py)
+   and [`representation_controls.py`](../../scripts/analysis/representation_controls.py);
+2. several multi-seed checks show no stable increment over the raw-feature or
+   appearance baselines; the label support, design-weight cancellation,
+   float32, and embedding-geometry checks are recorded in
+   [`representation_learning_audit.md`](../research/representation_learning_audit.md);
+3. the next step is the minimal control (raw ridge / k-NN / mean baseline under
+   fixed city-level cross-validation) to decide whether the bottleneck is the
+   features or the objective; the formal multi-seed matrix starts only after
+   that decision, and the per-family runbook gates retraining on it.
+
 The code checks are in place: all queue entry points default to `python_gpu`,
 startup prints the selected backend, and Response Artifact publication validates
 the persistent control-record schema, backend, version and method. Production

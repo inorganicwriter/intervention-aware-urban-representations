@@ -23,16 +23,22 @@
 - **结构**：tabular MLP 编码器 + 图像编码器 → 融合 → 投影头（归一化嵌入）；
   多任务预测头输出 4 个结果族的响应向量（`ResponseEmbeddingModel`）。
   - **图像池化**（`--image-pooling`）：`max`（默认）/ `mean` / `meanmax`（拼接后投影）。
-  - **显式干预条件化**（`--conditioning opening_year`，默认关闭）：开通年份分桶嵌入以
-    残差方式注入表格流。开通年份是处理前信息，任何新站点推理时都可得，不破坏跨城市
-    迁移；默认路径的"条件化"由响应对齐目标隐式实现。
+  - **显式干预条件化**（`--conditioning`，默认关闭）：`opening_year` 分桶嵌入与
+    `station`（四个 0/1 开通属性 + 终点点缺失位，32 codes）以 L2 归一化、固定比例 0.1
+    混入表格流；比例固定是为了避免随机初始化压缩地点差异。开通年份与站点属性都是
+    处理前信息，任何新站点推理时都可得，不破坏跨城市迁移；默认路径的"条件化"由响应
+    对齐目标隐式实现。
 - **目标**：`total = (1-pred_weight)·L_rep + pred_weight·L_pred`
   - `L_rep`：InfoNCE（正样本权重 = 响应相似度）+ 嵌入距离 MSE（`rep_alpha` 混合）；
     self-logit 与无足够共同观测的 pair 均从目标中排除，跨 outcome family 只对可比较
     family 求平均；
-  - `L_pred`：逐 cell 预测 MSE，按 `1/SE²` 加权（使用标签的 `standard_error`）；
-    matched 标签按设计没有 SE，缺失时用该结果族内的中位精度补齐（`_precision_weights`），
-    避免整类标签被近似忽略。
+  - `L_pred`：逐 cell 加权 MSE。发布数据集始终携带 `response_weight`，实际训练走设计
+    权重分支 `sum(m·w·diff²)/sum(m·w)`；`1/SE²` 精度加权只在缺少权重列的旧数据集上
+    生效。
+- **权重现状**：设计权重在每个网格的各 horizon 上恒定（VIIRS 全部、POI matched 全部），
+  而恒定样本权重在加权 Pearson 中被约去；因此 W-design 主要影响预测损失，
+  **不重塑成对相似度**。详见
+  [`representation_learning_audit.md`](representation_learning_audit.md)。
 - **算法优化选项**（均默认关闭或保持原语义，可单独消融）：
   - `--no-se-shrinkage`（默认开）：对比损失中响应相似度按标签可靠性 `1/(1+SE²)` 收缩，
     高噪声配对降权（measurement-error 衰减）；SE 缺失/恒定时退化为原损失。
@@ -60,7 +66,7 @@
 | `bootstrap_ci` | 单元重采样 95% CI | 指标稳定性 |
 | `permutation` | 响应打乱 100/200 次的 p 值 | 关联是否优于随机 |
 | `raw_feature_baseline` | 原始特征直接检索 | 模型是否胜过"直接用特征" |
-| `probe` | 训练池拟合的线性探针 → 目标池 RMSE（嵌入 vs 原始特征） | 迁移能力 |
+| `probe` | 含截距（训练均值中心化）的逐 cell ridge → 目标池 RMSE（嵌入 vs 原始特征），附训练均值预测基线；ridge 可按表示独立选择（`select_probe_ridge`） | 迁移能力；只有同时优于均值基线才算特征有信号 |
 | `baselines`（test 池） | 随机投影 / PCA（无监督；中心与基在训练池拟合后投影 test 池）/ 冻结 DINOv2 / **外观自编码器**（继承主模型 `hidden_dims/embedding_dim`，无响应监督训练） | 模型是否胜过机会水平与外观-only 基线 |
 | `transfer.per_city` | 每个未见城市的 `nn_corr@k` | 迁移是否在各城市一致 |
 | `transfer.few_shot_probe` | **逐目标城市**抽取 4/8/16/32 个网格的探针 RMSE 曲线（多 seed 均值 ± std） | 少量标签下的城内适应速度，各目标城市分别计算 |
@@ -84,7 +90,21 @@
   `configs/representation/ablation_specs.example.json`（消融清单）与
   `sweep_specs.example.json`（超参数扫描）。
 
-## 5. 复现命令
+## 5. 当前状态与可预测性诊断
+
+- 评估修正（提交 `b945ed6`）：probe 含截距与训练均值基线、`precision="float64"`
+  相似度选项、station 条件化尺度与缺失位修复
+- 诊断脚本：
+  [`../../scripts/analysis/representation_diagnostics.py`](../../scripts/analysis/representation_diagnostics.py)
+  （标签支撑、权重恒定性、float32 风险、嵌入几何、逐城市/逐 outcome）
+- 最小对照：
+  [`../../scripts/analysis/representation_controls.py`](../../scripts/analysis/representation_controls.py)
+  （城市级 5 折 CV + 内层选参；raw 检索、含截距 ridge、kNN 对照与训练均值基线）
+- 结论边界：截至诊断，多 seed 下没有稳定超过 raw 特征或外观基线的增量；
+  在可预测性对照确认前不启动多 seed 正式矩阵。审计与实测记录见
+  [`representation_learning_audit.md`](representation_learning_audit.md)。
+
+## 6. 复现命令
 
 逐族独立训练（当前主口径；数据集构建、核验、冒烟与消融矩阵见
 [`../operations/per_family_training_runbook.md`](../operations/per_family_training_runbook.md)）：
@@ -113,7 +133,7 @@ conda run -n mit urban-run-ablation data/active/model_inputs/viirs-mg-design `
 加 `--use-images`（与 checkpoint 架构一致），见
 [`../operations/streetview_pipeline.md`](../operations/streetview_pipeline.md)。
 
-## 6. 与因果管线的边界
+## 7. 与因果管线的边界
 
 - 表示学习**只读** Response Artifact 发布产物与训练前数据集；不参与队列、不写因果产物。
 - 训练掩码由发布者决定（`final_training_mask`），训练器不做推断。

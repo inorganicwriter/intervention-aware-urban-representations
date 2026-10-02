@@ -4,7 +4,10 @@ import importlib.util
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
+
+from tests.helpers.representation import build_synthetic_model_inputs
 
 SCRIPT = (
     Path(__file__).resolve().parents[2]
@@ -89,3 +92,32 @@ def test_city_summary_keeps_grid_and_cell_counts() -> None:
     assert per_city["c"]["n_units"] == 2
     assert per_city["c"]["ridge"]["n_cells"] == 1
     assert per_city["d"]["knn"]["n_cells"] == 1
+
+
+def test_preprocessor_depends_on_reference_rows_only() -> None:
+    features = np.array([[1.0], [2.0], [3.0], [100.0]])
+    reference = np.array([0, 1])
+    first = controls._Preprocessor(features, reference)
+    modified = features.copy()
+    modified[2, 0] = -999.0  # inner-validation row must not influence the scaler
+    second = controls._Preprocessor(modified, reference)
+    assert first.mean[0] == pytest.approx(second.mean[0])
+    assert first.scale[0] == pytest.approx(second.scale[0])
+
+
+def test_load_arrays_preserves_missing_after_inverting_z_scores(tmp_path: Path) -> None:
+    ds_dir, _ = build_synthetic_model_inputs(tmp_path)
+    unit_path = ds_dir / "unit_features.parquet"
+    unit = pd.read_parquet(unit_path)
+    z_column = next(column for column in unit.columns if column.startswith("z__"))
+    unit.loc[unit.index[0], z_column] = np.nan
+    unit.to_parquet(unit_path, index=False)
+
+    from urban_intervention.representation.dataset import RepresentationDataset
+
+    ds = RepresentationDataset(ds_dir, load_images=False)
+    column_index = ds.feature_columns.index(z_column)
+    arrays = controls.load_arrays(ds_dir)
+
+    features = arrays["features"]
+    assert np.isnan(features[:, column_index]).sum() == 1

@@ -13,17 +13,24 @@ Protocol (per fold, identical city folds to ``representation_controls.py``):
 
 Fusion: ``z_i(lambda) = [sqrt(1-lambda) * xbar_i, sqrt(lambda) * hbar_i]``
 with both blocks unit-normalized.  ``lambda = 0`` recovers the raw feature
-geometry exactly (verified numerically here).  The two response-block versions
-are the raw per-cell standardized ridge predictions and a per-outcome
-temporally de-meaned shape block; all standardization statistics come from the
-training side only, and per-cell standardization is not assumed to preserve
-Pearson shape (both versions are reported).
+geometry exactly (verified against the repository retrieval helper on both the
+full pool and the common response-block support).
+
+Response blocks: the raw version standardizes per-cell ridge predictions with
+training-side statistics; the shape version first removes each outcome's
+horizon mean over the *fitted* cells and then standardizes per cell, so the
+final block is a per-cell rescaled shape deviation, not a representation that
+is exactly zero-mean along time and not guaranteed to align with Pearson
+directly.  Cells without a training-side ridge fit stay missing (never
+contaminate the rest of the outcome) and the response-block support is
+reported.
 
 Diagnostics: the full lambda curve is reported on the outer test only as a
 diagnostic; the headline result is the inner-selected scheme.  City-level
-paired increments (scheme minus raw) are macro-averaged with a bootstrap
-interval, per outcome and overall, with and without same-city candidates
-excluded.  Amplitude and direction use the un-unitized ridge predictions.
+paired increments are computed per anchor on the full evaluation pool and then
+macro-averaged by the anchor city (same-city-excluded candidates are a separate
+report), with a bootstrap interval over cities; amplitude and direction use the
+un-unitized ridge predictions with fit+val baselines.
 
 Run on the server::
 
@@ -52,6 +59,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from urban_intervention.representation.evaluation import (  # noqa: E402
     _metric_block,
+    _per_anchor_nn_corr,
     cosine_similarity,
     response_similarity_with_validity,
     retrieval_metrics,
@@ -66,14 +74,20 @@ _SPEC.loader.exec_module(controls)
 LAMBDA_GRID = (0.0, 0.25, 0.5, 0.75, 1.0)
 BLOCK_VERSIONS = ("raw", "shape")
 ZERO_NORM_EPS = 1e-12
+MIN_FITTED_CELLS = 2
 
 
-def shape_transform(predictions: np.ndarray, groups: dict[str, list[int]]) -> np.ndarray:
-    """Remove each outcome's horizon mean per grid (keeps the temporal shape)."""
-    transformed = predictions.copy()
+def shape_transform(
+    predictions: np.ndarray, groups: dict[str, list[int]], fitted_mask: np.ndarray
+) -> np.ndarray:
+    """Remove the fitted horizon means per outcome; unfitted cells stay NaN."""
+    transformed = np.full_like(predictions, np.nan, dtype=np.float64)
     for columns in groups.values():
-        block = transformed[:, columns]
-        transformed[:, columns] = block - block.mean(axis=1, keepdims=True)
+        fitted = [column for column in columns if fitted_mask[column]]
+        if not fitted:
+            continue
+        block = predictions[:, fitted]
+        transformed[:, fitted] = block - np.nanmean(block, axis=1, keepdims=True)
     return transformed
 
 
@@ -89,18 +103,30 @@ def build_block(
     reference_predictions: np.ndarray,
     version: str,
     groups: dict[str, list[int]],
-) -> tuple[np.ndarray, np.ndarray]:
-    """Standardize on the training side (per cell), then unit-normalize rows."""
+    fitted_mask: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Training-side per-cell standardization; unfitted cells are zeroed."""
     target_values = target_predictions
     reference_values = reference_predictions
     if version == "shape":
-        target_values = shape_transform(target_values, groups)
-        reference_values = shape_transform(reference_values, groups)
-    mean = reference_values.mean(axis=0)
-    scale = reference_values.std(axis=0, ddof=0)
-    scale = np.where(scale < 1e-12, 1.0, scale)
-    standardized = np.nan_to_num((target_values - mean) / scale, nan=0.0)
-    return unit_normalize(standardized)
+        target_values = shape_transform(target_values, groups, fitted_mask)
+        reference_values = shape_transform(reference_values, groups, fitted_mask)
+    standardized = np.zeros_like(target_values, dtype=np.float64)
+    fitted_cells = int(fitted_mask.sum())
+    for cell in np.where(fitted_mask)[0]:
+        reference = reference_values[:, cell]
+        reference = reference[np.isfinite(reference)]
+        if reference.size < 2:
+            continue
+        mean = float(reference.mean())
+        scale = float(reference.std(ddof=0))
+        scale = scale if scale > 1e-12 else 1.0
+        standardized[:, cell] = (
+            np.nan_to_num(target_values[:, cell], nan=0.0) - mean
+        ) / scale
+    block, norm_valid = unit_normalize(standardized)
+    valid = norm_valid & (fitted_cells >= MIN_FITTED_CELLS)
+    return block, valid, fitted_cells
 
 
 def fuse(x_block: np.ndarray, h_block: np.ndarray, lam: float) -> np.ndarray:
@@ -130,37 +156,62 @@ def retrieval_block(
     return _metric_block(cosine_similarity(emb), sim_resp, valid, k)
 
 
-def per_city_deltas(
+def per_anchor_city_deltas(
     raw_embedding: np.ndarray,
     scheme_embedding: np.ndarray,
     responses: np.ndarray,
     masks: np.ndarray,
-    city_keys: np.ndarray,
+    cities: np.ndarray,
     columns: list[int],
     k: int,
-) -> dict[str, dict[str, float]]:
-    result: dict[str, dict[str, float]] = {}
-    for city in sorted({str(city) for city in city_keys}):
-        rows = np.where(city_keys == city)[0]
-        if len(rows) < k + 1:
-            continue
-        raw_block = retrieval_block(
-            raw_embedding[rows], responses[rows], masks[rows], columns, k
+    exclude_same_city: bool = False,
+) -> tuple[dict[str, dict[str, float]], list[float]]:
+    """Per-anchor paired increments on the given pool, macro-averaged by city."""
+    raw_cos = cosine_similarity(
+        torch.from_numpy(np.ascontiguousarray(raw_embedding)).float()
+    )
+    scheme_cos = cosine_similarity(
+        torch.from_numpy(np.ascontiguousarray(scheme_embedding)).float()
+    )
+    resp = torch.from_numpy(np.ascontiguousarray(responses[:, columns])).float()
+    mask = torch.from_numpy(np.ascontiguousarray(masks[:, columns]))
+    sim_resp, valid = response_similarity_with_validity(resp, mask)
+    if exclude_same_city:
+        same_city = torch.from_numpy(
+            np.ascontiguousarray(cities[:, None] == cities[None, :])
         )
-        scheme_block = retrieval_block(
-            scheme_embedding[rows], responses[rows], masks[rows], columns, k
-        )
-        raw_nn = raw_block.get("nn_corr@k")
-        scheme_nn = scheme_block.get("nn_corr@k")
-        if not isinstance(raw_nn, (int, float)) or not isinstance(scheme_nn, (int, float)):
+        valid = valid & ~same_city
+    raw_scores = _per_anchor_nn_corr(raw_cos, sim_resp, k, valid)
+    scheme_scores = _per_anchor_nn_corr(scheme_cos, sim_resp, k, valid)
+    per_city: dict[str, dict[str, float]] = {}
+    for city in sorted({str(city) for city in cities}):
+        rows = np.where(cities == city)[0]
+        deltas = scheme_scores[rows] - raw_scores[rows]
+        deltas = deltas[np.isfinite(deltas)]
+        if deltas.size == 0:
             continue
-        result[city] = {
-            "n_units": float(len(rows)),
-            "raw_nn_corr": float(raw_nn),
-            "scheme_nn_corr": float(scheme_nn),
-            "delta": float(scheme_nn) - float(raw_nn),
+        per_city[city] = {
+            "n_anchors": int(deltas.size),
+            "delta": float(deltas.mean()),
         }
-    return result
+    macro = [entry["delta"] for entry in per_city.values()]
+    return per_city, macro
+
+
+def baseline_from_training(
+    responses: np.ndarray, masks: np.ndarray, reference_idx: np.ndarray
+) -> tuple[dict[int, float], dict[int, float]]:
+    """Per-cell mean and majority sign from reference (fit+val) labels only."""
+    means: dict[int, float] = {}
+    signs: dict[int, float] = {}
+    for cell in range(responses.shape[1]):
+        observed = masks[reference_idx, cell]
+        if not observed.any():
+            continue
+        values = responses[reference_idx, cell][observed]
+        means[cell] = float(values.mean())
+        signs[cell] = controls._majority_sign(values)
+    return means, signs
 
 
 def amplitude_direction(
@@ -168,70 +219,122 @@ def amplitude_direction(
     responses: np.ndarray,
     masks: np.ndarray,
     columns: list[int],
-) -> dict[str, float | None]:
-    """Un-unitized ridge predictions: RMSE vs refit mean, direction vs majority sign."""
-    mse_model = mse_baseline = 0.0
-    cells = 0
-    direction_hits = 0.0
-    direction_baseline_hits = 0.0
+    baseline_means: dict[int, float],
+    baseline_signs: dict[int, float],
+) -> dict[str, float | int | None]:
+    """Un-unitized ridge predictions against fixed fit+val baselines."""
+    sse_model = sse_baseline = 0.0
+    n_observations = 0
+    per_cell_model: list[float] = []
+    per_cell_baseline: list[float] = []
+    direction_hits = 0
+    direction_baseline_hits = 0
     direction_total = 0
+    per_cell_direction: list[float] = []
+    per_cell_direction_baseline: list[float] = []
+    fitted_cells = 0
     for cell in columns:
-        observed = masks[:, cell]
+        if cell not in baseline_means:
+            continue
+        observed = masks[:, cell] & np.isfinite(predictions[:, cell])
         if not observed.any():
             continue
+        fitted_cells += 1
         y = responses[:, cell][observed]
         prediction = predictions[observed, cell]
-        baseline_value = float(y.mean())
-        mse_model += float(((prediction - y) ** 2).sum())
-        mse_baseline += float(((baseline_value - y) ** 2).sum())
-        cells += 1
+        baseline_value = baseline_means[cell]
+        baseline_prediction = np.full(y.shape, baseline_value)
+        model_sq = float(((prediction - y) ** 2).sum())
+        baseline_sq = float(((baseline_prediction - y) ** 2).sum())
+        sse_model += model_sq
+        sse_baseline += baseline_sq
+        n_observations += int(y.size)
+        per_cell_model.append(model_sq / y.size)
+        per_cell_baseline.append(baseline_sq / y.size)
         nonzero = np.abs(y) > 1e-12
         if nonzero.any():
             truth = np.sign(y[nonzero])
-            direction_hits += float((np.sign(prediction[nonzero]) == truth).sum())
-            direction_baseline_hits += float(
-                (np.full(truth.shape, controls._majority_sign(y)) == truth).sum()
+            hits = int((np.sign(prediction[nonzero]) == truth).sum())
+            baseline_hits = int(
+                (np.sign(np.full(truth.shape, baseline_signs[cell])) == truth).sum()
             )
+            direction_hits += hits
+            direction_baseline_hits += baseline_hits
             direction_total += int(nonzero.sum())
-    if cells == 0:
+            per_cell_direction.append(hits / nonzero.sum())
+            per_cell_direction_baseline.append(baseline_hits / nonzero.sum())
+    if fitted_cells == 0 or n_observations == 0:
         return {
-            "rmse": None,
-            "rmse_baseline": None,
-            "relative_sq_error_reduction": None,
-            "direction_accuracy": None,
-            "direction_baseline": None,
-            "direction_improvement": None,
+            "fitted_cells": fitted_cells,
+            "n_observations": n_observations,
+            "rmse_pooled": None,
+            "rmse_pooled_baseline": None,
+            "rmse_cell_macro": None,
+            "rmse_cell_macro_baseline": None,
+            "relative_sq_error_reduction_pooled": None,
+            "relative_sq_error_reduction_cell_macro": None,
+            "direction_accuracy_pooled": None,
+            "direction_baseline_pooled": None,
+            "direction_improvement_pooled": None,
+            "direction_accuracy_cell_macro": None,
+            "direction_baseline_cell_macro": None,
         }
-    rmse = float(np.sqrt(mse_model / cells))
-    rmse_baseline = float(np.sqrt(mse_baseline / cells))
-    relative = 1.0 - mse_model / mse_baseline if mse_baseline > 0 else None
-    direction_accuracy = direction_hits / direction_total if direction_total else None
+    rmse_pooled = float(np.sqrt(sse_model / n_observations))
+    rmse_pooled_baseline = float(np.sqrt(sse_baseline / n_observations))
+    mean_cell_model = float(np.mean(per_cell_model))
+    mean_cell_baseline = float(np.mean(per_cell_baseline))
+    direction_accuracy = (
+        direction_hits / direction_total if direction_total else None
+    )
     direction_baseline = (
         direction_baseline_hits / direction_total if direction_total else None
     )
     return {
-        "rmse": rmse,
-        "rmse_baseline": rmse_baseline,
-        "relative_sq_error_reduction": relative,
-        "direction_accuracy": direction_accuracy,
-        "direction_baseline": direction_baseline,
-        "direction_improvement": (
-            None
-            if direction_accuracy is None or direction_baseline is None
-            else direction_accuracy - direction_baseline
+        "fitted_cells": fitted_cells,
+        "n_observations": n_observations,
+        "rmse_pooled": rmse_pooled,
+        "rmse_pooled_baseline": rmse_pooled_baseline,
+        "rmse_cell_macro": float(np.sqrt(mean_cell_model)),
+        "rmse_cell_macro_baseline": float(np.sqrt(mean_cell_baseline)),
+        "relative_sq_error_reduction_pooled": (
+            1.0 - sse_model / sse_baseline if sse_baseline > 0 else None
+        ),
+        "relative_sq_error_reduction_cell_macro": (
+            1.0 - mean_cell_model / mean_cell_baseline
+            if mean_cell_baseline > 0
+            else None
+        ),
+        "direction_accuracy_pooled": direction_accuracy,
+        "direction_baseline_pooled": direction_baseline,
+        "direction_improvement_pooled": (
+            direction_accuracy - direction_baseline
+            if direction_accuracy is not None and direction_baseline is not None
+            else None
+        ),
+        "direction_accuracy_cell_macro": (
+            float(np.mean(per_cell_direction)) if per_cell_direction else None
+        ),
+        "direction_baseline_cell_macro": (
+            float(np.mean(per_cell_direction_baseline))
+            if per_cell_direction_baseline
+            else None
         ),
     }
 
 
 def bootstrap_mean_ci(
-    values: list[float], seed: int = 0, n_boot: int = 2000
+    values: Sequence[float], seed: int = 0, n_boot: int = 2000
 ) -> tuple[float, float, float]:
     if not values:
         return float("nan"), float("nan"), float("nan")
     array = np.asarray(values, dtype=np.float64)
     rng = np.random.default_rng(seed)
     draws = rng.choice(array, size=(n_boot, array.size), replace=True).mean(axis=1)
-    return float(array.mean()), float(np.percentile(draws, 2.5)), float(np.percentile(draws, 97.5))
+    return (
+        float(array.mean()),
+        float(np.percentile(draws, 2.5)),
+        float(np.percentile(draws, 97.5)),
+    )
 
 
 def mean_of(values: Sequence[object]) -> float | None:
@@ -267,20 +370,24 @@ def main() -> int:
     assignment = controls.make_city_folds(cities, args.folds, args.seed)
 
     fold_records: list[dict[str, object]] = []
-    outer: dict[str, list[float | None]] = {"raw": [], "h_only": [], "fusion": []}
-    outer_baseline: dict[str, list[float | None]] = {"raw": [], "h_only": [], "fusion": []}
+    outer: dict[str, list[float | None]] = {"raw_full": [], "raw_common": [], "h_only": [], "fusion": []}
+    outer_baseline: dict[str, list[float | None]] = {"raw_full": [], "raw_common": [], "h_only": [], "fusion": []}
     no_same_city: dict[str, list[float | None]] = {"raw": [], "fusion": []}
     lambda_curve: dict[str, dict[str, float | None]] = {}
     per_outcome: dict[str, dict[str, list[float | None]]] = {
-        outcome: {"raw": [], "h_only": [], "fusion": []} for outcome in groups
+        outcome: {"raw": [], "h_only": [], "fusion": [], "city_macro": []} for outcome in groups
     }
     per_city_all: dict[str, dict[str, float]] = {}
-    amplitude_records: dict[str, list[dict[str, float | None]]] = {
+    amplitude_records: dict[str, list[dict[str, float | int | None]]] = {
         "overall": [],
         **{outcome: [] for outcome in groups},
     }
+    city_macro_overall: list[float] = []
+    city_macro_no_same_city: list[float] = []
+    per_outcome_city_macro: dict[str, list[float]] = {outcome: [] for outcome in groups}
     lambda_zero_folds = 0
-    lambda_zero_diffs: list[float] = []
+    equivalence_full: list[float] = []
+    equivalence_common: list[float] = []
     excluded_total = 0
 
     for fold in range(args.folds):
@@ -340,6 +447,12 @@ def main() -> int:
                 )
             return predictions
 
+        fit_fitted = np.array(
+            [
+                alphas[cell] is not None and int(masks[fit_idx, cell].sum()) >= 2
+                for cell in range(responses.shape[1])
+            ]
+        )
         fit_predictions = predict(x_fit_all, fit_idx, fit_idx)
         val_predictions = predict(x_fit_all, fit_idx, val_idx)
 
@@ -348,8 +461,8 @@ def main() -> int:
         val_h: dict[str, np.ndarray] = {}
         val_h_valid: dict[str, np.ndarray] = {}
         for version in BLOCK_VERSIONS:
-            h_block, h_block_valid = build_block(
-                val_predictions, fit_predictions, version, groups
+            h_block, h_block_valid, _ = build_block(
+                val_predictions, fit_predictions, version, groups, fit_fitted
             )
             val_h[version] = h_block
             val_h_valid[version] = h_block_valid
@@ -368,48 +481,88 @@ def main() -> int:
                     family_columns,
                     args.k,
                 )
-                value = metrics.get("nn_corr@k")
-                if not isinstance(value, (int, float)):
+                value = metric_value(metrics, "nn_corr@k")
+                if value is None:
                     continue
-                key = (float(value), -lam, 0 if version == "raw" else 1)
+                key = (value, -lam, 0 if version == "raw" else 1)
                 if best_key is None or key > best_key:
                     best_key = key
-                    best_selection = (float(lam), version, float(value))
+                    best_selection = (float(lam), version, value)
         if best_selection is None:
             raise RuntimeError(f"fold {fold}: no valid inner selection")
         selected_lambda, selected_version, val_score = best_selection
-        raw_val_block = retrieval_block(
+        raw_val_metrics = retrieval_block(
             fuse(x_val_block, val_h[selected_version], 0.0)[inner_valid],
             responses[val_idx][inner_valid],
             masks[val_idx][inner_valid],
             family_columns,
             args.k,
         )
-        raw_val_value = raw_val_block.get("nn_corr@k")
+        raw_val_value = metric_value(raw_val_metrics, "nn_corr@k")
 
         # --- Outer: refit on fit+val, evaluate on test ---
+        refit_fitted = np.array(
+            [
+                alphas[cell] is not None and int(masks[refit_idx, cell].sum()) >= 2
+                for cell in range(responses.shape[1])
+            ]
+        )
         refit_predictions = predict(x_refit_all, refit_idx, refit_idx)
-        test_predictions = predict(x_refit_all, refit_idx, test_idx)
-        test_predictions_all = test_predictions.copy()
-        test_responses_all = responses[test_idx]
-        test_masks_all = masks[test_idx]
+        test_predictions_all = predict(x_refit_all, refit_idx, test_idx)
         x_test_block, x_test_valid = unit_normalize(x_refit_all[test_idx])
-        h_test_block, h_test_valid = build_block(
-            test_predictions, refit_predictions, selected_version, groups
+        h_test_block, h_test_valid, fitted_cells = build_block(
+            test_predictions_all, refit_predictions, selected_version, groups, refit_fitted
         )
         common_valid = x_test_valid & h_test_valid
         excluded_total += int((~common_valid).sum())
-        test_responses = responses[test_idx][common_valid]
-        test_masks = masks[test_idx][common_valid]
-        test_city = city_array[test_idx][common_valid]
-        x_test_block = x_test_block[common_valid]
-        h_test_block = h_test_block[common_valid]
-        test_predictions = test_predictions[common_valid]
+
+        test_responses_all = responses[test_idx]
+        test_masks_all = masks[test_idx]
+        test_cities_all = city_array[test_idx]
+
+        # Full raw pool: lambda = 0 only needs the feature block.
+        raw_full = fuse(x_test_block, h_test_block, 0.0)[x_test_valid]
+        raw_full_metrics = retrieval_block(
+            raw_full,
+            test_responses_all[x_test_valid],
+            test_masks_all[x_test_valid],
+            family_columns,
+            args.k,
+        )
+        outer["raw_full"].append(metric_value(raw_full_metrics, "nn_corr@k"))
+        outer_baseline["raw_full"].append(metric_value(raw_full_metrics, "baseline_corr"))
+
+        if not common_valid.any():
+            fold_records.append(
+                {
+                    "fold": fold,
+                    "fit_units": int(len(fit_idx)),
+                    "val_units": int(len(val_idx)),
+                    "test_units": int(len(test_idx)),
+                    "selected_version": selected_version,
+                    "selected_lambda": float(selected_lambda),
+                    "lambda_zero_selected": bool(selected_lambda == 0.0),
+                    "val_nn_corr_selected": val_score,
+                    "val_nn_corr_raw": raw_val_value,
+                    "fitted_cells": fitted_cells,
+                    "excluded_from_common": int((~common_valid).sum()),
+                    "per_cell_ridge": [
+                        float(alpha) if alpha is not None else None for alpha in alphas
+                    ],
+                }
+            )
+            continue
+
+        x_common = x_test_block[common_valid]
+        h_common = h_test_block[common_valid]
+        test_responses = test_responses_all[common_valid]
+        test_masks = test_masks_all[common_valid]
+        test_city_array = test_cities_all[common_valid]
 
         embeddings = {
-            "raw": fuse(x_test_block, h_test_block, 0.0),
-            "h_only": fuse(x_test_block, h_test_block, 1.0),
-            "fusion": fuse(x_test_block, h_test_block, selected_lambda),
+            "raw_common": fuse(x_common, h_common, 0.0),
+            "h_only": fuse(x_common, h_common, 1.0),
+            "fusion": fuse(x_common, h_common, selected_lambda),
         }
         for name, embedding in embeddings.items():
             metrics = retrieval_block(
@@ -421,68 +574,120 @@ def main() -> int:
         curve: dict[str, float | None] = {}
         for lam in LAMBDA_GRID:
             metrics = retrieval_block(
-                fuse(x_test_block, h_test_block, lam),
+                fuse(x_common, h_common, lam),
                 test_responses,
                 test_masks,
                 family_columns,
                 args.k,
             )
-            value = metrics.get("nn_corr@k")
-            curve[str(lam)] = float(value) if isinstance(value, (int, float)) else None
+            curve[str(lam)] = metric_value(metrics, "nn_corr@k")
         lambda_curve[str(fold)] = curve
 
-        for name, embedding in (("raw", embeddings["raw"]), ("fusion", embeddings["fusion"])):
+        for name, embedding in (
+            ("raw", embeddings["raw_common"]),
+            ("fusion", embeddings["fusion"]),
+        ):
             metrics = retrieval_block(
                 embedding,
                 test_responses,
                 test_masks,
                 family_columns,
                 args.k,
-                city_keys=test_city,
+                city_keys=test_city_array,
                 exclude_same_city=True,
             )
             no_same_city[name].append(metric_value(metrics, "nn_corr@k"))
 
+        city_deltas, macro = per_anchor_city_deltas(
+            embeddings["raw_common"],
+            embeddings["fusion"],
+            test_responses,
+            test_masks,
+            test_city_array,
+            family_columns,
+            args.k,
+        )
+        city_macro_overall.extend(macro)
+        for city, entry in city_deltas.items():
+            per_city_all[city] = entry
+        _, macro_no_same = per_anchor_city_deltas(
+            embeddings["raw_common"],
+            embeddings["fusion"],
+            test_responses,
+            test_masks,
+            test_city_array,
+            family_columns,
+            args.k,
+            exclude_same_city=True,
+        )
+        city_macro_no_same_city.extend(macro_no_same)
+
         for outcome, columns in groups.items():
-            for name, embedding in embeddings.items():
+            for name, embedding in (
+                ("raw", embeddings["raw_common"]),
+                ("h_only", embeddings["h_only"]),
+                ("fusion", embeddings["fusion"]),
+            ):
                 metrics = retrieval_block(
                     embedding, test_responses, test_masks, columns, args.k
                 )
                 per_outcome[outcome][name].append(metric_value(metrics, "nn_corr@k"))
+            _, outcome_macro = per_anchor_city_deltas(
+                embeddings["raw_common"],
+                embeddings["fusion"],
+                test_responses,
+                test_masks,
+                test_city_array,
+                columns,
+                args.k,
+            )
+            per_outcome_city_macro[outcome].extend(outcome_macro)
 
-        for city, entry in per_city_deltas(
-            embeddings["raw"],
-            embeddings["fusion"],
-            test_responses,
-            test_masks,
-            test_city,
-            family_columns,
-            args.k,
-        ).items():
-            per_city_all[city] = entry
-
+        baseline_means, baseline_signs = baseline_from_training(
+            responses, masks, refit_idx
+        )
         amplitude_records["overall"].append(
             amplitude_direction(
-                test_predictions_all, test_responses_all, test_masks_all, family_columns
+                test_predictions_all,
+                test_responses_all,
+                test_masks_all,
+                family_columns,
+                baseline_means,
+                baseline_signs,
             )
         )
         for outcome, columns in groups.items():
             amplitude_records[outcome].append(
                 amplitude_direction(
-                    test_predictions_all, test_responses_all, test_masks_all, columns
+                    test_predictions_all,
+                    test_responses_all,
+                    test_masks_all,
+                    columns,
+                    baseline_means,
+                    baseline_signs,
                 )
             )
 
-        reference_block = retrieval_metrics(
+        reference_full = retrieval_metrics(
+            torch.from_numpy(x_refit_all[test_idx][x_test_valid]).float(),
+            torch.from_numpy(test_responses_all[x_test_valid][:, family_columns]).float(),
+            torch.from_numpy(test_masks_all[x_test_valid][:, family_columns]),
+            k=args.k,
+        )["overall"]
+        reference_common = retrieval_metrics(
             torch.from_numpy(x_refit_all[test_idx][common_valid]).float(),
             torch.from_numpy(test_responses[:, family_columns]).float(),
             torch.from_numpy(test_masks[:, family_columns]),
             k=args.k,
         )["overall"]
-        reference_nn = reference_block.get("nn_corr@k")
-        zero_nn = outer["raw"][-1]
-        if isinstance(reference_nn, (int, float)) and isinstance(zero_nn, (int, float)):
-            lambda_zero_diffs.append(abs(float(reference_nn) - float(zero_nn)))
+        full_value = metric_value(reference_full, "nn_corr@k")
+        common_value = metric_value(reference_common, "nn_corr@k")
+        zero_full = outer["raw_full"][-1]
+        zero_common = outer["raw_common"][-1]
+        if full_value is not None and isinstance(zero_full, (int, float)):
+            equivalence_full.append(abs(full_value - float(zero_full)))
+        if common_value is not None and isinstance(zero_common, (int, float)):
+            equivalence_common.append(abs(common_value - float(zero_common)))
 
         lambda_zero = selected_lambda == 0.0
         lambda_zero_folds += int(lambda_zero)
@@ -496,55 +701,91 @@ def main() -> int:
                 "selected_lambda": float(selected_lambda),
                 "lambda_zero_selected": lambda_zero,
                 "val_nn_corr_selected": val_score,
-                "val_nn_corr_raw": (
-                    float(raw_val_value)
-                    if isinstance(raw_val_value, (int, float))
-                    else None
-                ),
+                "val_nn_corr_raw": raw_val_value,
+                "fitted_cells": fitted_cells,
+                "excluded_from_common": int((~common_valid).sum()),
                 "per_cell_ridge": [
                     float(alpha) if alpha is not None else None for alpha in alphas
                 ],
-                "excluded_zero_norm": int((~common_valid).sum()),
             }
         )
         print(
             f"fold {fold}: fit {len(fit_idx)} / val {len(val_idx)} / test {len(test_idx)} | "
             f"selected {selected_version}, lambda={selected_lambda:g} | "
             f"val nn_corr {val_score:.4f} "
-            f"(raw {raw_val_value if isinstance(raw_val_value, (int, float)) else float('nan'):.4f})"
+            f"(raw {raw_val_value if raw_val_value is not None else float('nan'):.4f})"
         )
 
-    city_values = [entry["delta"] for entry in per_city_all.values()]
-    macro_mean, macro_low, macro_high = bootstrap_mean_ci(city_values, n_boot=args.bootstrap)
-    per_outcome_summary = {
-        outcome: {
-            name: {"nn_corr_mean": mean_of(values)}
-            for name, values in entry.items()
+    macro_mean, macro_low, macro_high = bootstrap_mean_ci(
+        city_macro_overall, n_boot=args.bootstrap
+    )
+    no_same_mean, no_same_low, no_same_high = bootstrap_mean_ci(
+        city_macro_no_same_city, n_boot=args.bootstrap
+    )
+    per_outcome_summary: dict[str, object] = {}
+    for outcome, outcome_entry in per_outcome.items():
+        macro_values = per_outcome_city_macro[outcome]
+        mean_value, low, high = bootstrap_mean_ci(macro_values, n_boot=args.bootstrap)
+        per_outcome_summary[outcome] = {
+            **{
+                name: {"nn_corr_mean": mean_of(outcome_entry[name])}
+                for name in ("raw", "h_only", "fusion")
+            },
+            "city_macro": {
+                "n_cities": len(macro_values),
+                "mean_delta": mean_value,
+                "bootstrap_95_ci": [low, high],
+            },
         }
-        for outcome, entry in per_outcome.items()
-    }
     amplitude_summary = {
         "overall": {
-            "relative_sq_error_reduction_mean": mean_of(
-                [record.get("relative_sq_error_reduction") for record in amplitude_records["overall"]]
+            "relative_sq_error_reduction_pooled_mean": mean_of(
+                [
+                    record.get("relative_sq_error_reduction_pooled")
+                    for record in amplitude_records["overall"]
+                ]
             ),
-            "direction_accuracy_mean": mean_of(
-                [record.get("direction_accuracy") for record in amplitude_records["overall"]]
+            "relative_sq_error_reduction_cell_macro_mean": mean_of(
+                [
+                    record.get("relative_sq_error_reduction_cell_macro")
+                    for record in amplitude_records["overall"]
+                ]
             ),
-            "direction_baseline_mean": mean_of(
-                [record.get("direction_baseline") for record in amplitude_records["overall"]]
+            "direction_accuracy_pooled_mean": mean_of(
+                [
+                    record.get("direction_accuracy_pooled")
+                    for record in amplitude_records["overall"]
+                ]
+            ),
+            "direction_baseline_pooled_mean": mean_of(
+                [
+                    record.get("direction_baseline_pooled")
+                    for record in amplitude_records["overall"]
+                ]
+            ),
+            "fitted_cells_mean": mean_of(
+                [record.get("fitted_cells") for record in amplitude_records["overall"]]
             ),
         },
         "per_outcome": {
             outcome: {
-                "relative_sq_error_reduction_mean": mean_of(
-                    [record.get("relative_sq_error_reduction") for record in records]
+                "relative_sq_error_reduction_pooled_mean": mean_of(
+                    [
+                        record.get("relative_sq_error_reduction_pooled")
+                        for record in records
+                    ]
                 ),
-                "direction_accuracy_mean": mean_of(
-                    [record.get("direction_accuracy") for record in records]
+                "direction_accuracy_pooled_mean": mean_of(
+                    [
+                        record.get("direction_accuracy_pooled")
+                        for record in records
+                    ]
                 ),
-                "direction_baseline_mean": mean_of(
-                    [record.get("direction_baseline") for record in records]
+                "direction_baseline_pooled_mean": mean_of(
+                    [
+                        record.get("direction_baseline_pooled")
+                        for record in records
+                    ]
                 ),
             }
             for outcome, records in amplitude_records.items()
@@ -562,29 +803,40 @@ def main() -> int:
             "lambda_grid": list(LAMBDA_GRID),
             "block_versions": list(BLOCK_VERSIONS),
             "ridge_candidates": list(controls.RIDGE_CANDIDATES),
+            "min_fitted_cells": MIN_FITTED_CELLS,
         },
         "city_folds": {city: int(assignment[city]) for city in sorted(assignment)},
         "fold_records": fold_records,
         "lambda_zero_share": lambda_zero_folds / max(args.folds, 1),
-        "lambda_zero_equivalence_max_abs_diff": (
-            max(lambda_zero_diffs) if lambda_zero_diffs else None
-        ),
-        "excluded_zero_norm_total": excluded_total,
+        "lambda_zero_equivalence": {
+            "full_pool_max_abs_diff": max(equivalence_full) if equivalence_full else None,
+            "common_pool_max_abs_diff": (
+                max(equivalence_common) if equivalence_common else None
+            ),
+        },
+        "excluded_from_common_total": excluded_total,
         "overall": {
             name: {
                 "nn_corr_mean": mean_of(outer[name]),
                 "baseline_mean": mean_of(outer_baseline[name]),
             }
-            for name in ("raw", "h_only", "fusion")
+            for name in ("raw_full", "raw_common", "h_only", "fusion")
         },
         "no_same_city": {
-            name: {"nn_corr_mean": mean_of(values)}
-            for name, values in no_same_city.items()
+            "nn_corr": {
+                name: {"nn_corr_mean": mean_of(values)}
+                for name, values in no_same_city.items()
+            },
+            "city_macro": {
+                "n_cities": len(city_macro_no_same_city),
+                "mean_delta": no_same_mean,
+                "bootstrap_95_ci": [no_same_low, no_same_high],
+            },
         },
         "lambda_curve_diagnostic": lambda_curve,
         "per_outcome": per_outcome_summary,
         "city_macro": {
-            "n_cities": len(city_values),
+            "n_cities": len(city_macro_overall),
             "mean_delta": macro_mean,
             "bootstrap_95_ci": [macro_low, macro_high],
         },

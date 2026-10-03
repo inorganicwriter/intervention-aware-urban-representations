@@ -1,0 +1,352 @@
+% 编译：xelatex project_intro.tex （需 ctex；Windows 下 fontset=windows）
+\documentclass[aspectratio=169,11pt]{beamer}
+\usepackage[fontset=windows]{ctex}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usetheme{Madrid}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{itemize items}[circle]
+\setbeamercolor{frametitle}{bg=blue!45!black}
+\setbeamerfont{block title}{size=\small}
+\setbeamersize{text margin left=6mm,text margin right=6mm}
+\setlength{\tabcolsep}{4pt}
+\usepackage{graphicx}
+\graphicspath{{./}{figures/}{docs/presentations/figures/}}
+
+\newcommand{\key}[1]{\textbf{\color{blue!55!black}#1}}
+
+\title{因果响应标签与干预条件化城市表示学习}
+\subtitle{项目介绍}
+\author{}
+\institute{}
+\date{}
+
+\begin{document}
+
+\begin{frame}[plain]
+  \titlepage
+\end{frame}
+
+\begin{frame}{项目一览}
+  \small
+  \begin{block}{一句话}
+    把\textbf{设计型因果估计出的多期响应路径}变成可迁移的监督信号，学习"对同类干预
+    响应相似"的城市表示。
+  \end{block}
+  \begin{itemize}
+    \item 因果层：5{,}048 个轨道交通站点开通事件，四族结果、三种估计量，
+      严格诊断与封版发布（含逐标签可靠性权重）
+    \item 表示层：软标签对比学习 $+$ 响应预测头；逐结果族独立训练与评估
+    \item 评估层：响应检索（\texttt{nn\_corr@k}）$+$ 外观/机会基线 $+$ 城市级交叉验证；
+      方向、幅度、形状分开报告
+  \end{itemize}
+  \medskip
+  \begin{block}{当前阶段}
+    因果管线封版完成；表示学习完成系统诊断与评估修正，正在做特征可预测性最小对照。
+  \end{block}
+\end{frame}
+
+\section{Background}
+
+\begin{frame}{研究问题：轨道交通开通如何改变周边？}
+  \small
+  \begin{itemize}
+    \item 结果维度：住房价格、POI（数量/熵/商业占比/交通可达）、夜间灯光、人口
+    \item 关注\textbf{动态路径}：开通后 1--24 个月（年度族为 1--3 年）逐期效应
+    \item 关注\textbf{异质性}：谁受益、受益多少、持续多久，以及能否跨城市比较
+  \end{itemize}
+  \medskip
+  \begin{block}{为什么重要}
+    轨道交通投资规模大、周期长；理解响应异质性是选址、时序与配套政策的前提。
+    若能学习"响应相似"的城市表示，可把已有评估迁移到未开通/待评估城市。
+  \end{block}
+\end{frame}
+
+\begin{frame}{为什么难}
+  \small
+  \begin{itemize}
+    \item \textbf{无实验}：每个城市开通站点有限、时间不同，选址与开通时点内生
+    \item \textbf{多期多结果}：单一 DiD 系数刻画不了完整响应路径，更无法跨结果比较
+    \item \textbf{样本异质}：城市规模、网络形态、站点类型差异大，处理前特征维度高
+    \item \textbf{逐案重跑}：传统流程每评估一个城市/线路就要重新构造对照与估计
+    \item \textbf{缺乏可迁移表示}：既有研究多为单城市/单线路结论，难以直接外推
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{传统工具与局限}
+  \small
+  \begin{tabular}{p{0.24\textwidth}p{0.34\textwidth}p{0.34\textwidth}}
+    \toprule
+    工具 & 作用 & 局限 \\
+    \midrule
+    DiD / TWFE 事件研究 & 动态处理效应、可加固定效应 & 平行趋势敏感；逐案重估 \\
+    合成控制（SCM） & 单处理单元的反事实路径 & 一次一个处理单元，难规模化 \\
+    广义合成控制（GSC） & 交互固定效应、可处理多个处理单元 & 依赖线性因子结构 \\
+    矩阵补全 & 面板反事实填充、不确定性完整 & 结果逐网格独立，不做响应相似性 \\
+    匹配/合成对照 & 控制处理前差异 & 匹配协变量与设计诊断决定可信度 \\
+    \bottomrule
+  \end{tabular}
+  \medskip
+  \begin{block}{共同缺口}
+    这些工具产出\key{逐任务的响应估计}，但不产出"任务之间响应是否相似"的
+    可迁移表示，也没有把估计质量显式带入下游学习。
+  \end{block}
+\end{frame}
+
+\begin{frame}{项目核心思路}
+  \small
+  \begin{block}{把因果估计本身当作监督}
+    对每个处理事件 $i$ 得到响应路径 $r_i$（跨 horizon/结果的效应向量）；学习
+    $f:\text{处理前特征}\to\mathbb{R}^d$，使
+    $\mathrm{sim}_{\text{emb}}(f_i,f_j)$ 与 $\mathrm{sim}_{\text{resp}}(r_i,r_j)$ 一致。
+  \end{block}
+  \begin{itemize}
+    \item 标签不是人工标注，而是\key{设计型因果估计}：matched 事件研究、GSC、矩阵补全
+    \item 估计质量显式进入下游：预趋势、holdout、CV MSPE 等诊断决定
+      监督资格与逐标签可靠性权重
+    \item 产出两层资产：可审计的因果响应标签库 $+$ 响应对齐的城市表示
+  \end{itemize}
+\end{frame}
+
+\section{Related Work}
+
+\begin{frame}{相关文献（1）：面板因果估计}
+  \small
+  \begin{itemize}
+    \item 双重差分与事件研究：Callaway \& Sant'Anna (2021)；Sun \& Abraham (2021)；
+      Goodman-Bacon (2021)
+    \item 合成控制与广义合成控制：Abadie \& Gardeazabal (2003)；Abadie, Diamond
+      \& Hainmueller (2010)；Xu (2017)
+    \item 矩阵补全：Athey, Bayati, Doudchenko, Imbens \& Khosravi (2021)
+    \item 匹配/合成对照与诊断：Imai, Kim \& Wang (2023)；Roth (2022)；
+      Rambachan \& Roth (2023)
+  \end{itemize}
+  \medskip
+  \begin{block}{我们的使用方式}
+    不发明新的估计量：在同一批事件上并行运行三种估计量，用识别诊断决定
+    \textbf{哪些标签进入监督、以多大权重进入}，并把发布冻结成可复现资产。
+  \end{block}
+\end{frame}
+
+\begin{frame}{相关文献（2）：交通基础设施影响评估}
+  \small
+  \begin{itemize}
+    \item 铁路/轨道开通的局部影响：Gibbons \& Machin (2005)；
+      Gonzalez-Navarro \& Turner (2018)
+    \item 中国城市轨道与土地利用/房价：Zheng \& Kahn (2013) 等
+    \item 共同点：以个别城市或线路为对象，报告若干结果的平均/动态效应
+  \end{itemize}
+  \medskip
+  \begin{block}{缺口}
+    缺少\textbf{跨城市、多结果、动态路径}的系统性标签库，也缺少把"响应形状"
+    作为可检索、可迁移对象的表示学习框架。
+  \end{block}
+\end{frame}
+
+\begin{frame}{相关文献（3）：城市表示学习与遥感表征}
+  \small
+  \begin{itemize}
+    \item 对比/自监督表示：SimCLR（Chen et al., 2020）；MoCo（He et al., 2020）；
+      SupCon（Khosla et al., 2020）；DINOv2（Oquab et al., 2024）
+    \item 卫星影像与城市/贫困制图：Jean et al. (2016)；MOSAIKS（Rolf et al., 2021）
+    \item 监督信号通常来自图像增强、任务标签或下游指标
+  \end{itemize}
+  \medskip
+  \begin{block}{差异}
+    我们使用\key{因果估计的响应路径}作为软标签监督，目标是让嵌入几何与
+    "干预响应几何"一致，而不是图像/外观相似或单一任务精度。
+  \end{block}
+\end{frame}
+
+\begin{frame}{相关文献（4）：与因果表示学习的边界}
+  \small
+  \begin{itemize}
+    \item 因果表示学习（CRL，Sch\"olkopf et al., 2021）的目标是从观测中学习
+      潜在因果变量与结构
+    \item 本项目\textbf{不是} CRL：因果结构由设计型估计流程给定并冻结，
+      表示学习只负责把响应相似性迁移到未见城市
+    \item 与"因果监督的预测模型"的区别：我们不预测单个效应，而是学习
+      可用于检索、比较与迁移的嵌入空间
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{差异对照}
+  \small
+  \begin{tabular}{p{0.26\textwidth}p{0.31\textwidth}p{0.35\textwidth}}
+    \toprule
+    维度 & 既有工作 & 本项目 \\
+    \midrule
+    标签来源 & 人工标注/图像增强/单一任务 & 设计型因果估计的响应路径 \\
+    标签质量 & 通常视为等权真值 & 识别诊断决定资格与可靠性权重 \\
+    迁移单位 & 单城市/单线路结论 & 跨城市响应相似性的嵌入检索 \\
+    评估 & 平均效应/拟合精度 & 响应检索、外观/机会基线、城市级 CV \\
+    资产 & 论文表格 & 封版标签库 $+$ 可复现流水线与审计 \\
+    \bottomrule
+  \end{tabular}
+\end{frame}
+
+\section{方法与资产}
+
+\begin{frame}{数据与事件}
+  \small
+  \begin{itemize}
+    \item 冻结的处理清单：5{,}048 个站点开通事件（城市、网络、开通月份）
+    \item 结果族与 horizon：住房价格与夜间灯光（月频 1--24）；POI 四指标与人口
+      （年频 1--3）
+    \item 处理前特征：房价/POI/灯光/人口/Sentinel-2 的 1--3 年 lag，
+      只用训练城市拟合标准化参数
+    \item 可选输入：街景图像（冻结 DINOv2 编码器），默认关闭
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{因果标签流水线}
+  \small
+  \begin{itemize}
+    \item 匹配：同城 donor 选择与 holdout 边界，生成匹配事件研究标签
+    \item 广义合成控制（GSC）：交互固定效应，支持多处理单元
+    \item 矩阵补全（MC）：固定 $\lambda$ 的单元 jackknife 推断
+    \item 诊断门禁：预趋势、holdout 比率、CV MSPE、支持观测数
+    \item 发布：\texttt{releases/production}（manifest $+$ SHA256 $+$ waiver），
+      不带日期/版本后缀
+  \end{itemize}
+  \medskip
+  \begin{block}{可靠性权重}
+    $W=A\cdot\exp(-\gamma D)\cdot \mathrm{precision}^{\alpha}$：
+    资格 $A$、设计不可靠度 $D$（预趋势/holdout/CV 的分位）、精度项；
+    逐 $(method,\,family)$ 归一化。
+  \end{block}
+\end{frame}
+
+\begin{frame}{事件研究示例（住房）}
+  \begin{center}
+    \includegraphics[width=0.95\textwidth]{housing_pooled_event_study.pdf}
+  \end{center}
+  \vspace{-0.4em}
+  \footnotesize 同城面板，三方法并列；规范窗口、每面板独立纵轴、清洁 pre 期联合检验。
+\end{frame}
+
+\begin{frame}{事件研究示例（夜间灯光 / POI）}
+  \begin{columns}[T]
+    \begin{column}{0.5\textwidth}
+      \includegraphics[width=\textwidth]{viirs_pooled_event_study.pdf}
+    \end{column}
+    \begin{column}{0.5\textwidth}
+      \includegraphics[width=\textwidth]{poi_pooled_event_study.pdf}
+    \end{column}
+  \end{columns}
+  \vspace{-0.2em}
+  \footnotesize 左：VIiRS（月频）；右：POI（年频，逐 outcome 抽样展示）。
+\end{frame}
+
+\begin{frame}{标签发布与审计}
+  \small
+  \begin{itemize}
+    \item 封版面板：565 行事件研究面板、24 格可用性矩阵、64 行预趋势表、
+      4 族选择表；验证通过
+    \item 队列状态不可回滚：代码包解压排除状态型队列；恢复脚本与预期计数固化
+    \item 全链路可追溯：输入哈希、规范化元数据、权重标定 ID、审计报告
+  \end{itemize}
+  \medskip
+  \begin{block}{产出}
+    \texttt{data/active/causal/releases/production} 与
+    \texttt{mit\_event\_study\_final.zip}（图、源表、manifest）。
+  \end{block}
+\end{frame}
+
+\begin{frame}{表示学习：模型与目标}
+  \small
+  \begin{itemize}
+    \item 结构：表格 MLP（$+$ 可选街景分支）$\to$ 融合 $\to$ 128 维归一化嵌入
+      $\to$ 每结果族预测头
+    \item 软标签对比：正样本权重 $=$ 响应相似度（逐族相关、可权重化）；
+      无共同可靠 support 的 pair 从分母剔除
+    \item 预测头：逐 cell 加权 MSE（设计权重）；表示损失与预测损失加权合成
+    \item 监督口径：逐结果族独立（VIiRS 6 维 / POI 12 维），只用同城标签
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{评估协议}
+  \small
+  \begin{itemize}
+    \item 检索：\texttt{nn\_corr@k}——嵌入近邻的响应相似度；含随机近邻基线
+    \item 对照：原始特征检索、PCA、随机投影、冻结 DINOv2、外观自编码器
+    \item 稳健性：置换检验、bootstrap 区间、多 seed
+    \item 迁移：逐城市检索、少样本探针、方向预测 AUC
+    \item 诊断补充：城市级交叉验证（折内隔离预处理与公平基线）、
+      方向/幅度/形状分开报告
+  \end{itemize}
+\end{frame}
+
+\section{现状与发现}
+
+\begin{frame}{评估修正与诊断（已通过三轮独立审阅）}
+  \small
+  \begin{itemize}
+    \item 已修正：probe 含截距与均值基线、折内预处理隔离、公平 refit 基线、
+      条件化规则版本化、城市网格数与 cell 数分离
+    \item 已排除：标签噪声（VIiRS 折半信度 $\approx0.8$）、两点支撑问题、
+      float32 消减、整体嵌入塌缩
+    \item 已确认：设计权重在 horizon 恒定，W-design 不重塑成对相似度；
+      对比损失与距离损失存在几何目标冲突（待验证机制）
+    \item 未决：原始特征的城市外可预测性
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{当前证据（真实数据）}
+  \small
+  \begin{tabular}{lrrrr}
+    \toprule
+    数据集 & raw 基线 & 外观自编码器 & 监督模型 & 结论 \\
+    \midrule
+    VIiRS（test） & 0.004 & 0.004--0.015 & 0.001--0.045 & 无稳定增量 \\
+    POI（test） & 0.109 & 0.107--0.119 & 0.076--0.114 & 模型低于 raw \\
+    \bottomrule
+  \end{tabular}
+  \medskip
+  \begin{block}{解读}
+    多 seed 波动大于配置差异；尚未发现监督表示稳定超过原始特征或外观基线。
+    这可能是特征信息不足，也可能是目标函数浪费了信息——由最小对照裁决。
+  \end{block}
+\end{frame}
+
+\begin{frame}{下一步：最小对照与决策}
+  \small
+  \begin{block}{特征可预测性最小对照（已具备运行条件）}
+    固定城市级 5 折 CV：训练均值基线、含截距 ridge、kNN 非线性对照、
+    raw 检索；方向/幅度/形状分开，逐 outcome、逐城市。
+  \end{block}
+  \begin{itemize}
+    \item 有稳定城市外信号 $+$ 表示模型仍不超 raw $\to$ 修目标函数
+      （保留 raw 几何 $+$ 紧凑响应块，$\lambda$ 含 0 且仅内层选择）
+    \item 特征无可预测信号 $\to$ 补充处理前信息（站点属性、网络/可达性，
+      严格时间边界）或调整论文定位
+    \item 全部无稳定增量 $\to$ 明确报告当前特征条件下的迁移边界
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{主要参考}
+  \footnotesize
+  \begin{itemize}
+    \item Abadie \& Gardeazabal (2003); Abadie, Diamond \& Hainmueller (2010);
+      Abadie (2021)
+    \item Xu (2017) generalized synthetic control; Athey, Bayati, Doudchenko,
+      Imbens \& Khosravi (2021) matrix completion
+    \item Callaway \& Sant'Anna (2021); Sun \& Abraham (2021); Goodman-Bacon (2021)
+    \item Imai, Kim \& Wang (2023); Roth (2022); Rambachan \& Roth (2023)
+    \item Gibbons \& Machin (2005); Gonzalez-Navarro \& Turner (2018);
+      Zheng \& Kahn (2013)
+    \item Chen et al. (2020) SimCLR; He et al. (2020) MoCo; Khosla et al. (2020)
+      SupCon; Oquab et al. (2024) DINOv2
+    \item Jean et al. (2016); Rolf et al. (2021) MOSAIKS; Sch\"olkopf et al. (2021) CRL
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[plain]
+  \begin{center}
+    {\Large 谢谢}\\[0.6em]
+    {\small 代码、封版标签与审计文档见项目仓库}
+  \end{center}
+\end{frame}
+
+\end{document}

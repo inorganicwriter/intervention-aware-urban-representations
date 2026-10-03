@@ -94,6 +94,26 @@ def test_city_summary_keeps_grid_and_cell_counts() -> None:
     assert per_city["d"]["knn"]["n_cells"] == 1
 
 
+def test_knn_metrics_align_with_observed_test_rows() -> None:
+    responses = np.arange(1, 13, dtype=np.float64).reshape(12, 1)
+    cities = ["a"] * 4 + ["b"] * 8
+    arrays = _arrays(responses, cities)
+    arrays["masks"] = np.ones((12, 1), dtype=bool)
+    arrays["masks"][11, 0] = False  # one outer-test row misses this cell
+    fit_idx = np.arange(0, 4)
+    val_idx = np.arange(4, 8)
+    test_idx = np.arange(8, 12)
+    standardized = arrays["features"]
+
+    result = controls.fold_controls(
+        arrays, standardized, standardized, fit_idx, val_idx, test_idx, min_obs=2
+    )
+
+    assert 0 in result["knn"]
+    assert np.isfinite(result["knn"][0]["rmse"])
+    assert result["per_city"]["b"]["knn"]["n_cells"] == 1
+
+
 def test_preprocessor_depends_on_reference_rows_only() -> None:
     features = np.array([[1.0], [2.0], [3.0], [100.0]])
     reference = np.array([0, 1])

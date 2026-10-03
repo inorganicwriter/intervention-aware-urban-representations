@@ -385,7 +385,12 @@ def fold_controls(
                     best_knn = (float(k), rmse)
             knn_param = best_knn[0] if best_knn is not None else None
         if knn_param is not None:
-            prediction = _knn_predict(distance_test_refit[:, refit_obs], refit_values, int(knn_param))
+            knn_prediction = _knn_predict(
+                distance_test_refit[:, refit_obs], refit_values, int(knn_param)
+            )
+            # ``distance_test_refit`` covers every outer-test row; restrict to
+            # the rows where this cell is observed, exactly like the ridge path.
+            prediction = knn_prediction[test_obs]
             metric = _cell_metrics(prediction, y_test, baseline_value, majority_sign, knn_param)
             knn_map[cell] = metric
             for city in unique_cities:

@@ -54,7 +54,7 @@ def pipeline_figure() -> None:
         ("Causal estimators\nmatched event study · GSC\nmatrix completion", 6.35, 2.55),
         ("Identification diagnostics\npre-trend · holdout · CV MSPE\nsupport counts", 9.45, 2.55),
         ("Reliability weights\nW = A · exp(-gamma D) · precision^alpha\nper method x family", 9.45, 0.35),
-        ("Frozen release\nmanifest + SHA256 + waiver\nreleases/production", 6.35, 0.35),
+        ("Frozen release\ncontent hash + audit record\ntraceable inputs", 6.35, 0.35),
         ("Response-aligned representation\nsoft-label contrastive + prediction head\nper outcome family", 3.25, 0.35),
         ("Retrieval evaluation\nnn_corr@k vs raw / appearance baselines\ncity-level CV", 0.15, 0.35),
     ]

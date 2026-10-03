@@ -30,13 +30,27 @@
 
 \section{Background}
 
+\begin{frame}{现实背景：轨道扩张与站点开发}
+  \small
+  \begin{itemize}
+    \item 过去二十年，中国城市轨道交通快速扩张：开通城市数量与运营里程持续增长，
+      多个城市进入网络化运营阶段
+    \item 站点开通是典型的城市干预：同时改变可达性、土地价值、商业集聚与人口分布，
+      也是 TOD 与站点综合开发政策的落点
+    \item 房价挂牌、POI、夜间灯光、人口与卫星遥感等多源数据覆盖度提升，
+      使站点级、多结果、跨城市的量化评估成为可能
+    \item 决策需求超出"平均效应"：需要知道哪些站点、在什么条件下、对哪些结果
+      响应更强
+  \end{itemize}
+\end{frame}
+
 \begin{frame}{研究问题}
   \small
   \begin{itemize}
     \item 轨道交通站点开通如何改变周边：住房价格、POI（数量/熵/商业占比/交通可达）、
       夜间灯光、人口
-    \item 关注\textbf{动态路径}：开通后逐期效应（月频 1--24，年频 1--3）
-    \item 关注\textbf{异质性}：谁受益、受益多少、持续多久，以及不同城市之间能否比较
+    \item 关注动态路径：开通后逐期效应（月频 1--24，年频 1--3）
+    \item 关注异质性：谁受益、受益多少、持续多久，以及不同城市之间能否比较
   \end{itemize}
   \medskip
   \begin{block}{研究意义}
@@ -45,14 +59,41 @@
   \end{block}
 \end{frame}
 
+\begin{frame}{响应为什么异质}
+  \small
+  \begin{itemize}
+    \item 可达性改善：通勤时间、换乘便利、就业与活动可达范围
+    \item 集聚与商业重组：新商业进入、既有商业挤出、业态结构变化
+    \item 分流与替代：与既有站点、公交与道路网络的竞争关系
+    \item 预期与资本化：开通前的价格预期、开发时序与土地供给响应
+    \item 调节变量：站点类型（新线/延伸/换乘/终点）、网络位置、城市规模、
+      周边人口与配套
+  \end{itemize}
+  \medskip
+  \begin{block}{含义}
+    同一干预在不同地点可正可负、可快可慢，单一平均效应不足以支持选址与配套决策。
+  \end{block}
+\end{frame}
+
+\begin{frame}{从单案例到跨城市}
+  \small
+  \begin{itemize}
+    \item 传统评估回答"这个城市或线路发生了什么"，结论常受本地条件约束
+    \item 规划与投资决策更关心"哪些地方与已知案例相似、可能产生类似响应"
+    \item 这要求把每个事件的响应路径变成可比较、可检索、可迁移的对象，
+      而不只是若干回归系数
+    \item 迁移的三个层次：同结果跨城市、同城市跨结果、新城市零样本或少样本
+  \end{itemize}
+\end{frame}
+
 \begin{frame}{主要困难}
   \small
   \begin{itemize}
     \item 无实验：每城市开通站点有限、时点不同，选址与开通时点内生
     \item 多期多结果：单一 DiD 系数刻画不了完整响应路径，更无法跨结果比较
     \item 样本异质：城市规模、网络形态、站点类型差异大，处理前特征维度高
-    \item 逐案重跑：每评估一个城市/线路都要重新构造对照与估计
-    \item 缺少可迁移表示：既有研究多为单城市/单线路结论，难以直接外推
+    \item 逐案重跑：每评估一个城市或线路都要重新构造对照与估计
+    \item 缺少可迁移表示：既有研究多为单城市或单线路结论，难以直接外推
   \end{itemize}
 \end{frame}
 
@@ -79,7 +120,7 @@
 \begin{frame}{项目核心思路}
   \small
   \begin{block}{把因果估计本身当作监督}
-    对每个处理事件 $i$ 得到响应路径 $r_i$（跨 horizon/结果的效应向量）；学习
+    对每个处理事件 $i$ 得到响应路径 $r_i$（跨 horizon 与结果的效应向量）；学习
     $f:\text{处理前特征}\to\mathbb{R}^d$，使
     $\mathrm{sim}_{\text{emb}}(f_i,f_j)$ 与 $\mathrm{sim}_{\text{resp}}(r_i,r_j)$ 一致。
   \end{block}
@@ -91,10 +132,32 @@
   \end{itemize}
 \end{frame}
 
+\begin{frame}{从政策问题到学习任务}
+  \small
+  \begin{itemize}
+    \item 事件 $i$：处理前特征 $x_i$（多模态，lag 1--3）、响应路径 $r_i$
+      （跨 horizon 与结果的效应向量）
+    \item 目标：学习 $f$，使嵌入相似度与响应相似度一致，并迁移到训练未见城市
+    \item 标签来自设计型因果估计而非人工标注；识别诊断决定标签资格与可靠性权重
+    \item 两个评价维度：检索（近邻是否共享响应）与迁移（新城市的方向、幅度、
+      形状预测）
+  \end{itemize}
+\end{frame}
+
 \begin{frame}{项目流程}
   \begin{center}
     \includegraphics[width=\textwidth]{intro_pipeline.pdf}
   \end{center}
+\end{frame}
+
+\begin{frame}{项目目标与贡献}
+  \small
+  \begin{itemize}
+    \item 资产：覆盖 5{,}048 个站点事件的响应标签库（多估计量、多结果、可审计）
+    \item 方法：因果响应监督的表示学习框架（软标签对比、预测头、可靠性权重）
+    \item 评估：以响应几何为准的检索与迁移协议，含外观/机会基线与城市级交叉验证
+    \item 边界：系统检验因果监督何时有效、何时失效，给出可迁移性边界
+  \end{itemize}
 \end{frame}
 
 \section{Related Work}
@@ -123,11 +186,11 @@
     \item 铁路/轨道开通的局部影响：Gibbons \& Machin (2005)；
       Gonzalez-Navarro \& Turner (2018)
     \item 中国城市轨道与土地利用/房价：Zheng \& Kahn (2013) 等
-    \item 共同点：以个别城市或线路为对象，报告若干结果的平均/动态效应
+    \item 共同点：以个别城市或线路为对象，报告若干结果的平均或动态效应
   \end{itemize}
   \medskip
   \begin{block}{现有文献的不足}
-    缺少跨城市、多结果、动态路径的系统性标签库，也缺少把"响应形状"作为可检索、
+    缺少跨城市、多结果、动态路径的系统性标签库，也缺少把响应形状作为可检索、
     可迁移对象的表示学习框架。
   \end{block}
 \end{frame}
@@ -143,7 +206,7 @@
   \medskip
   \begin{block}{与本项目的区别}
     本项目使用因果估计的响应路径作为软标签监督，目标是让嵌入几何与干预响应几何
-    一致，而不是图像/外观相似或单一任务精度。
+    一致，而不是图像或外观相似，也不是单一任务精度。
   \end{block}
 \end{frame}
 
@@ -169,7 +232,7 @@
     标签质量 & 通常视为等权真值 & 识别诊断决定资格与可靠性权重 \\
     迁移单位 & 单城市/单线路结论 & 跨城市响应相似性的嵌入检索 \\
     评估 & 平均效应/拟合精度 & 响应检索、外观/机会基线、城市级 CV \\
-    资产 & 论文表格 & 封版标签库、可复现流水线与审计 \\
+    资产 & 论文表格 & 冻结标签库、可复现流水线与审计 \\
     \bottomrule
   \end{tabular}
 \end{frame}
@@ -182,8 +245,8 @@
     \item 冻结处理清单：5{,}048 个站点开通事件（城市、网络、开通月份）
     \item 结果族与 horizon：住房价格与夜间灯光（月频 1--24）；POI 四指标与人口
       （年频 1--3）
-    \item 处理前特征：房价/POI/灯光/人口/Sentinel-2 的 1--3 年 lag，
-      只用训练城市拟合标准化参数
+    \item 处理前特征：房价、POI、灯光、人口、Sentinel-2 的 1--3 年 lag；
+      标准化参数只用训练城市拟合
     \item 可选输入：街景图像（冻结 DINOv2 编码器），默认关闭
   \end{itemize}
 \end{frame}
@@ -203,14 +266,14 @@
         \item 广义合成控制（GSC）：交互固定效应，支持多处理单元
         \item 矩阵补全（MC）：固定 $\lambda$ 的单元 jackknife 推断
         \item 诊断门禁：预趋势、holdout 比率、CV MSPE、支持观测数
-        \item 发布：\texttt{releases/production}（manifest、SHA256、waiver）
+        \item 发布：带内容哈希与审计记录的冻结版本
       \end{itemize}
     \end{column}
     \begin{column}{0.45\textwidth}
       \includegraphics[width=\textwidth]{intro_weight_curve.pdf}\\[0.2em]
       \footnotesize 可靠性权重
       $W=A\cdot e^{-\gamma D}\cdot p^{\alpha}$：资格 $A$、设计不可靠度 $D$、
-      精度项 $p$；逐 $(method,\,family)$ 归一化。
+      精度项 $p$；逐方法与方法内结果族归一化。
     \end{column}
   \end{columns}
 \end{frame}
@@ -248,18 +311,16 @@
   \end{center}
 \end{frame}
 
-\begin{frame}{标签封版与审计}
+\begin{frame}{冻结发布与审计}
   \small
   \begin{itemize}
-    \item 封版面板：565 行事件研究面板、24 格可用性矩阵、64 行预趋势表、
-      4 族选择表；验证通过
-    \item 队列状态不可回滚：解压代码包时排除状态型队列；恢复脚本与预期计数固化
-    \item 全链路可追溯：输入哈希、规范化元数据、权重标定 ID、审计报告
+    \item 冻结发布：事件研究面板、可用性矩阵、预趋势表与结果族选择表，验证通过
+    \item 状态账本与发布解耦：流水线状态不可回滚，可在审计中恢复
+    \item 可追溯：输入哈希、规范化元数据、权重标定标识与审计记录
   \end{itemize}
   \medskip
   \begin{block}{产出}
-    \texttt{data/active/causal/releases/production} 与
-    \texttt{mit\_event\_study\_final.zip}（图、源表、manifest）。
+    冻结的响应标签发布与封版分析材料（图、源表与清单）。
   \end{block}
 \end{frame}
 
@@ -278,7 +339,7 @@
 \begin{frame}{评估协议}
   \small
   \begin{itemize}
-    \item 检索：\texttt{nn\_corr@k}——嵌入近邻的响应相似度；含随机近邻基线
+    \item 检索：近邻响应相似度 \texttt{nn\_corr@k}；含随机近邻基线
     \item 对照：原始特征检索、PCA、随机投影、冻结 DINOv2、外观自编码器
     \item 稳健性：置换检验、bootstrap 区间、多 seed
     \item 迁移：逐城市检索、少样本探针、方向预测 AUC
@@ -336,7 +397,7 @@
 \begin{frame}[plain]
   \begin{center}
     {\Large 谢谢}\\[0.6em]
-    {\small 代码、封版标签与审计文档见项目仓库}
+    {\small 代码、冻结标签与审计文档见项目仓库}
   \end{center}
 \end{frame}
 

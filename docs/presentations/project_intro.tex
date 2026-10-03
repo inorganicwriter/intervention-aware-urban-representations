@@ -44,6 +44,44 @@
   \end{itemize}
 \end{frame}
 
+\begin{frame}{中国轨道扩张的政策背景}
+  \small
+  \begin{itemize}
+    \item 2008--2015 年间，中国城市轨道交通经历快速扩张与网络化运营阶段，
+      开通城市与运营里程持续增长（Lu et al., 2016）
+    \item 国家新型城镇化规划与五年规划将城市轨道交通列为重点方向（Bao, 2018）
+    \item 站点综合开发与 TOD 逐步成为轨道建设的主流模式，站点成为土地、
+      商业与人口政策的作用点（Wang \& Xia, 2024）
+    \item 早期证据表明，轨道投资会重塑沿线土地与住房市场（Zheng \& Kahn, 2008）
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{站点影响的经济机制}
+  \small
+  \begin{itemize}
+    \item 可达性：轨道改善通勤与就业可达范围，改变出行与选址行为
+      （Cervero \& Kockelman, 1997; Baum-Snow \& Kahn, 2000）
+    \item 资本化：站点邻近性反映在住房与商业物业价格中
+      （Gibbons \& Machin, 2005; Debrezion et al., 2007）
+    \item 集聚与增长：地铁网络与城市空间扩张、人口与经济活动的再分布相关
+      （Gonzalez-Navarro \& Turner, 2018）
+    \item 分配与公平：轨道诱导的绅士化与 TOD 可负担性张力（Dong, 2017）
+  \end{itemize}
+  \medskip
+  \begin{block}{含义}
+    机制的方向与强度依赖本地条件，这正是响应异质性与跨城市迁移必要性的来源。
+  \end{block}
+\end{frame}
+
+\begin{frame}{本样本的时空覆盖}
+  \begin{center}
+    \includegraphics[width=0.92\textwidth]{intro_sample_years.pdf}
+  \end{center}
+  \vspace{-0.3em}
+  \footnotesize 冻结处理清单：5{,}048 个站点开通事件，覆盖 2010--2025 年，
+  为标签构建提供跨年份、跨城市的处理变异。
+\end{frame}
+
 \begin{frame}{研究问题}
   \small
   \begin{itemize}
@@ -185,7 +223,7 @@
   \begin{itemize}
     \item 铁路/轨道开通的局部影响：Gibbons \& Machin (2005)；
       Gonzalez-Navarro \& Turner (2018)
-    \item 中国城市轨道与土地利用/房价：Zheng \& Kahn (2013) 等
+    \item 中国城市轨道与土地利用/房价：Zheng \& Kahn (2008) 等
     \item 共同点：以个别城市或线路为对象，报告若干结果的平均或动态效应
   \end{itemize}
   \medskip
@@ -377,21 +415,39 @@
   \end{center}
 \end{frame}
 
-\begin{frame}{主要参考}
-  \footnotesize
-  \begin{itemize}
-    \item Abadie \& Gardeazabal (2003); Abadie, Diamond \& Hainmueller (2010);
-      Abadie (2021)
-    \item Xu (2017) generalized synthetic control; Athey, Bayati, Doudchenko,
-      Imbens \& Khosravi (2021) matrix completion
-    \item Callaway \& Sant'Anna (2021); Sun \& Abraham (2021); Goodman-Bacon (2021)
-    \item Imai, Kim \& Wang (2023); Roth (2022); Rambachan \& Roth (2023)
-    \item Gibbons \& Machin (2005); Gonzalez-Navarro \& Turner (2018);
-      Zheng \& Kahn (2013)
-    \item Chen et al. (2020) SimCLR; He et al. (2020) MoCo; Khosla et al. (2020)
-      SupCon; Oquab et al. (2024) DINOv2
-    \item Jean et al. (2016); Rolf et al. (2021) MOSAIKS; Sch\"olkopf et al. (2021) CRL
-  \end{itemize}
+\begin{frame}[allowframebreaks]{参考文献}
+  \scriptsize
+  \begin{thebibliography}{99}
+    \setbeamertemplate{bibliography item}[text]
+    \bibitem{abadie2003} Abadie, A., \& Gardeazabal, J. (2003). The economic costs of conflict: A case study of the Basque Country. American Economic Review.
+    \bibitem{abadie2010} Abadie, A., Diamond, A., \& Hainmueller, J. (2010). Synthetic control methods for comparative case studies. Journal of the American Statistical Association.
+    \bibitem{abadie2021} Abadie, A. (2021). Using synthetic controls: Feasibility, data requirements, and methodological aspects. Journal of Economic Literature.
+    \bibitem{xu2017} Xu, Y. (2017). Generalized synthetic control method. Political Analysis.
+    \bibitem{athey2021} Athey, S., Bayati, M., Doudchenko, N., Imbens, G., \& Khosravi, K. (2021). Matrix completion methods for causal panel data models. Journal of the American Statistical Association.
+    \bibitem{callaway2021} Callaway, B., \& Sant'Anna, P. H. C. (2021). Difference-in-differences with multiple time periods. Journal of Econometrics.
+    \bibitem{sun2021} Sun, L., \& Abraham, S. (2021). Estimating dynamic treatment effects in event studies with heterogeneous treatment effects. Journal of Econometrics.
+    \bibitem{goodman2021} Goodman-Bacon, A. (2021). Difference-in-differences with variation in treatment timing. Journal of Econometrics.
+    \bibitem{imai2023} Imai, K., Kim, I. S., \& Wang, E. H. (2023). Matching methods for causal inference with time-series cross-sectional data. American Journal of Political Science.
+    \bibitem{roth2022} Roth, J. (2022). Pretest with caution: Event-study estimates after testing for parallel trends. American Economic Review: Insights.
+    \bibitem{rambachan2023} Rambachan, A., \& Roth, J. (2023). A more credible approach to parallel trends. Review of Economic Studies.
+    \bibitem{baum2000} Baum-Snow, N., \& Kahn, M. E. (2000). The effects of new public projects to expand urban rail transit. Journal of Public Economics.
+    \bibitem{gibbons2005} Gibbons, S., \& Machin, S. (2005). Valuing rail access using transport innovations. Journal of Urban Economics.
+    \bibitem{debrezion2007} Debrezion, G., Pels, E., \& Rietveld, P. (2007). The impact of railway stations on residential and commercial property value: A meta-analysis. The Journal of Real Estate Finance and Economics.
+    \bibitem{zheng2008} Zheng, S., \& Kahn, M. E. (2008). Land and residential property markets in a booming economy: New evidence from Beijing. Journal of Urban Economics.
+    \bibitem{gonzalez2018} Gonzalez-Navarro, M., \& Turner, M. A. (2018). Subways and urban growth: Evidence from Earth. Journal of Urban Economics.
+    \bibitem{dong2017} Dong, H. (2017). Rail-transit-induced gentrification and the affordability paradox of TOD. Journal of Transport Geography.
+    \bibitem{cervero1997} Cervero, R., \& Kockelman, K. (1997). Travel demand and the 3Ds: Density, diversity, and design. Transportation Research Part D.
+    \bibitem{lu2016} Lu, K., Han, B., Lu, F., \& Wang, Z. (2016). Urban rail transit in China: Progress report and analysis (2008--2015). Urban Rail Transit.
+    \bibitem{bao2018} Bao, X. (2018). Urban rail transit present situation and future development trends in China: Overall analysis based on national policies and strategic plans in 2016--2020. Urban Rail Transit.
+    \bibitem{wang2024} Wang, L., \& Xia, H. (2024). A comprehensive review of the development characteristics and future trends of TOD in Chinese urban rail transit. Urban Rail Transit.
+    \bibitem{jean2016} Jean, N., Burke, M., Xie, M., Davis, W. M., Lobell, D. B., \& Ermon, S. (2016). Combining satellite imagery and machine learning to predict poverty. Science.
+    \bibitem{rolf2021} Rolf, E., Proctor, J., Carleton, T., Bolliger, I., Shankar, V., Ishihara, M., Recht, B., \& Hsiang, S. (2021). A generalizable and accessible approach to machine learning with global satellite imagery. Nature Communications.
+    \bibitem{chen2020} Chen, T., Kornblith, S., Norouzi, M., \& Hinton, G. (2020). A simple framework for contrastive learning of visual representations. International Conference on Machine Learning.
+    \bibitem{he2020} He, K., Fan, H., Wu, Y., Xie, S., \& Girshick, R. (2020). Momentum contrast for unsupervised visual representation learning. IEEE/CVF Conference on Computer Vision and Pattern Recognition.
+    \bibitem{khosla2020} Khosla, P., Teterwak, P., Wang, C., Sarna, A., Tian, Y., Isola, P., Maschinot, A., Liu, C., \& Krishnan, D. (2020). Supervised contrastive learning. Advances in Neural Information Processing Systems.
+    \bibitem{oquab2024} Oquab, M., Darcet, T., Moutakanni, T., et al. (2024). DINOv2: Learning robust visual features without supervision. Transactions on Machine Learning Research.
+    \bibitem{scholkopf2021} Sch\"olkopf, B., Locatello, F., Bauer, S., Ke, N. R., Kalchbrenner, N., Goyal, A., \& Bengio, Y. (2021). Toward causal representation learning. Proceedings of the IEEE.
+  \end{thebibliography}
 \end{frame}
 
 \begin{frame}[plain]

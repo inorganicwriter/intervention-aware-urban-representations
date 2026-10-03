@@ -304,6 +304,30 @@ def decision_figure() -> None:
     _save(figure, "intro_decision")
 
 
+def sample_years_figure() -> None:
+    treatments = pd.read_parquet(
+        ROOT / "data" / "active" / "causal" / "treatment_unit_list.parquet",
+        columns=["opening_month"],
+    )
+    years = treatments["opening_month"].astype(str).str.slice(0, 4).astype(int)
+    counts = years.value_counts().sort_index()
+    figure, axis = plt.subplots(figsize=(8.6, 3.3))
+    axis.bar(counts.index, counts.values, color="#3b6ea5", edgecolor="white", linewidth=0.4)
+    for year, value in counts.items():
+        axis.text(year, value + 8, str(int(value)), ha="center", va="bottom", fontsize=6.2)
+    axis.set_xlabel("opening year")
+    axis.set_ylabel("station openings")
+    axis.set_title("Frozen treatment list: openings per year (5,048 events, 2010-2025)", fontsize=9)
+    twin = axis.twinx()
+    twin.plot(counts.index, np.cumsum(counts.values), color="#e39a4a", linewidth=1.4)
+    twin.set_ylabel("cumulative", color="#b0721f")
+    twin.tick_params(axis="y", colors="#b0721f")
+    twin.spines["top"].set_visible(False)
+    axis.spines["top"].set_visible(False)
+    axis.set_xticks(range(counts.index.min(), counts.index.max() + 1, 2))
+    _save(figure, "intro_sample_years")
+
+
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     pipeline_figure()
@@ -313,6 +337,7 @@ def main() -> int:
     weight_curve_figure()
     evidence_figure()
     decision_figure()
+    sample_years_figure()
     print("Wrote figures to", OUT)
     return 0
 

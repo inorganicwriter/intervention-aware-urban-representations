@@ -316,6 +316,106 @@
   \end{columns}
 \end{frame}
 
+\begin{frame}{公式（1）：事件研究}
+  \small
+  \[
+    Y_{it}=\alpha_i+\gamma_t+\sum_{h\neq -1}\beta_h\,\mathbf{1}\{t-E_i=h\}+\varepsilon_{it}
+  \]
+  \begin{itemize}
+    \item $E_i$：开通期；参考期 $h=-1$；$\beta_h$：相对参考期的动态效应
+    \item 清洁处理前窗口 $h\in\{-6,\dots,-2\}$；联合检验 $H_0:\beta_h=0\ \forall h$，
+      采用 CRV1 与城市聚类
+    \item 估计对象 $\hat\beta_h$ 即"事件研究响应路径"
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{公式（2）：匹配与匹配事件研究}
+  \small
+  \begin{itemize}
+    \item donor 选择：同城内按处理前特征选择对照，holdout 边界
+      $\max\{\mathrm{RMS},\mathrm{max}\}\le 1$
+  \end{itemize}
+  \[
+    \hat\tau^{\text{match}}_{i,h}=\big(Y_{i,E_i+h}-Y_{i,B_i}\big)
+    -\sum_{j\in\mathcal M(i)}w_{ij}\big(Y_{j,E_i+h}-Y_{j,B_i}\big)
+  \]
+  \[
+    Y_{it}=\alpha_i+\gamma_t+\sum_{h\neq-1}\beta_h\,\mathbf{1}\{t-E_i=h\}
+    +\varepsilon_{it}\quad\text{（在匹配样本上估计）}
+  \]
+  \footnotesize $\mathcal M(i)$：匹配 donor 集；$w_{ij}$：匹配权重；
+  基线期 $B_i$ 由预注册规格给定（本管线使用 12 个月基线）。
+\end{frame}
+
+\begin{frame}{公式（3）：广义合成控制（GSC）}
+  \small
+  \[
+    Y_{it}=\delta_{it}D_{it}+x_{it}'\beta+\lambda_i'f_t+\varepsilon_{it}
+  \]
+  \[
+    \widehat{Y}_{it}(0)=x_{it}'\hat\beta+\hat\lambda_i'\hat f_t,\qquad
+    \hat\tau^{\text{gsc}}_{it}=Y_{it}-\widehat{Y}_{it}(0)\ \ (D_{it}=1)
+  \]
+  \begin{itemize}
+    \item 交互固定效应：因子 $f_t$ 与载荷 $\lambda_i$ 由处理前样本拟合
+    \item 单元--时间效应聚合到 $\hat\tau^{\text{gsc}}_{i,h}$
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{公式（4）：矩阵补全（MC）}
+  \small
+  \[
+    Y_{it}=L_{it}+\tau_{it}D_{it}+\varepsilon_{it}
+  \]
+  \[
+    \hat L=\arg\min_{L}\ \sum_{(i,t):\,D_{it}=0}\ (Y_{it}-L_{it})^2+\lambda\|L\|_*
+  \]
+  \[
+    \hat\tau^{\text{mc}}_{it}=Y_{it}-\hat L_{it}\quad(D_{it}=1)
+  \]
+  \begin{itemize}
+    \item 核范数正则捕捉低秩结构；固定 $\lambda$ 的单元 jackknife 给出不确定性
+    \item 处理前交叉验证 MSPE 作为设计诊断，进入标签权重
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{公式（5）：标签抽取}
+  \small
+  \[
+    \hat\tau^{(m)}_{i,o,h},\quad
+    m\in\{\text{match},\text{gsc},\text{mc}\},\ o\in\mathcal O,\ h\in\mathcal H
+  \]
+  \[
+    A^{(m)}_{i,o,h}=
+    \mathbf 1\{\text{收敛}\}\cdot
+    \mathbf 1\{\text{处理前锚点}\neq 0\}\cdot
+    \mathbf 1\{\text{matched: holdout}\le 1\}
+  \]
+  \[
+    r_i=\big(\hat\tau^{(m_i)}_{i,o,h}\big)_{(o,h)\in\mathcal C_i},\qquad
+    m_i=\text{该网格被分配的估计量}
+  \]
+  \footnotesize 只保留 $A=1$ 且满足支持条件的 cell；不可用 cell 以掩码排除；
+  每个网格只使用一种估计量的标签（matched / GSC / MC 互斥）。
+\end{frame}
+
+\begin{frame}{公式（6）：可靠性权重}
+  \small
+  \[
+    W=A\cdot e^{-\gamma D}\cdot p^{\alpha_w}
+  \]
+  \[
+    D=\operatorname{mean}\{\,P(p_{\text{trend}}),\ P(p_{\text{holdout}}),\ P(p_{\text{validation}})\,\}
+  \]
+  \begin{itemize}
+    \item $P(\cdot)$：经验分位，按 $(method,outcome)\to(method,family)\to method\to 全局$
+      逐级上溯至分层样本量 $\ge 30$；无诊断取 0.5
+    \item $p$：精度项（$1/SE^2$ 缩尾并均值归一；无 SE 取 1）
+    \item 最终在 $(method,family)$ 内 1\%/99\% 缩尾并归一化到均值 1；不合格标签恰为 0
+    \item 主训练 $\alpha_w=0$（design-only）；W0 取 $\gamma=0,\alpha_w=0$
+  \end{itemize}
+\end{frame}
+
 \begin{frame}{标签可用性}
   \begin{center}
     \includegraphics[width=\textwidth]{intro_asset_map.pdf}
@@ -345,7 +445,7 @@
 
 \begin{frame}{预趋势检验}
   \begin{center}
-    \includegraphics[width=0.86\textwidth]{intro_pretrend.pdf}
+    \includegraphics[height=0.66\textheight]{intro_pretrend.pdf}
   \end{center}
 \end{frame}
 
@@ -362,16 +462,43 @@
   \end{block}
 \end{frame}
 
-\begin{frame}{表示学习：模型与目标}
+\begin{frame}{公式（7）：响应相似度与软标签}
   \small
-  \begin{itemize}
-    \item 结构：表格 MLP（可选街景分支）$\to$ 融合 $\to$ 128 维归一化嵌入
-      $\to$ 每结果族预测头
-    \item 软标签对比：正样本权重等于响应相似度（逐族相关、可权重化）；
-      无共同可靠 support 的 pair 从分母剔除
-    \item 预测头：逐 cell 加权 MSE（设计权重）；表示损失与预测损失加权合成
-    \item 监督口径：逐结果族独立（VIiRS 6 维 / POI 12 维），只用同城标签
-  \end{itemize}
+  \[
+    s_{ij}=\overline{\operatorname{corr}}\big(r_i,r_j\big)
+    \quad\text{（公共观测 cell，cell 权重 }\sqrt{w_{ik}w_{jk}}\text{）}
+  \]
+  \[
+    \tilde s_{ij}=s_{ij}\sqrt{\rho_i\rho_j},\qquad
+    \rho_i=\operatorname{mean}_{k:m_{ik}=1}\frac{1}{1+SE_{ik}^2}
+  \]
+  \[
+    p_{ij}=\frac{\max(\tilde s_{ij},0)}{\sum_{k\in\mathcal V_i}\max(\tilde s_{ik},0)}
+  \]
+  \footnotesize 结构：表格 MLP（可选街景分支）$\to$ 融合 $\to$ 128 维归一化嵌入
+  $e_i$ $\to$ 每结果族预测头；监督逐结果族独立（VIiRS 6 维 / POI 12 维）。
+  公共可靠 cell 少于 2 或方差退化的 pair 视为无效；自身与重复单元 pair 剔除。
+\end{frame}
+
+\begin{frame}{公式（8）：表示学习目标}
+  \small
+  \[
+    L_{\text{align}}=-\frac{1}{|\mathcal A|}\sum_{i\in\mathcal A}\sum_{j\in\mathcal V_i}
+    p_{ij}\log\frac{e^{e_i^\top e_j/\tau}}{\sum_{k\in\mathcal V_i}e^{e_i^\top e_k/\tau}}
+  \]
+  \[
+    L_{\text{dist}}=\frac{1}{|\mathcal V|}\sum_{(i,j)\in\mathcal V}
+    \big(\cos(e_i,e_j)-\tilde s_{ij}\big)^2
+  \]
+  \[
+    L_{\text{pred}}=\frac{1}{|\mathcal F|}\sum_{f}
+    \frac{\sum_k m_{fk}w_{fk}(\hat r_{fk}-r_{fk})^2}{\sum_k m_{fk}w_{fk}}
+  \]
+  \[
+    L_{\text{rep}}=\rho L_{\text{align}}+(1-\rho)L_{\text{dist}},\qquad
+    L=(1-\lambda)L_{\text{rep}}+\lambda L_{\text{pred}}
+  \]
+  \footnotesize 默认 $\rho=\lambda=\tfrac12$、$\tau=0.07$；队列与 SE 收缩为可选组件。
 \end{frame}
 
 \begin{frame}{评估协议}
@@ -448,13 +575,6 @@
     \bibitem{oquab2024} Oquab, M., Darcet, T., Moutakanni, T., et al. (2024). DINOv2: Learning robust visual features without supervision. Transactions on Machine Learning Research.
     \bibitem{scholkopf2021} Sch\"olkopf, B., Locatello, F., Bauer, S., Ke, N. R., Kalchbrenner, N., Goyal, A., \& Bengio, Y. (2021). Toward causal representation learning. Proceedings of the IEEE.
   \end{thebibliography}
-\end{frame}
-
-\begin{frame}[plain]
-  \begin{center}
-    {\Large 谢谢}\\[0.6em]
-    {\small 代码、冻结标签与审计文档见项目仓库}
-  \end{center}
 \end{frame}
 
 \end{document}

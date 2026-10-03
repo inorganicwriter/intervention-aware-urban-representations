@@ -102,6 +102,10 @@
   [`../../scripts/analysis/representation_controls.py`](../../scripts/analysis/representation_controls.py)
   （城市级 5 折 CV + 内层选参 + 折内标准化；raw 检索、含截距 ridge、kNN 对照与训练
   均值基线；方向、幅度、形状检索分开报告，逐 outcome、逐城市）
+- 审阅状态：对照流程与相关修复经三轮独立审阅，无阻断问题——缺失值保留到 fold 内再
+  填补、内层选参仅用 fit 拟合预处理、最终用 fit+val 重拟合，公平 refit 均值/多数符号
+  基线，城市网格数与 cell 数分开汇总；流程已具备运行条件，预测增量待服务器结果。
+  处置记录见 [`representation_learning_audit.md`](representation_learning_audit.md)。
 - 结论边界：截至诊断，多 seed 下没有稳定超过 raw 特征或外观基线的增量；
   优先解释已收敛为"评估问题已确认、目标冲突待验证、特征可预测性未知"。现有
   checkpoint 不得用于新折评估（其测试城市可能参与过训练），当前表示模型与

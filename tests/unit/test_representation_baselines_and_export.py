@@ -190,6 +190,38 @@ class TestEmbeddingExport:
                 batch_size=8,
             )
 
+    def test_export_embeddings_with_satellite_and_synergy(self, tmp_path: Path) -> None:
+        ds_dir, n_grids = build_synthetic_model_inputs(
+            tmp_path / "sat_inputs", n_grids=16, n_cities=4, include_satellite=True
+        )
+        run_dir = tmp_path / "run_sat"
+        train_representation(
+            model_inputs_dir=ds_dir,
+            output_dir=run_dir,
+            embedding_dim=16,
+            hidden_dims=(32,),
+            dropout=0.0,
+            batch_size=8,
+            epochs=1,
+            use_images=False,
+            use_satellite=True,
+            use_cross_view_synergy=True,
+            loss_type="multimodal_causal",
+            allow_satellite_proxy=False,
+            seed=42,
+            eval_n_perm=10,
+            eval_n_boot=10,
+        )
+        out_path = tmp_path / "sat_embeddings.parquet"
+        export_embeddings(run_dir / "best_model.pt", ds_dir, out_path, batch_size=8)
+        frame = pd.read_parquet(out_path)
+        assert len(frame) == n_grids
+        embedding_columns = [c for c in frame.columns if c.startswith("emb_")]
+        assert len(embedding_columns) == 16
+        norm = np.linalg.norm(frame[embedding_columns].to_numpy(), axis=1)
+        assert np.allclose(norm, 1.0, atol=1e-5)
+        assert not np.isnan(norm).any()
+
 
 class TestFullEvaluationReport:
     def test_report_includes_autoencoder_and_predictive_transfer(self, tmp_path: Path) -> None:

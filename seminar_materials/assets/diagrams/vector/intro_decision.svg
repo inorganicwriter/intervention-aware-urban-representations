@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="684pt" height="263.88pt" viewBox="0 0 684 263.88" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:date>2026-10-04T14:12:22.937202</dc:date>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Matplotlib v3.10.7, https://matplotlib.org/</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 263.88 
+L 684 263.88 
+L 684 0 
+L 0 0 
+z
+" style="fill: #ffffff"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 12.78 158.274 
+L 169.02 158.274 
+Q 170.415 158.274 170.415 156.888 
+L 170.415 98.676 
+Q 170.415 97.29 169.02 97.29 
+L 12.78 97.29 
+Q 11.385 97.29 11.385 98.676 
+L 11.385 156.888 
+Q 11.385 158.274 12.78 158.274 
+z
+" clip-path="url(#pabfa1f64a0)" style="fill: #eef3f7; stroke: #234e70; stroke-width: 1.2; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_3">
+    <path d="M 202.5 158.274 
+L 364.32 158.274 
+Q 365.715 158.274 365.715 156.888 
+L 365.715 98.676 
+Q 365.715 97.29 364.32 97.29 
+L 202.5 97.29 
+Q 201.105 97.29 201.105 98.676 
+L 201.105 156.888 
+Q 201.105 158.274 202.5 158.274 
+z
+" clip-path="url(#pabfa1f64a0)" style="fill: #eef3f7; stroke: #234e70; stroke-width: 1.2; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_4">
+    <path d="M 411.75 91.746 
+L 662.85 91.746 
+Q 664.245 91.746 664.245 90.36 
+L 664.245 32.148 
+Q 664.245 30.762 662.85 30.762 
+L 411.75 30.762 
+Q 410.355 30.762 410.355 32.148 
+L 410.355 90.36 
+Q 410.355 91.746 411.75 91.746 
+z
+" clip-path="url(#pabfa1f64a0)" style="fill: #eef3f7; stroke: #234e70; stroke-width: 1.2; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_5">
+    <path d="M 411.75 230.346 
+L 662.85 230.346 
+Q 664.245 230.346 664.245 228.96 
+L 664.245 170.748 
+Q 664.245 169.362 662.85 169.362 
+L 411.75 169.362 
+Q 410.355 169.362 410.355 170.748 
+L 410.355 228.96 
+Q 410.355 230.346 411.75 230.346 
+z
+" clip-path="url(#pabfa1f64a0)" style="fill: #eef3f7; stroke: #234e70; stroke-width: 1.2; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_6">
+    <path d="M 171.018501 128.0592 
+Q 185.75816 128.0592 199.044376 128.0592 
+" clip-path="url(#pabfa1f64a0)" style="fill: none; stroke: #637381; stroke-width: 1.3; stroke-linecap: round"/>
+    <path d="M 193.044376 125.0592 
+L 199.044376 128.0592 
+L 193.044376 131.0592 
+z
+" clip-path="url(#pabfa1f64a0)" style="fill: #637381; stroke: #637381; stroke-width: 1.3; stroke-linecap: round"/>
+   </g>
+   <g id="patch_7">
+    <path d="M 365.695076 111.08943 
+Q 388.032445 87.590688 409.368436 65.145388 
+" clip-path="url(#pabfa1f64a0)" style="fill: none; stroke: #637381; stroke-width: 1.3; stroke-linecap: round"/>
+    <path d="M 403.060248 67.427223 
+L 409.368436 65.145388 
+L 407.408991 71.561039 
+z
+" clip-path="url(#pabfa1f64a0)" style="fill: #637381; stroke: #637381; stroke-width: 1.3; stroke-linecap: round"/>
+   </g>
+   <g id="patch_8">
+    <path d="M 365.58507 144.580652 
+Q 388.034965 172.133957 409.566782 198.560483 
+" clip-path="url(#pabfa1f64a0)" style="fill: none; stroke: #637381; stroke-width: 1.3; stroke-linecap: round"/>
+    <path d="M 408.102584 192.014024 
+L 409.566782 198.560483 
+L 403.451096 195.803966 
+z
+" clip-path="url(#pabfa1f64a0)" style="fill: #637381; stroke: #637381; stroke-width: 1.3; stroke-linecap: round"/>
+   </g>
+   <g id="text_1">
+    <text style="font-size: 12px; font-family: 'Times New Roman'; fill: #16324a" transform="translate(36.345 124.359375)">City-level CV controls</text>
+    <text style="font-size: 12px; font-family: 'Times New Roman'; fill: #16324a" transform="translate(19.41375 136.94775)">Raw / ridge / small regressors</text>
+   </g>
+   <g id="text_2">
+    <text style="font-size: 12px; font-family: 'Times New Roman'; fill: #16324a" transform="translate(225.759375 124.370625)">Held-out city prediction</text>
+    <text style="font-size: 12px; font-family: 'Times New Roman'; fill: #16324a" transform="translate(232.257187 136.959)">Stable improvement?</text>
+   </g>
+   <g id="text_3">
+    <text style="font-size: 12px; font-family: 'Times New Roman'; fill: #16324a" transform="translate(467.149688 57.831375)">Gain: test signal preservation</text>
+    <text style="font-size: 12px; font-family: 'Times New Roman'; fill: #16324a" transform="translate(438.268125 70.41975)">Regression / embedding / raw + response</text>
+   </g>
+   <g id="text_4">
+    <text style="font-size: 12px; font-family: 'Times New Roman'; fill: #16324a" transform="translate(424.433438 196.442625)">No observed gain: examine support and targets</text>
+    <text style="font-size: 12px; font-family: 'Times New Roman'; fill: #16324a" transform="translate(450.167813 209.031)">Add pre-treatment features; reassess</text>
+   </g>
+   <g id="text_5">
+    <g id="patch_9">
+     <path d="M 376.353516 84.278169 
+L 399.716484 84.278169 
+L 399.716484 72.307075 
+L 376.353516 72.307075 
+z
+" style="fill: #ffffff"/>
+    </g>
+    <text style="font-size: 11px; font-family: 'Times New Roman'; text-anchor: middle" x="388.035" y="80.9352" transform="rotate(-0 388.035 80.9352)">Gain</text>
+   </g>
+   <g id="text_6">
+    <g id="patch_10">
+     <path d="M 348.248516 168.844794 
+L 427.821484 168.844794 
+L 427.821484 156.853075 
+L 348.248516 156.853075 
+z
+" style="fill: #ffffff"/>
+    </g>
+    <text style="font-size: 11px; font-family: 'Times New Roman'; text-anchor: middle" x="388.035" y="165.4812" transform="rotate(-0 388.035 165.4812)">No observed gain</text>
+   </g>
+   <g id="text_7">
+    <text style="font-size: 12px; font-family: 'Times New Roman'; text-anchor: middle" x="336.42" y="248.364" transform="rotate(-0 336.42 248.364)">Assess gains through paired comparisons in held-out cities</text>
+   </g>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="pabfa1f64a0">
+   <rect x="7.2" y="7.2" width="669.6" height="249.48"/>
+  </clipPath>
+ </defs>
+</svg>

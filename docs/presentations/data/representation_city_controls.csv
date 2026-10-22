@@ -1,0 +1,13 @@
+family,metric,method,value,fold_count,provenance
+viirs,shape,raw,0.0509,5,user_reported_server_city_cv
+viirs,shape,chance,0.0085,5,user_reported_server_city_cv
+poi,shape,raw,0.0595,5,user_reported_server_city_cv
+poi,shape,chance,0.0144,5,user_reported_server_city_cv
+viirs,amplitude,ridge,0.3627,5,user_reported_server_city_cv
+viirs,amplitude,train_mean,0.3748,5,user_reported_server_city_cv
+poi,amplitude,ridge,0.4442,5,user_reported_server_city_cv
+poi,amplitude,train_mean,0.4642,5,user_reported_server_city_cv
+viirs,direction,ridge,0.557,5,user_reported_server_city_cv
+viirs,direction,train_majority,0.545,5,user_reported_server_city_cv
+poi,direction,ridge,0.569,5,user_reported_server_city_cv
+poi,direction,train_majority,0.519,5,user_reported_server_city_cv

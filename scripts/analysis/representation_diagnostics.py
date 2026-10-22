@@ -135,7 +135,9 @@ def label_diagnostics(ds: RepresentationDataset, split: str | None) -> dict[str,
             per_grid = gmask.sum(axis=1)
             outcomes[outcome] = {
                 "grids_any": int((per_grid > 0).sum()),
-                "support_distribution": {str(int(k)): int(v) for k, v in Counter(per_grid.tolist()).items()},
+                "support_distribution": {
+                    str(int(k)): int(v) for k, v in Counter(per_grid.tolist()).items()
+                },
             }
         families[family] = {
             "grids_any": grids_with_any,
@@ -146,14 +148,18 @@ def label_diagnostics(ds: RepresentationDataset, split: str | None) -> dict[str,
             "constant_weight_share": round(constant_grids / max(eligible_grids, 1), 4),
             "level_over_sd_median": float(np.median(ratios_arr)) if ratios_arr.size else None,
             "level_over_sd_p90": float(np.percentile(ratios_arr, 90)) if ratios_arr.size else None,
-            "level_over_sd_share_gt100": float((ratios_arr > 100).mean()) if ratios_arr.size else None,
+            "level_over_sd_share_gt100": float((ratios_arr > 100).mean())
+            if ratios_arr.size
+            else None,
             "outcomes": outcomes,
         }
     result["families"] = families
     return result
 
 
-def precision_diagnostics(ds: RepresentationDataset, n_pairs: int = 2000, seed: int = 0) -> dict[str, object]:
+def precision_diagnostics(
+    ds: RepresentationDataset, n_pairs: int = 2000, seed: int = 0
+) -> dict[str, object]:
     arrays = _records_to_arrays(ds)
     responses64 = arrays["response"]
     mask = np.isfinite(responses64)
@@ -165,7 +171,9 @@ def precision_diagnostics(ds: RepresentationDataset, n_pairs: int = 2000, seed: 
         if len(eligible) < 4:
             out[family] = {"note": "not enough grids"}
             continue
-        i = rng.choice(eligible, size=min(n_pairs, len(eligible) * (len(eligible) - 1) // 2), replace=True)
+        i = rng.choice(
+            eligible, size=min(n_pairs, len(eligible) * (len(eligible) - 1) // 2), replace=True
+        )
         j = rng.choice(eligible, size=len(i), replace=True)
         keep = i != j
         i, j = i[keep], j[keep]
@@ -203,24 +211,51 @@ def precision_diagnostics(ds: RepresentationDataset, n_pairs: int = 2000, seed: 
 
 def _load_model(checkpoint_path: Path, ds: RepresentationDataset) -> ResponseEmbeddingModel:
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    if checkpoint.get("model_type") == "stc_joint":
+        from urban_intervention.representation.model import JointSTCResponseModel
+
+        model = JointSTCResponseModel(
+            state_tabular_dim=len(ds.state_tabular_columns),
+            context_tabular_dim=len(ds.context_tabular_columns),
+            intervention_dim=len(ds.intervention_columns),
+            use_streetview=bool(checkpoint["use_image_encoder"]),
+            use_satellite=bool(checkpoint["use_satellite_encoder"]),
+            dropout=float(checkpoint["dropout"]),
+            prediction_inputs=checkpoint.get("prediction_inputs", "full"),
+        )
+        model.load_state_dict(checkpoint["model_state_dict"])
+        ds.load_images = model.use_streetview
+        ds.load_satellite_images = model.use_satellite
+        return model.eval()
     state = checkpoint["model_state_dict"]
     conditioning = checkpoint.get("conditioning") or None
     conditioning_schema = str(
         checkpoint.get("conditioning_schema") or ("v1" if conditioning else "v2")
     )
+    checkpoint_uses_images = bool(checkpoint.get("use_image_encoder", False))
+    checkpoint_uses_satellite = bool(checkpoint.get("use_satellite_encoder", False))
+    checkpoint_uses_synergy = bool(checkpoint.get("use_cross_view_synergy", False))
+    synergy_heads = int(checkpoint.get("synergy_heads", 4))
     model = ResponseEmbeddingModel(
         feature_dim=ds.feature_dim(),
         hidden_dims=tuple(checkpoint["hidden_dims"]),
         embedding_dim=int(checkpoint["embedding_dim"]),
         dropout=float(checkpoint.get("dropout", 0.1)),
-        use_image_encoder=False,
+        use_image_encoder=checkpoint_uses_images,
         image_pooling=checkpoint.get("image_pooling", "max"),
+        use_satellite_encoder=checkpoint_uses_satellite,
+        use_cross_view_synergy=checkpoint_uses_synergy,
+        synergy_heads=synergy_heads,
         conditioning=conditioning,
         conditioning_schema=conditioning_schema,
         learnable_temperature=any(key.startswith("logit_scale") for key in state),
         uncertainty_weighted=any(key.startswith("log_var") for key in state),
     )
-    model.load_state_dict(state)
+    # Filter frozen backbone weights if present in legacy image checkpoints
+    filtered_state = {
+        k: v for k, v in state.items() if not k.startswith("image_encoder._backbone.")
+    }
+    model.load_state_dict(filtered_state)
     model.eval()
     return model
 
@@ -238,11 +273,12 @@ def _embed_pool(
 ) -> _EmbeddingPool:
     from torch.utils.data import DataLoader
 
+    use_images = bool(getattr(model, "use_image_encoder", False))
     loader = DataLoader(
         ds,
         batch_size=batch_size,
         shuffle=False,
-        collate_fn=lambda batch: _collate_fn(batch, ds, False),
+        collate_fn=lambda batch: _collate_fn(batch, ds, use_images),
     )
     embeddings: list[torch.Tensor] = []
     responses: list[torch.Tensor] = []
@@ -251,19 +287,23 @@ def _embed_pool(
     cities: list[str] = []
     with torch.no_grad():
         for batch in loader:
-            embedding, _ = model(
-                batch["features"],
-                None,
-                None,
-                conditioning_tokens=batch.get("conditioning_tokens"),
-                station_tokens=batch.get("station_tokens"),
-            )
+            if getattr(model, "is_stc_model", False):
+                embedding, _, _ = model.forward_batch(batch)
+            else:
+                embedding, _ = model(
+                    batch["features"],
+                    batch.get("images"),
+                    batch.get("image_mask"),
+                    conditioning_tokens=batch.get("conditioning_tokens"),
+                    station_tokens=batch.get("station_tokens"),
+                    satellite_vectors=batch.get("satellite_vectors"),
+                    satellite_mask=batch.get("satellite_mask"),
+                )
             embeddings.append(embedding)
             responses.append(batch["responses"])
             masks.append(batch["response_mask"])
             features.append(batch["features"])
-            orders = batch["treatment_order"].tolist()
-            cities.extend(str(ds._records.loc[order]["city_key"]) for order in orders)
+            cities.extend(str(value) for value in batch["city_keys"])
     return {
         "embeddings": torch.cat(embeddings),
         "responses": torch.cat(responses),

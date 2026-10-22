@@ -1,5 +1,5 @@
-version: 4
-updated: 2026-07-23
+version: 5
+updated: 2026-10-13
 canonical_key:
   grid_year: [city_key, grid_id, year]
   crs: EPSG:4326
@@ -287,3 +287,109 @@ datasets:
     outputs: [unit_features.parquet, response_targets.parquet, sample_index.parquet, normalization.json, manifest.json]
     publisher: scripts/causal_r/build_pretraining_dataset.py
     status: code_complete_awaiting_response_release
+  alphaearth_treated_grid_v2:
+    layer: input_asset
+    path: data/active/alphaearth_grid_v2
+    source_product: GOOGLE/SATELLITE_EMBEDDING/V1/ANNUAL
+    primary_key: [treatment_order]
+    spatial_support: fixed_grid_polygon_v1
+    feature_timing: full_calendar_year_before_opening
+    role: context_only
+    coverage: {cities: 44, events: 5048, available_embeddings: 3297, unavailable_embeddings: 1751}
+    quality: {dimensions: 64, temporal_proxy: false, dry_run: false}
+    status: audited_with_explicit_historical_missingness
+  satellite_baseline_grid_v1:
+    layer: input_asset
+    path: data/active/satellite_grid_images_v1
+    sources: [gee_sentinel2_sr_harmonized, gee_landsat_collection2_tier1_level2]
+    primary_key: [treatment_order]
+    spatial_support: fixed_grid_polygon_v1
+    feature_timing: full_calendar_year_before_opening
+    coverage: {cities: 44, events: 5048, available_images: 5048}
+    role: baseline_cache_reused_by_annual_sequences
+    quality: {reflectance_bands: 6, valid_mask_band: 7, observation_count_band: 8, audit_errors: 0}
+    status: audited_baseline_only
+  satellite_event_sequences_v2:
+    layer: input_asset
+    path: data/active/satellite_event_sequences_v2
+    sources: [gee_sentinel2_sr_harmonized, gee_landsat_collection2_tier1_level2]
+    primary_key: [treatment_order, target_year]
+    spatial_support: fixed_grid_polygon_v1
+    event_times: [-6, -5, -4, -3, -2, -1, 0, 1, 2, 3]
+    predictor_event_times: [-6, -5, -4, -3, -2, -1]
+    latest_complete_year: 2025
+    coverage: {cities: 44, events: 5048, expected_frames: 50480, ended_year_frames: 48470, available_frames: 48465, low_coverage_frames: 5, incomplete_year_frames: 2010}
+    state_coverage: {rows: 30288, available_frames: 30283, events_all_six_available: 5044}
+    quality: {per_frame_audit_errors: 0, all_geometries_match_frozen_grid: true, all_state_dates_pretreatment: true}
+    publisher: scripts/collection/download_satellite_event_sequences.py
+    audit: scripts/analysis/audit_satellite_grid_images.py --sequence
+    status: audited_annual_sequences_with_explicit_quality_and_future_masks
+  intervention_grid_v1:
+    layer: input_asset
+    path: data/active/intervention_grid_v1
+    primary_key: [treatment_order]
+    role: intervention
+    coverage: {cities: 44, events: 5048, fields: 7}
+    historical_source_review_status: requires_source_review
+    status: published_with_field_masks_and_source_review_status
+  streetview_treated_grid_v2:
+    layer: input_asset
+    storage: remote_server_project
+    server_project: /home/nas/lsr/MIT_summer
+    path: data/active/streetview_grid_v2
+    server_path: /home/nas/lsr/MIT_summer/data/active/streetview_grid_v2
+    source_archive: /home/nas/lsr/BaiduSvs_history/output
+    primary_key: [treatment_order, panoid]
+    spatial_support: unique_actual_pano_point_in_frozen_treated_grid_polygon
+    coordinate_source: sdata_ret_bd_xy_scaled_to_mc_then_bd09_gcj02_wgs84
+    capture_date_precision: month
+    feature_timing: capture_month_strictly_before_opening_month
+    role: state_only
+    coverage: {cities: 44, events: 5048, available_events: 3778, missing_events: 1270, selected_images: 7543, metadata_candidates: 2531781}
+    quality: {selected_decode_errors: 0, candidate_images_fully_verified: false, max_images_per_event: 2}
+    integration_table: event_coverage.parquet
+    publisher: scripts/analysis/publish_server_streetview_inputs.py
+    client_storage: earlier_beijing_pilot_only
+    status: server_project_pretreatment_assets_verified
+  streetview_postopening_archive_v1:
+    layer: observation_archive
+    storage: remote_server_project
+    server_project: /home/nas/lsr/MIT_summer
+    path: data/active/streetview_grid_v2
+    server_path: /home/nas/lsr/MIT_summer/data/active/streetview_grid_v2
+    primary_key: [treatment_order, event_time, panoid]
+    event_times: [0, 1, 2, 3]
+    expected_event_years: 20192
+    verified_source_coverage: {available_events: 2914, available_event_years: 5489, selected_images: 10854}
+    available_by_event_time: {0: 504, 1: 1744, 2: 1688, 3: 1553}
+    max_images_per_event_year: 2
+    spatial_support: unique_actual_pano_point_in_frozen_treated_grid_polygon
+    capture_date_precision: month
+    temporal_rule: capture_month_strictly_after_opening_month
+    opening_month_relation: unknown_excluded_from_verified_post_selection
+    state_allowed: false
+    publisher: scripts/analysis/publish_server_streetview_post_archive.py
+    status: server_project_postopening_archive_verified
+  multimodal_role_inputs_v1:
+    layer: input_asset_bundle
+    path: data/active/multimodal_inputs_v1
+    primary_key: [treatment_order]
+    sources: [poi_grid_year_v1, viirs_grid_year, housing_grid_year_v1, population_grid_year, alphaearth_treated_grid_v2, intervention_grid_v1, satellite_event_sequences_v2]
+    coverage: {cities: 44, events: 5048}
+    city_background_source: observed_reference_grid_statistics_with_coverage_not_official_yearbook
+    preprocessing_fitted: false
+    response_supervision_included: false
+    streetview_status: local_beijing_pilot_remote_full_release
+    streetview_server_root: /home/nas/lsr/MIT_summer/data/active/streetview_grid_v2
+    streetview_server_available_events: 3778
+    streetview_local_pilot_available_events: 190
+    latest_bundle_synchronized_to_server: true
+    server_role_tables_root: /home/nas/lsr/MIT_summer/data/active/multimodal_inputs_v1
+    server_bundle_inventory: /home/nas/lsr/MIT_summer/data/active/catalog/inventories/input_bundle_server_20261013.json
+    server_publication_verified_at_utc: '2026-10-13T11:44:49.073760+00:00'
+    server_role_manifest_sha256: 96b465b8c380b69b94d4e1ceec1aa75e2ae3c8d298844143adbcf8349691abe6
+    server_verification_checks: {binding: 37, runtime_paths: 17, sampled_cities: 44}
+    server_temporary_cache_cleanup_receipt: /home/nas/lsr/MIT_summer/outputs/input_sync_20261013_v1/cache_cleanup_receipt.json
+    server_transfer_source_manifest: /home/nas/lsr/MIT_summer/outputs/input_sync_20261013_v1/source_transfer_manifest.json
+    model_migration_completed: false
+    status: local_bundle_with_verified_server_release

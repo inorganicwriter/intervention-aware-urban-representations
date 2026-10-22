@@ -6,9 +6,11 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from shapely.geometry import Polygon, box
 
 from scripts.collection.build_streetview_index import (
     assign_grids_bbox,
+    assign_grids_polygon,
     build_city_index,
     read_metadata,
     resolve_image_path,
@@ -79,6 +81,28 @@ def test_resolve_image_path(tmp_path: Path) -> None:
     assert resolve_image_path(images, "missing") is None
 
 
+def test_polygon_assignment_rejects_bbox_corner_and_shared_boundary() -> None:
+    # Rotated cells model the reference UTM grid after WGS84 reprojection.
+    first = Polygon([(0, 0), (2, 1), (1, 3), (-1, 2)])
+    second = Polygon([(2, 1), (4, 2), (3, 4), (1, 3)])
+    grids = pd.DataFrame(
+        {"grid_id": ["first", "second"], "geometry_wkt": [first.wkt, second.wkt]}
+    )
+    assigned = assign_grids_polygon(
+        np.array([0.5, 2.5, 1.8, 1.5, np.nan]),
+        np.array([1.5, 2.5, 2.8, 2.0, 1.5]),
+        grids,
+    )
+    # 1.8,2.8 is in the second polygon, although inside the first one's bbox.
+    assert assigned.tolist() == ["first", "second", "second", None, None]
+
+
+def test_polygon_assignment_inside_bbox_but_outside_polygon() -> None:
+    polygon = Polygon([(0, 0), (2, 1), (1, 3), (-1, 2)])
+    grids = pd.DataFrame({"grid_id": ["g"], "geometry_wkt": [polygon.wkt]})
+    assert assign_grids_polygon(np.array([1.8]), np.array([2.8]), grids).tolist() == [None]
+
+
 def test_build_city_index_end_to_end(tmp_path: Path) -> None:
     images = tmp_path / "images"
     images.mkdir()
@@ -97,6 +121,7 @@ def test_build_city_index_end_to_end(tmp_path: Path) -> None:
             "lat_max": [30.512],
             "lon_min": [117.019],
             "lon_max": [117.022],
+            "geometry_wkt": [box(117.019, 30.511, 117.022, 30.512).wkt],
         }
     )
     frame, audit = build_city_index(

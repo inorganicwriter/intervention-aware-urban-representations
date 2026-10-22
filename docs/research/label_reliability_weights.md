@@ -88,6 +88,25 @@ the end.
 \(D_i\) is an **unreliability score**, not an estimated variance.  Calibrating
 it to \(E[(\hat\tau^{pseudo})^2]\) is the W2/W3 roadmap below.
 
+#### How the diagnostics are obtained
+
+For GSC, the pre-treatment response path contains the estimated treated-minus-counterfactual gap \(g_t\) at each available pre-treatment period. The stored fit error is
+
+\[
+\texttt{pre\_rmspe}=\sqrt{\frac{1}{T_{pre}}\sum_t g_t^2}.
+\]
+
+When `pre_mean_effect` is available, the weight builder uses
+\(\sqrt{\max(\texttt{pre\_rmspe}^2-\texttt{pre\_mean\_effect}^2,0)}\) for the GSC trend diagnostic. This removes the squared mean gap and measures the remaining variation in the pre-period gaps. A missing input diagnostic remains unavailable for that component; it is not silently treated as a measured zero.
+
+For Matching, part of the pre-treatment covariates is withheld from control selection. POI holds out lag 1 while using lags 2 and 3 for training; VIIRS uses its configured held-out months. Each held-out feature difference between treated and selected control is divided by that feature's standard deviation across donors. The builder computes the root mean squared standardized gap and the largest absolute standardized gap.
+
+To put those two errors on a design-specific scale, donor units are also treated in turn as placebo-treated units and matched to donor controls using the same pre-only design. The 95th percentile of the placebo RMS gaps and maximum gaps supplies the two reference thresholds. The observed treated/control errors divided by those thresholds become `holdout_rms_ratio` and `holdout_max_ratio`. A ratio of 1 means the observed error is at the placebo 95th-percentile threshold. A Matching label with either ratio above 1 fails the current eligibility boundary; among the remaining eligible labels, the larger ratio is ranked to form `p_holdout`.
+
+For MC, `mc_cv_mspe` is the minimum pre-treatment cross-validation MSPE among the evaluated completion settings. Its within-reference-group percentile is `p_validation`.
+
+The resulting D is an ordinal score, not a variance estimate, confidence level, or parallel-trends test. For example, a diagnostic at the 80th percentile contributes 0.8 to D, while one at the 20th percentile contributes 0.2. With the main-training \(\gamma=1,\alpha=0\), their unnormalized design multipliers are \(e^{-0.8}\approx0.45\) and \(e^{-0.2}\approx0.82\), respectively; winsorization and mean-one normalization within method × family are applied afterward. The final numbers express relative training emphasis within the reference group.
+
 ### 3. Tempered precision
 
 For GSC/MC labels with a standard error, the inverse sampling variance

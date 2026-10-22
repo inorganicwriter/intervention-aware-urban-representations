@@ -79,6 +79,11 @@ def _headline_metrics(directory: Path, record: dict[str, object]) -> dict[str, o
             report = {}
         test_entry = report.get("test")
         if isinstance(test_entry, dict):
+            for family, entry in test_entry.get("tasks", {}).items():
+                metrics[f"{family}_trained"] = entry.get("trained", True)
+                metrics[f"{family}_rmse"] = entry.get("prediction", {}).get("rmse")
+                metrics[f"{family}_nn_corr@k"] = entry.get("retrieval", {}).get(family, {}).get("nn_corr@k")
+                metrics[f"{family}_mean_baseline_improvement"] = entry.get("train_mean_baseline", {}).get("improvement")
             permutation = test_entry.get("permutation")
             if isinstance(permutation, dict) and isinstance(
                 permutation.get("p_value"), (int, float)

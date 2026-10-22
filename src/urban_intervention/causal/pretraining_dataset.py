@@ -52,6 +52,49 @@ MODALITY_FEATURES: dict[str, tuple[str, ...]] = {
     "sentinel2": ("sentinel2_ndvi", "sentinel2_ndbi"),
 }
 
+STC_STATE_TABULAR_COLUMNS: tuple[str, ...] = (
+    "poi_count_log_lag1",
+    "poi_count_log_lag2",
+    "poi_count_log_lag3",
+    "poi_category_entropy_lag1",
+    "poi_category_entropy_lag2",
+    "poi_category_entropy_lag3",
+    "poi_commercial_share_lag1",
+    "poi_commercial_share_lag2",
+    "poi_commercial_share_lag3",
+    "poi_transport_access_log_lag1",
+    "poi_transport_access_log_lag2",
+    "poi_transport_access_log_lag3",
+    "viirs_avg_asinh_lag1",
+    "viirs_avg_asinh_lag2",
+    "viirs_avg_asinh_lag3",
+)
+
+STC_INTERVENTION_COLUMNS: tuple[str, ...] = (
+    "opening_year",
+    "is_transfer_at_opening",
+    "is_new_line_opening",
+    "is_extension_opening",
+    "is_terminal_at_opening",
+    "n_lines_at_opening",
+    "same_month_openings",
+)
+
+STC_CONTEXT_TABULAR_COLUMNS: tuple[str, ...] = (
+    "population_log_lag1",
+    "population_log_lag2",
+    "population_log_lag3",
+    "city_poi_grid_coverage",
+    "city_poi_log_total",
+    "city_poi_observed_grids",
+    "city_viirs_grid_coverage",
+    "city_viirs_mean_asinh",
+    "city_viirs_observed_grids",
+    "city_population_grid_coverage",
+    "city_population_log_total",
+    "city_population_observed_grids",
+)
+
 
 def validate_response_treatment_binding(
     response_manifest: dict[str, object],
@@ -65,7 +108,11 @@ def validate_response_treatment_binding(
     if missing_treatments:
         raise ValueError(f"Treatment list lacks identity columns: {sorted(missing_treatments)}")
     if missing_response:
-        raise ValueError(f"Response Artifact lacks treatment identity: {sorted(missing_response)}")
+        if strict_production or "treatment_order" not in response.columns:
+            raise ValueError(f"Response Artifact lacks treatment identity: {sorted(missing_response)}")
+        # In non-strict mode, attach missing identity columns from treatments
+        to_add = [c for c in IDENTITY_COLUMNS if c not in response.columns]
+        response = response.merge(treatments[["treatment_order"] + to_add], on="treatment_order", how="left")
     if treatments["treatment_order"].duplicated().any():
         raise ValueError("Treatment list has duplicate treatment_order")
     if strict_production and len(treatments) != 5_048:
@@ -93,7 +140,11 @@ def validate_response_treatment_binding(
         validate="one_to_one",
     )
     if not joined["_merge"].eq("both").all():
-        raise ValueError("Treatment orders differ between treatment list and Response Artifact")
+        if strict_production:
+            raise ValueError("Treatment orders differ between treatment list and Response Artifact")
+        if (joined["_merge"] == "right_only").any():
+            raise ValueError("Response Artifact contains treatment orders not in treatment list")
+        joined = joined[joined["_merge"] == "both"].copy()
     for column in ("city_key", "grid_id", "station_event_id"):
         left = joined[f"{column}__treatment"].astype("string")
         right = joined[f"{column}__response"].astype("string")
@@ -350,6 +401,94 @@ def attach_streetview_assets(
     return features, [streetview_index]
 
 
+def attach_satellite_embeddings(
+    features: pd.DataFrame,
+    satellite_source: Path | None,
+    strict_pretreatment: bool = True,
+) -> tuple[pd.DataFrame, list[Path]]:
+    features = features.copy()
+    if satellite_source is None:
+        features["alphaearth_available"] = False
+        features["satellite_temporal_valid"] = False
+        features["satellite_is_temporal_proxy"] = False
+        features["satellite_target_year"] = np.nan
+        return features, []
+    sat_file = Path(satellite_source)
+    if sat_file.is_dir():
+        candidate = sat_file / "alphaearth_treated_embeddings.parquet"
+        if candidate.is_file():
+            sat_file = candidate
+    if not sat_file.is_file():
+        features["alphaearth_available"] = False
+        features["satellite_temporal_valid"] = False
+        features["satellite_is_temporal_proxy"] = False
+        features["satellite_target_year"] = np.nan
+        return features, []
+
+    sat_df = pd.read_parquet(sat_file)
+    if sat_df["treatment_order"].duplicated().any():
+        raise ValueError("Satellite source has duplicate treatment_order")
+    identity_columns = ["treatment_order", "city_key", "grid_id"]
+    if set(identity_columns).issubset(features) and set(identity_columns).issubset(sat_df):
+        binding = features[identity_columns].merge(
+            sat_df[identity_columns], on="treatment_order", how="inner", suffixes=("", "_sat")
+        )
+        if (
+            binding["city_key"].ne(binding["city_key_sat"])
+            | binding["grid_id"].ne(binding["grid_id_sat"])
+        ).any():
+            raise ValueError("Satellite source disagrees with treatment city/grid binding")
+    bands = [f"A{i:02d}" for i in range(64)]
+    available_bands = [b for b in bands if b in sat_df.columns]
+    keep_cols = ["treatment_order"] + available_bands
+    if "is_temporal_proxy" in sat_df.columns:
+        keep_cols.append("is_temporal_proxy")
+    if "target_year" in sat_df.columns:
+        keep_cols.append("target_year")
+    if "alphaearth_available" in sat_df.columns:
+        keep_cols.append("alphaearth_available")
+    spatial_columns = {
+        "spatial_support": "satellite_spatial_support",
+        "grid_geometry_sha256": "satellite_grid_geometry_sha256",
+    }
+    keep_cols.extend(column for column in spatial_columns if column in sat_df)
+    merge_df = sat_df[keep_cols].copy()
+    merge_df = merge_df.rename(columns=spatial_columns)
+    features = features.merge(merge_df, on="treatment_order", how="left", validate="one_to_one")
+
+    is_proxy = (
+        features["is_temporal_proxy"].fillna(True).astype(bool)
+        if "is_temporal_proxy" in features.columns
+        else pd.Series(False, index=features.index)
+    )
+    target_yr = (
+        pd.to_numeric(features["target_year"], errors="coerce")
+        if "target_year" in features.columns
+        else pd.Series(np.nan, index=features.index)
+    )
+    has_bands = (
+        features[available_bands].notna().any(axis=1)
+        if available_bands
+        else pd.Series(False, index=features.index)
+    )
+
+    temporal_valid = (~is_proxy) & has_bands
+    features["satellite_is_temporal_proxy"] = is_proxy
+    features["satellite_target_year"] = target_yr
+    features["satellite_temporal_valid"] = temporal_valid
+
+    if strict_pretreatment:
+        features["alphaearth_available"] = temporal_valid.astype(bool)
+        # Mask out contemporary/post-treatment satellite band columns to prevent leakage
+        invalid_mask = ~features["alphaearth_available"]
+        if available_bands and invalid_mask.any():
+            features.loc[invalid_mask, available_bands] = np.nan
+    else:
+        features["alphaearth_available"] = has_bands.astype(bool)
+    return features, [sat_file]
+
+
+
 def normalize_from_train(
     features: pd.DataFrame, split_map: dict[str, str]
 ) -> tuple[pd.DataFrame, dict[str, object]]:
@@ -423,6 +562,41 @@ def _best_quality_grade(targets: pd.DataFrame) -> pd.DataFrame:
 
 KNOWN_FAMILIES = ("housing", "viirs", "poi", "population")
 KNOWN_METHODS = ("matched", "gsc", "mc")
+# Frozen downstream supervision boundary (see outputs/event_study_final/
+# family_selection.md): only VIIRS and POI same-city Matching/GSC labels are
+# admitted to production representation training.
+ALLOWED_SUPERVISION_FAMILIES = ("viirs", "poi")
+ALLOWED_SUPERVISION_METHODS = ("matched", "gsc")
+
+
+def _enforce_production_supervision_scope(
+    families: tuple[str, ...] | None,
+    methods: tuple[str, ...] | None,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Return the frozen production allowlist, rejecting excluded labels."""
+    selected_families = tuple(families) if families is not None else ALLOWED_SUPERVISION_FAMILIES
+    selected_methods = tuple(methods) if methods is not None else ALLOWED_SUPERVISION_METHODS
+    unknown_families = sorted(set(selected_families) - set(KNOWN_FAMILIES))
+    if unknown_families:
+        raise ValueError(f"unknown outcome families: {unknown_families}")
+    unknown_methods = sorted(set(selected_methods) - set(KNOWN_METHODS))
+    if unknown_methods:
+        raise ValueError(f"unknown estimation methods: {unknown_methods}")
+    excluded_families = sorted(set(selected_families) - set(ALLOWED_SUPERVISION_FAMILIES))
+    if excluded_families:
+        raise ValueError(
+            "Strict production representation supervision is restricted to "
+            f"{ALLOWED_SUPERVISION_FAMILIES}; excluded families: {excluded_families}. "
+            "Use strict_production=False for exploratory/audit releases."
+        )
+    excluded_methods = sorted(set(selected_methods) - set(ALLOWED_SUPERVISION_METHODS))
+    if excluded_methods:
+        raise ValueError(
+            "Strict production representation supervision is restricted to "
+            f"{ALLOWED_SUPERVISION_METHODS}; excluded methods: {excluded_methods}. "
+            "Use strict_production=False for exploratory/audit releases."
+        )
+    return selected_families, selected_methods
 
 
 def classify_method(value: object) -> str | None:
@@ -654,13 +828,46 @@ def publish_pretraining_dataset(
     split_seed: str = "mit-urban-v1",
     min_modalities: int = 2,
     streetview_index: Path | None = None,
+    satellite_source: Path | None = None,
+    strict_satellite_pretreatment: bool = True,
     strict_production: bool = True,
     scope_view: str = "same_city",
     families: tuple[str, ...] | None = None,
     methods: tuple[str, ...] | None = None,
     weight_gamma: float = DESIGN_GAMMA,
     weight_alpha: float = PRECISION_ALPHA,
+    require_multimodal: bool = False,
+    require_satellite: bool = False,
+    require_streetview: bool = False,
+    stc: bool = False,
+    stc_inputs_dir: Path | None = None,
 ) -> Path:
+    if strict_production:
+        families, methods = _enforce_production_supervision_scope(families, methods)
+    if stc or stc_inputs_dir is not None:
+        actual_stc_dir = (
+            Path(stc_inputs_dir)
+            if stc_inputs_dir is not None
+            else project_root / "data/active/multimodal_inputs_v1"
+        )
+        return publish_stc_dataset(
+            response_release=response_release,
+            treatments_path=treatments_path,
+            stc_inputs_dir=actual_stc_dir,
+            project_root=project_root,
+            output_root=output_root,
+            dataset_id=dataset_id,
+            split_seed=split_seed,
+            scope_view=scope_view,
+            families=families,
+            methods=methods,
+            weight_gamma=weight_gamma,
+            weight_alpha=weight_alpha,
+            strict_production=strict_production,
+        )
+    if require_multimodal:
+        require_satellite = True
+        require_streetview = True
     response_manifest_path = response_release / "manifest.json"
     response_path = response_release / "response_artifact.parquet"
     response_manifest = json.loads(response_manifest_path.read_text(encoding="utf-8"))
@@ -721,13 +928,36 @@ def publish_pretraining_dataset(
     )
     features, asset_paths = attach_streetview_assets(features, streetview_index)
     source_paths.extend(asset_paths)
+    if satellite_source is not None:
+        features, sat_paths = attach_satellite_embeddings(
+            features, satellite_source, strict_pretreatment=strict_satellite_pretreatment
+        )
+        source_paths.extend(sat_paths)
+    else:
+        features["alphaearth_available"] = False
     split_map = deterministic_city_splits(features["city_key"], seed=split_seed)
     features, normalization = normalize_from_train(features, split_map)
     modality_columns = [f"{name}_available" for name in MODALITY_FEATURES] + [
         "streetview_available"
     ]
+    if "alphaearth_available" in features.columns:
+        modality_columns.append("alphaearth_available")
     features["available_modality_count"] = features[modality_columns].sum(axis=1)
     features["feature_training_mask"] = features["available_modality_count"] >= int(min_modalities)
+    if require_satellite:
+        has_sat = (
+            features["alphaearth_available"].fillna(False).astype(bool)
+            if "alphaearth_available" in features.columns
+            else pd.Series(False, index=features.index)
+        )
+        features["feature_training_mask"] = features["feature_training_mask"] & has_sat
+    if require_streetview:
+        has_sv = (
+            features["streetview_available"].fillna(False).astype(bool)
+            if "streetview_available" in features.columns
+            else pd.Series(False, index=features.index)
+        )
+        features["feature_training_mask"] = features["feature_training_mask"] & has_sv
 
     targets = targets.merge(
         features[IDENTITY_COLUMNS + ["split", "feature_training_mask"]],
@@ -811,6 +1041,21 @@ def publish_pretraining_dataset(
             "split_seed": split_seed,
             "splits": split_manifest,
             "min_modalities": int(min_modalities),
+            "require_multimodal": bool(require_multimodal),
+            "require_satellite": bool(require_satellite),
+            "require_streetview": bool(require_streetview),
+            "satellite_source": str(satellite_source) if satellite_source is not None else None,
+            "satellite_audit": {
+                "spatial_support": sorted(
+                    features["satellite_spatial_support"].dropna().astype(str).unique().tolist()
+                ) if "satellite_spatial_support" in features else ["legacy_unspecified"],
+                "strict_satellite_pretreatment": strict_satellite_pretreatment,
+                "satellite_source": str(satellite_source) if satellite_source is not None else None,
+                "total_units": len(features),
+                "satellite_available": int(features["alphaearth_available"].sum()) if "alphaearth_available" in features.columns else 0,
+                "temporal_proxy_units": int(features["satellite_is_temporal_proxy"].sum()) if "satellite_is_temporal_proxy" in features.columns else 0,
+                "temporal_valid_units": int(features["satellite_temporal_valid"].sum()) if "satellite_temporal_valid" in features.columns else 0,
+            },
             "families": list(families) if families is not None else None,
             "methods": list(methods) if methods is not None else None,
             "response_weight": {
@@ -857,6 +1102,490 @@ def publish_pretraining_dataset(
                     f"Another publisher created model-input release: {destination}"
                 ) from exc
             raise
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    return destination
+
+
+def publish_stc_dataset(
+    response_release: Path,
+    treatments_path: Path,
+    stc_inputs_dir: Path,
+    project_root: Path,
+    output_root: Path,
+    dataset_id: str | None = None,
+    split_seed: str = "mit-urban-v1",
+    scope_view: str = "same_city",
+    families: tuple[str, ...] | None = None,
+    methods: tuple[str, ...] | None = None,
+    weight_gamma: float = DESIGN_GAMMA,
+    weight_alpha: float = PRECISION_ALPHA,
+    strict_production: bool = True,
+    streetview_assets_path: Path | None = None,
+) -> Path:
+    if strict_production:
+        families, methods = _enforce_production_supervision_scope(families, methods)
+    response_manifest_path = response_release / "manifest.json"
+    response_path = response_release / "response_artifact.parquet"
+    if not response_path.is_file():
+        raise FileNotFoundError(f"Response artifact table not found: {response_path}")
+    if response_manifest_path.is_file():
+        response_manifest = json.loads(response_manifest_path.read_text(encoding="utf-8"))
+        if strict_production and not bool(response_manifest.get("strict_production")):
+            raise ValueError("Production model inputs require a strict production Response Artifact")
+        art_sha = response_manifest.get("artifact", {}).get("sha256")
+        if art_sha and sha256_file(response_path) != art_sha:
+            raise ValueError("Response Artifact hash disagrees with its manifest")
+    else:
+        if strict_production:
+            raise FileNotFoundError(f"Response artifact manifest not found: {response_manifest_path}")
+        response_manifest = {"strict_production": False, "artifact": {"sha256": sha256_file(response_path)}}
+
+    treatments = pd.read_parquet(treatments_path)
+    targets = pd.read_parquet(response_path)
+    if not strict_production:
+        resp_orders = set(targets["treatment_order"].unique())
+        if len(resp_orders) < len(treatments):
+            treatments = treatments[treatments["treatment_order"].isin(resp_orders)].copy()
+    bound_treatment_hash = validate_response_treatment_binding(
+        response_manifest, targets, treatments, treatments_path, strict_production
+    )
+    if strict_production:
+        response_code = response_manifest.get("code")
+        if not isinstance(response_code, dict):
+            raise ValueError("Strict Response Artifact manifest lacks structured code provenance")
+        require_reproducible_code_state(response_code)
+    state = git_state(project_root)
+    if strict_production:
+        require_reproducible_code_state(state)
+
+    if families is not None:
+        selected = tuple(dict.fromkeys(str(family) for family in families))
+        unknown = sorted(set(selected) - set(KNOWN_FAMILIES))
+        if unknown:
+            raise ValueError(f"unknown outcome families: {unknown}")
+        if not selected:
+            raise ValueError("--families must select at least one outcome family")
+        targets = targets.loc[targets["outcome_family"].astype(str).isin(selected)].copy()
+        if targets.empty:
+            raise ValueError(f"response artifact has no rows for families: {list(selected)}")
+
+    if methods is not None:
+        selected_methods = tuple(dict.fromkeys(str(method) for method in methods))
+        unknown_methods = sorted(set(selected_methods) - set(KNOWN_METHODS))
+        if unknown_methods:
+            raise ValueError(f"unknown estimation methods: {unknown_methods}")
+        if not selected_methods:
+            raise ValueError("--methods must select at least one estimation method")
+        method_family = targets["method"].map(classify_method)
+        targets = targets.loc[method_family.isin(selected_methods)].copy()
+        if targets.empty:
+            raise ValueError(f"response artifact has no rows for methods: {list(selected_methods)}")
+
+    targets = response_label_weights(targets, gamma=weight_gamma, alpha=weight_alpha)
+    eligible_weights = targets.loc[targets["eligible"], "response_weight"]
+    if eligible_weights.empty:
+        raise ValueError("Filtered response artifact has no eligible labels")
+    if not bool(eligible_weights.gt(0).all()):
+        raise ValueError("Eligible labels received non-positive reliability weights")
+
+    # Read role input tables
+    state_file = stc_inputs_dir / "state_inputs.parquet"
+    context_file = stc_inputs_dir / "context_inputs.parquet"
+    intervention_file = stc_inputs_dir / "intervention_inputs.parquet"
+    satellite_seq_file = stc_inputs_dir / "satellite_state_sequences.parquet"
+
+    for req_f in (state_file, context_file, intervention_file, satellite_seq_file):
+        if not req_f.is_file():
+            raise FileNotFoundError(f"STC role input table not found: {req_f}")
+
+    state_df = pd.read_parquet(state_file)
+    context_df = pd.read_parquet(context_file)
+    intervention_df = pd.read_parquet(intervention_file)
+    satellite_seq_df = pd.read_parquet(satellite_seq_file)
+
+    if not strict_production and len(treatments) < len(state_df):
+        order_set = set(treatments["treatment_order"])
+        state_df = state_df[state_df["treatment_order"].isin(order_set)].copy()
+        context_df = context_df[context_df["treatment_order"].isin(order_set)].copy()
+        intervention_df = intervention_df[intervention_df["treatment_order"].isin(order_set)].copy()
+        satellite_seq_df = satellite_seq_df[satellite_seq_df["treatment_order"].isin(order_set)].copy()
+
+    if strict_production and (
+        len(state_df) != len(treatments)
+        or len(context_df) != len(treatments)
+        or len(intervention_df) != len(treatments)
+    ):
+        raise ValueError(f"STC role tables must preserve all {len(treatments)} treatments")
+
+    treatment_orders_set = set(treatments["treatment_order"])
+    for name, df in [("state_inputs", state_df), ("context_inputs", context_df), ("intervention_inputs", intervention_df)]:
+        missing_id = set(IDENTITY_COLUMNS) - set(df.columns)
+        if missing_id:
+            raise ValueError(f"{name} lacks identity columns: {sorted(missing_id)}")
+        if df["treatment_order"].duplicated().any():
+            raise ValueError(f"{name} has duplicate treatment_order")
+        if strict_production and set(df["treatment_order"]) != treatment_orders_set:
+            raise ValueError(f"{name} treatment_orders do not match treatments table exactly")
+
+        # Join and verify identity columns against treatments
+        joined = df[IDENTITY_COLUMNS].merge(
+            treatments[IDENTITY_COLUMNS],
+            on="treatment_order",
+            how="inner",
+            suffixes=("__role", "__treatment"),
+        )
+        if strict_production and len(joined) != len(treatments):
+            raise ValueError(f"{name} has {len(joined)} matching treatments, expected {len(treatments)}")
+        for col in ("city_key", "grid_id", "station_event_id"):
+            left = joined[f"{col}__role"].astype("string")
+            right = joined[f"{col}__treatment"].astype("string")
+            if not left.eq(right).fillna(False).all():
+                raise ValueError(f"{name} identity column {col} disagrees with treatments table")
+        left_m = joined["opening_month__role"].astype("string").str[:7]
+        right_m = joined["opening_month__treatment"].astype("string").str[:7]
+        if not left_m.eq(right_m).all():
+            raise ValueError(f"{name} identity column opening_month disagrees with treatments table")
+
+    state_df = state_df.sort_values("treatment_order").reset_index(drop=True)
+    context_df = context_df.sort_values("treatment_order").reset_index(drop=True)
+    intervention_df = intervention_df.sort_values("treatment_order").reset_index(drop=True)
+
+    # Housing prices are outcome-family audit material, not background model
+    # input.  Drop legacy price columns even when an older role table still
+    # carries them, so the published package cannot leak them into C.
+    housing_context_columns = [
+        column
+        for column in context_df.columns
+        if column.startswith(("housing_", "city_housing_"))
+    ]
+    if housing_context_columns:
+        context_df = context_df.drop(columns=housing_context_columns)
+
+    valid_satellite_times = [-6, -5, -4, -3, -2, -1]
+    satellite_seq_df = satellite_seq_df.loc[
+        satellite_seq_df["event_time"].isin(valid_satellite_times)
+    ].sort_values(["treatment_order", "event_time"]).reset_index(drop=True)
+
+    if strict_production:
+        missing_sat_identity = set(IDENTITY_COLUMNS) - set(satellite_seq_df.columns)
+        if missing_sat_identity:
+            raise ValueError(
+                "STC satellite sequence table lacks identity columns: "
+                f"{sorted(missing_sat_identity)}"
+            )
+        bound_sat = satellite_seq_df[IDENTITY_COLUMNS].merge(
+            treatments[IDENTITY_COLUMNS],
+            on="treatment_order",
+            how="inner",
+            suffixes=("__sequence", "__treatment"),
+        )
+        if len(bound_sat) != len(satellite_seq_df):
+            raise ValueError(
+                "Satellite sequence rows reference treatment_order values absent "
+                "from the frozen treatment list"
+            )
+        for column in ("city_key", "grid_id", "station_event_id"):
+            if not bound_sat[f"{column}__sequence"].astype(str).eq(
+                bound_sat[f"{column}__treatment"].astype(str)
+            ).all():
+                raise ValueError(
+                    f"Satellite sequence identity column {column} disagrees with treatments"
+                )
+        if not bound_sat["opening_month__sequence"].astype(str).str[:7].eq(
+            bound_sat["opening_month__treatment"].astype(str).str[:7]
+        ).all():
+            raise ValueError(
+                "Satellite sequence opening_month disagrees with treatments"
+            )
+        coverage = satellite_seq_df.groupby("treatment_order")["event_time"].nunique()
+        expected_orders = set(treatments["treatment_order"].astype(int))
+        observed_orders = set(coverage.index.astype(int))
+        if observed_orders != expected_orders:
+            raise ValueError(
+                "Satellite sequence coverage does not preserve all treatments: "
+                f"missing={sorted(expected_orders - observed_orders)[:10]}, "
+                f"extra={sorted(observed_orders - expected_orders)[:10]}"
+            )
+        if not coverage.eq(len(valid_satellite_times)).all():
+            bad = coverage[~coverage.eq(len(valid_satellite_times))]
+            raise ValueError(
+                "Satellite sequence must carry all six pre-treatment years for "
+                f"every treatment; found {len(bad)} incomplete events"
+            )
+
+    # Validate temporal consistency of satellite sequences against opening year
+    if "opening_year" in treatments.columns:
+        op_lookup = treatments.set_index("treatment_order")["opening_year"].to_dict()
+    else:
+        op_lookup = treatments.set_index("treatment_order")["opening_month"].astype(str).str[:4].astype(int).to_dict()
+
+    for idx, row in satellite_seq_df.iterrows():
+        order = int(row["treatment_order"])
+        ev_time = int(row["event_time"])
+        target_yr = int(row["target_year"]) if pd.notna(row.get("target_year")) else None
+        op_yr = op_lookup.get(order)
+        if (
+            op_yr is not None
+            and target_yr is not None
+            and (target_yr >= op_yr or target_yr != op_yr + ev_time)
+        ):
+            if strict_production:
+                raise ValueError(
+                    f"Satellite sequence has illegal temporal entry: order={order}, "
+                    f"target_year={target_yr}, opening_year={op_yr}, event_time={ev_time}"
+                )
+            satellite_seq_df.loc[idx, "state_temporal_allowed"] = False
+            satellite_seq_df.loc[idx, "state_image_available"] = False
+
+    split_map = deterministic_city_splits(state_df["city_key"].unique(), seed=split_seed)
+    state_df["split"] = state_df["city_key"].map(split_map)
+    context_df["split"] = context_df["city_key"].map(split_map)
+    intervention_df["split"] = intervention_df["city_key"].map(split_map)
+
+    train_mask = state_df["split"].eq("train")
+    normalization: dict[str, dict[str, object]] = {
+        "state": {},
+        "context": {},
+        "intervention": {},
+    }
+
+    for col in STC_STATE_TABULAR_COLUMNS:
+        avail_col = f"{col}_available"
+        if col in state_df.columns and avail_col in state_df.columns:
+            valid = train_mask & state_df[avail_col].fillna(False).astype(bool) & state_df[col].notna()
+            vals = pd.to_numeric(state_df.loc[valid, col], errors="coerce").dropna().to_numpy(dtype=float)
+            mean = float(vals.mean()) if len(vals) else 0.0
+            sd = float(vals.std(ddof=0)) if len(vals) else 1.0
+            usable = bool(len(vals) and np.isfinite(sd) and sd > np.finfo(float).eps)
+            if usable:
+                state_df[f"z__{col}"] = (pd.to_numeric(state_df[col], errors="coerce") - mean) / sd
+            else:
+                state_df[f"z__{col}"] = np.nan
+            normalization["state"][col] = {
+                "mean": mean,
+                "sd": sd if usable else None,
+                "train_observations": len(vals),
+                "usable": usable,
+            }
+
+    for col in STC_CONTEXT_TABULAR_COLUMNS:
+        avail_col = f"{col}_available"
+        if col in context_df.columns and avail_col in context_df.columns:
+            valid = train_mask & context_df[avail_col].fillna(False).astype(bool) & context_df[col].notna()
+            vals = pd.to_numeric(context_df.loc[valid, col], errors="coerce").dropna().to_numpy(dtype=float)
+            mean = float(vals.mean()) if len(vals) else 0.0
+            sd = float(vals.std(ddof=0)) if len(vals) else 1.0
+            usable = bool(len(vals) and np.isfinite(sd) and sd > np.finfo(float).eps)
+            if usable:
+                context_df[f"z__{col}"] = (pd.to_numeric(context_df[col], errors="coerce") - mean) / sd
+            else:
+                context_df[f"z__{col}"] = np.nan
+            normalization["context"][col] = {
+                "mean": mean,
+                "sd": sd if usable else None,
+                "train_observations": len(vals),
+                "usable": usable,
+            }
+
+    for col in ("opening_year", "n_lines_at_opening", "same_month_openings"):
+        avail_col = f"{col}_available"
+        if col in intervention_df.columns and avail_col in intervention_df.columns:
+            valid = train_mask & intervention_df[avail_col].fillna(False).astype(bool) & intervention_df[col].notna()
+            vals = pd.to_numeric(intervention_df.loc[valid, col], errors="coerce").dropna().to_numpy(dtype=float)
+            mean = float(vals.mean()) if len(vals) else 0.0
+            sd = float(vals.std(ddof=0)) if len(vals) else 1.0
+            usable = bool(len(vals) and np.isfinite(sd) and sd > np.finfo(float).eps)
+            if usable:
+                intervention_df[f"z__{col}"] = (pd.to_numeric(intervention_df[col], errors="coerce") - mean) / sd
+            else:
+                intervention_df[f"z__{col}"] = np.nan
+            normalization["intervention"][col] = {
+                "mean": mean,
+                "sd": sd if usable else None,
+                "train_observations": len(vals),
+                "usable": usable,
+            }
+
+    missing_id_targets = [c for c in IDENTITY_COLUMNS if c not in targets.columns]
+    if missing_id_targets:
+        targets = targets.merge(state_df[["treatment_order"] + missing_id_targets], on="treatment_order", how="left")
+    targets = targets.merge(
+        state_df[IDENTITY_COLUMNS + ["split"]],
+        on=IDENTITY_COLUMNS,
+        how="left",
+        validate="many_to_one",
+    )
+    targets["feature_training_mask"] = True
+    if "training_mask" not in targets.columns:
+        targets["training_mask"] = True
+    if "main_spec" not in targets.columns:
+        if "main_training_mask" in targets.columns:
+            targets["main_spec"] = targets["main_training_mask"].astype("boolean").fillna(False)
+        else:
+            if strict_production:
+                raise ValueError("Response Artifact lacks main_spec column for scope_view")
+            targets["main_spec"] = True
+    in_scope = targets["main_spec"].astype("boolean").fillna(False) if scope_view in {"same_city", "cross_city"} else True
+    if scope_view == "cross_city":
+        in_scope = ~in_scope
+    targets["final_training_mask"] = (
+        targets["training_mask"].fillna(False) & targets["feature_training_mask"] & in_scope
+    )
+
+    unit_level = targets.groupby("treatment_order", as_index=False).agg(
+        training_mask=("training_mask", "max"),
+        final_training_mask=("final_training_mask", "max"),
+    )
+    unit_weights = _task_sampling_weight(targets, gamma=weight_gamma, alpha=weight_alpha)
+    best_grade = _best_quality_grade(targets)
+
+    sample_index = (
+        state_df[["treatment_order", "city_key", "split"]]
+        .merge(unit_level, on="treatment_order", how="left")
+        .merge(unit_weights, on="treatment_order", how="left")
+        .merge(best_grade, on="treatment_order", how="left")
+    )
+    sample_index["training_mask"] = sample_index["training_mask"].astype("boolean").fillna(False).astype(bool)
+    sample_index["final_training_mask"] = sample_index["final_training_mask"].astype("boolean").fillna(False).astype(bool)
+    sample_index["quality_grade"] = sample_index["quality_grade"].fillna("pending")
+    sample_index["task_sampling_weight"] = pd.to_numeric(sample_index["task_sampling_weight"], errors="coerce").fillna(0.0)
+
+    dataset_id = dataset_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    if Path(str(dataset_id)).name != str(dataset_id) or str(dataset_id) in {"", ".", ".."}:
+        raise ValueError(f"dataset_id must be a single path segment: {dataset_id!r}")
+    destination = output_root / dataset_id
+    if destination.exists():
+        raise FileExistsError(f"Refusing to overwrite model-input release: {destination}")
+
+    staging = output_root / f".{dataset_id}.tmp-{uuid4().hex}"
+    staging.mkdir(parents=True, exist_ok=False)
+    try:
+        state_df.to_parquet(staging / "state_inputs.parquet", index=False, compression="zstd")
+        context_df.to_parquet(staging / "context_inputs.parquet", index=False, compression="zstd")
+        intervention_df.to_parquet(staging / "intervention_inputs.parquet", index=False, compression="zstd")
+        satellite_seq_df.to_parquet(staging / "satellite_state_sequences.parquet", index=False, compression="zstd")
+        targets.to_parquet(staging / "response_targets.parquet", index=False, compression="zstd")
+        sample_index.to_parquet(staging / "sample_index.parquet", index=False, compression="zstd")
+        (staging / "normalization.json").write_text(
+            json.dumps(normalization, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+
+        source_paths = [state_file, context_file, intervention_file, satellite_seq_file]
+
+        # Locate and freeze streetview selection table into the dataset package
+        env_root = os.environ.get("MIT_PROJECT_ROOT")
+        data_root = Path(env_root).resolve() if env_root else Path(project_root).resolve()
+        sv_candidates = []
+        if streetview_assets_path is not None:
+            sv_candidates.append(Path(streetview_assets_path))
+        sv_candidates.extend([
+            stc_inputs_dir / "streetview_state_assets.parquet",
+            data_root / "data/active/streetview_grid_v2/streetview_state_assets.parquet",
+            data_root / "data/active/streetview_fixed_treated_grid_v2/streetview_state_assets.parquet",
+            project_root / "data/active/streetview_grid_v2/streetview_state_assets.parquet",
+            project_root / "data/active/streetview_fixed_treated_grid_v2/streetview_state_assets.parquet",
+        ])
+        sv_file = None
+        for cand in sv_candidates:
+            if cand.is_file():
+                sv_file = cand
+                break
+
+        if sv_file is not None and sv_file.is_file():
+            sv_df = pd.read_parquet(sv_file)
+            sv_orders = set(state_df["treatment_order"])
+            if "treatment_order" in sv_df.columns:
+                filtered_sv = sv_df[sv_df["treatment_order"].isin(sv_orders)].reset_index(drop=True)
+            else:
+                filtered_sv = sv_df.copy()
+            filtered_sv.to_parquet(staging / "streetview_state_assets.parquet", index=False, compression="zstd")
+            source_paths.append(sv_file)
+        elif strict_production and state_df["streetview_available"].fillna(False).astype(bool).any():
+            raise FileNotFoundError(
+                "Strict production S/T/C dataset has events declaring streetview availability, "
+                f"but streetview_state_assets.parquet could not be located in {[str(c) for c in sv_candidates]}"
+            )
+
+        split_manifest = {
+            split: sorted(city for city, assigned in split_map.items() if assigned == split)
+            for split in ("train", "validation", "test")
+        }
+
+        manifest = {
+            "schema": "urban_intervention_stc_dataset",
+            "dataset_id": dataset_id,
+            "created_utc": datetime.now(UTC).isoformat(),
+            "strict_production": strict_production,
+            "response_release": str(response_release),
+            "response_artifact_sha256": sha256_file(response_path),
+            "treatments_sha256": sha256_file(treatments_path),
+            "response_bound_treatments_sha256": bound_treatment_hash,
+            "source_features": aggregate_file_fingerprint(source_paths, project_root),
+            "split_unit": "city_key",
+            "split_seed": split_seed,
+            "splits": split_manifest,
+            "scope_view": scope_view,
+            "families": list(families) if families is not None else None,
+            "methods": list(methods) if methods is not None else None,
+            "state_tabular_columns": list(STC_STATE_TABULAR_COLUMNS),
+            "intervention_columns": list(STC_INTERVENTION_COLUMNS),
+            "context_tabular_columns": list(STC_CONTEXT_TABULAR_COLUMNS),
+            "alphaearth_dimension": 64,
+            "satellite_relative_years": valid_satellite_times,
+            "satellite_bands": ["red", "green", "blue", "nir", "swir1", "swir2"],
+            "response_weight": {
+                "definition": (
+                    "Per-label design reliability: eligible * exp(-gamma * D) * "
+                    "tempered precision, winsorized and normalized to mean one within "
+                    "method x family"
+                ),
+                "calibration_id": CALIBRATION_ID,
+                "gamma": float(weight_gamma),
+                "alpha": float(weight_alpha),
+                "eligible_rows": int(targets["eligible"].sum()),
+                "mean": float(targets.loc[targets["eligible"], "response_weight"].mean()),
+                "min": float(targets.loc[targets["eligible"], "response_weight"].min()),
+                "max": float(targets.loc[targets["eligible"], "response_weight"].max()),
+            },
+            "rows": {
+                "state_inputs": len(state_df),
+                "context_inputs": len(context_df),
+                "intervention_inputs": len(intervention_df),
+                "satellite_state_sequences": len(satellite_seq_df),
+                "response_targets": len(targets),
+                "sample_index": len(sample_index),
+                "final_training": int(sample_index["final_training_mask"].sum()),
+            },
+            "code": state,
+            "runtime": runtime_versions(),
+        }
+
+        outputs_map = manifest.setdefault("outputs", {})
+        output_files = [
+            "state_inputs.parquet",
+            "context_inputs.parquet",
+            "intervention_inputs.parquet",
+            "satellite_state_sequences.parquet",
+            "response_targets.parquet",
+            "sample_index.parquet",
+            "normalization.json",
+        ]
+        if (staging / "streetview_state_assets.parquet").is_file():
+            output_files.append("streetview_state_assets.parquet")
+            manifest["streetview_assets_sha256"] = sha256_file(staging / "streetview_state_assets.parquet")
+            manifest["rows"]["streetview_state_assets"] = len(pd.read_parquet(staging / "streetview_state_assets.parquet"))
+
+        for name in output_files:
+            outputs_map[name] = sha256_file(staging / name)
+
+        (staging / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2, default=str) + "\n",
+            encoding="utf-8",
+        )
+        output_root.mkdir(parents=True, exist_ok=True)
+        os.replace(staging, destination)
     except Exception:
         shutil.rmtree(staging, ignore_errors=True)
         raise

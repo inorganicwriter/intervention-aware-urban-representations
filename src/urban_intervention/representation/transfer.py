@@ -26,6 +26,7 @@ def per_city_retrieval(
     masks: torch.Tensor,
     city_keys: list[str],
     k: int = 5,
+    response_offsets: dict[str, tuple[int, int, list[str]]] | None = None,
 ) -> dict[str, dict[str, dict[str, object]]]:
     """Retrieval metrics per city; cities with fewer than 2 units are skipped."""
     if len(city_keys) != embeddings.shape[0]:
@@ -37,7 +38,11 @@ def per_city_retrieval(
             continue
         index = torch.tensor(keep, dtype=torch.long)
         result[city] = retrieval_metrics(
-            embeddings[index], responses[index], masks[index], k=k
+            embeddings[index],
+            responses[index],
+            masks[index],
+            k=k,
+            response_offsets=response_offsets,
         )
     return result
 
@@ -51,6 +56,7 @@ def few_shot_probe(
     min_obs: int = 2,
     seed: int = 7,
     n_seeds: int = 3,
+    response_offsets: dict[str, tuple[int, int, list[str]]] | None = None,
 ) -> list[dict[str, object]]:
     """Probe RMSE on the target pool as the probe training set grows.
 
@@ -88,6 +94,7 @@ def few_shot_probe(
                 target_masks[rest_idx],
                 ridge=ridge,
                 min_obs=min_obs,
+                response_offsets=response_offsets,
             )
             if first_probe is None:
                 first_probe = probe
@@ -122,6 +129,7 @@ def predictive_auc(
     m_test: torch.Tensor,
     ridge: float = 1.0,
     min_obs: int = 16,
+    response_offsets: dict[str, tuple[int, int, list[str]]] | None = None,
 ) -> dict[str, object]:
     """Per-cell response-direction classification AUC.
 
@@ -135,13 +143,20 @@ def predictive_auc(
     n_train, dim = y_train.shape
     if x_train.shape[0] != n_train or y_test.shape[1] != dim:
         raise ValueError("Predictive inputs have inconsistent shapes")
-    if dim == RESPONSE_DIM:
-        family_cells = {
-            name: list(range(RESPONSE_OFFSETS[name][0], RESPONSE_OFFSETS[name][1]))
-            for name in RESPONSE_OFFSETS
-        }
-    else:
+    offsets = response_offsets if response_offsets is not None else (
+        RESPONSE_OFFSETS if dim == RESPONSE_DIM else None
+    )
+    if offsets is None:
         family_cells = {"raw": list(range(dim))}
+    else:
+        family_cells = {
+            name: list(range(start, end))
+            for name, (start, end, *_rest) in offsets.items()
+        }
+        if any(cell >= dim for cells in family_cells.values() for cell in cells):
+            raise ValueError(
+                f"response_offsets exceed the response dimension {dim}: {family_cells}"
+            )
     all_cells = [cell for cells in family_cells.values() for cell in cells]
 
     auc_by_cell: dict[int, float] = {}
@@ -159,12 +174,20 @@ def predictive_auc(
         if int(labels.sum()) == 0 or int((1 - labels).sum()) == 0:
             continue
         x_j = x_train[train_rows]
-        design = x_j.T @ x_j + ridge * torch.eye(x_j.shape[1], dtype=x_j.dtype, device=x_j.device)
+        # Fit an unpenalized intercept on this cell's observed training rows.
+        # Centering the full pool is insufficient when labels are missing.
+        x_mean = x_j.mean(dim=0, keepdim=True)
+        label_values = labels.to(x_j.dtype)
+        label_mean = label_values.mean()
+        x_centered = x_j - x_mean
+        design = x_centered.T @ x_centered + ridge * torch.eye(
+            x_j.shape[1], dtype=x_j.dtype, device=x_j.device
+        )
         try:
-            beta = torch.linalg.solve(design, x_j.T @ labels.to(x_j.dtype))
+            beta = torch.linalg.solve(design, x_centered.T @ (label_values - label_mean))
         except RuntimeError:
             continue
-        scores = x_test[test_rows] @ beta
+        scores = (x_test[test_rows] - x_mean) @ beta + label_mean
         auc = _rank_auc(scores, (y_test[test_rows, j] > 0).to(torch.int8))
         if auc is not None:
             auc_by_cell[j] = auc
@@ -221,6 +244,7 @@ def cross_validated_probe(
     min_obs: int = 16,
     n_folds: int = 5,
     seed: int = 17,
+    response_offsets: dict[str, tuple[int, int, list[str]]] | None = None,
 ) -> dict[str, object]:
     """Disjoint-fold target-pool probe used as a supervised adaptation ceiling."""
     n = inputs.shape[0]
@@ -243,6 +267,7 @@ def cross_validated_probe(
             masks[torch.from_numpy(test_index)],
             ridge=ridge,
             min_obs=min_obs,
+            response_offsets=response_offsets,
         )
         value = result.get("rmse_overall")
         if isinstance(value, (int, float)):
@@ -271,6 +296,7 @@ def predictive_transfer_report(
     masks: torch.Tensor,
     ridge: float = 1.0,
     min_obs: int = 16,
+    response_offsets: dict[str, tuple[int, int, list[str]]] | None = None,
 ) -> dict[str, object]:
     """Response-direction AUC on a held-out pool: embeddings vs raw features.
 
@@ -280,12 +306,26 @@ def predictive_transfer_report(
     """
     return {
         "embeddings": predictive_auc(
-            train_embeddings, train_responses, train_masks,
-            embeddings, responses, masks, ridge=ridge, min_obs=min_obs,
+            train_embeddings,
+            train_responses,
+            train_masks,
+            embeddings,
+            responses,
+            masks,
+            ridge=ridge,
+            min_obs=min_obs,
+            response_offsets=response_offsets,
         ),
         "raw_features": predictive_auc(
-            train_features, train_responses, train_masks,
-            features, responses, masks, ridge=ridge, min_obs=min_obs,
+            train_features,
+            train_responses,
+            train_masks,
+            features,
+            responses,
+            masks,
+            ridge=ridge,
+            min_obs=min_obs,
+            response_offsets=response_offsets,
         ),
     }
 
@@ -303,10 +343,18 @@ def transfer_report(
     shot_min_obs: int = 2,
     seed: int = 7,
     n_seeds: int = 3,
+    response_offsets: dict[str, tuple[int, int, list[str]]] | None = None,
 ) -> dict[str, object]:
     """One transfer section for a held-out split (per-city + few-shot)."""
     report: dict[str, object] = {
-        "per_city": per_city_retrieval(embeddings, responses, masks, city_keys, k=k),
+        "per_city": per_city_retrieval(
+            embeddings,
+            responses,
+            masks,
+            city_keys,
+            k=k,
+            response_offsets=response_offsets,
+        ),
     }
     if embeddings.shape[0] >= 2:
         city_curves: dict[str, object] = {}
@@ -326,6 +374,7 @@ def transfer_report(
                     min_obs=shot_min_obs,
                     seed=seed,
                     n_seeds=n_seeds,
+                    response_offsets=response_offsets,
                 ),
                 "raw_features": few_shot_probe(
                     features[index],
@@ -336,6 +385,7 @@ def transfer_report(
                     min_obs=shot_min_obs,
                     seed=seed,
                     n_seeds=n_seeds,
+                    response_offsets=response_offsets,
                 ),
             }
         report["few_shot_probe"] = {
@@ -351,6 +401,7 @@ def transfer_report(
                 ridge=ridge,
                 min_obs=probe_min_obs,
                 seed=seed,
+                response_offsets=response_offsets,
             ),
             "raw_features": cross_validated_probe(
                 features,
@@ -359,6 +410,7 @@ def transfer_report(
                 ridge=ridge,
                 min_obs=probe_min_obs,
                 seed=seed,
+                response_offsets=response_offsets,
             ),
         }
     return report

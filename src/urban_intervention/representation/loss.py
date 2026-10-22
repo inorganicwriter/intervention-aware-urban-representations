@@ -57,7 +57,8 @@ def response_alignment_loss(
     queue_ids: torch.Tensor | None = None,
     response_weight: torch.Tensor | None = None,
     queue_response_weight: torch.Tensor | None = None,
-) -> torch.Tensor:
+    return_details: bool = False,
+) -> torch.Tensor | dict[str, object]:
     """Soft-weighted InfoNCE where positive weights = response similarity.
 
     Similar pairs (high response correlation) are pulled together;
@@ -72,6 +73,22 @@ def response_alignment_loss(
     and negative pairs participate, incomparable and duplicate-unit pairs do
     not.
     """
+    if not torch.isfinite(embeddings).all():
+        raise FloatingPointError("Non-finite embedding in response alignment")
+    response_mask = response_mask.bool() & torch.isfinite(responses)
+    if response_weight is not None:
+        response_mask = response_mask & torch.isfinite(response_weight) & (response_weight > 0)
+        response_weight = torch.where(response_mask, response_weight, 0.0)
+    responses = torch.where(response_mask, responses, 0.0)
+    if queue_responses is not None and queue_response_mask is not None:
+        queue_response_mask = queue_response_mask.bool() & torch.isfinite(queue_responses)
+        if queue_response_weight is not None:
+            queue_response_mask = (
+                queue_response_mask & torch.isfinite(queue_response_weight)
+                & (queue_response_weight > 0)
+            )
+            queue_response_weight = torch.where(queue_response_mask, queue_response_weight, 0.0)
+        queue_responses = torch.where(queue_response_mask, queue_responses, 0.0)
     batch_size = embeddings.shape[0]
     emb_sim = embeddings @ embeddings.T / temperature
     resp_sim, valid_pairs = response_similarity_with_validity(
@@ -149,13 +166,22 @@ def response_alignment_loss(
     positive_sum = positive_weights.sum(dim=1)
     valid_anchors = positive_sum > 0
     if not valid_anchors.any():
-        return embeddings.sum() * 0.0
+        loss = embeddings.sum() * 0.0
+        if return_details:
+            return {"loss": loss, "active": False, "valid_anchors": 0,
+                    "valid_pairs": int(valid_pairs.sum().item())}
+        return loss
 
     positive_weights = positive_weights[valid_anchors] / positive_sum[valid_anchors].unsqueeze(1)
     anchor_logits = logits[valid_anchors].masked_fill(~valid_pairs[valid_anchors], -torch.inf)
     log_softmax = anchor_logits - anchor_logits.logsumexp(dim=1, keepdim=True)
     log_softmax = log_softmax.masked_fill(~valid_pairs[valid_anchors], 0.0)
-    return -(positive_weights * log_softmax).sum(dim=1).mean()
+    loss = -(positive_weights * log_softmax).sum(dim=1).mean()
+    if return_details:
+        return {"loss": loss, "active": True,
+                "valid_anchors": int(valid_anchors.sum().item()),
+                "valid_pairs": int(valid_pairs.sum().item())}
+    return loss
 
 
 def embedding_distance_loss(
@@ -269,17 +295,24 @@ def prediction_loss(
         if family not in predictions:
             continue
         pred = predictions[family]
-        target = responses[:, start:end]
-        mask = response_mask[:, start:end]
-        se = response_se[:, start:end] if response_se is not None else None
+        if responses.shape[1] == pred.shape[1] and len(predictions) == 1:
+            target = responses
+            mask = response_mask
+            se = response_se if response_se is not None else None
+            weight_slice = response_weight if response_weight is not None else None
+        else:
+            target = responses[:, start:end]
+            mask = response_mask[:, start:end]
+            se = response_se[:, start:end] if response_se is not None else None
+            weight_slice = response_weight[:, start:end] if response_weight is not None else None
 
         if mask.sum() == 0:
             continue
 
         diff = pred[mask] - target[mask]
-        if response_weight is not None:
+        if response_weight is not None and weight_slice is not None:
             design = torch.nan_to_num(
-                response_weight[:, start:end], nan=0.0
+                weight_slice, nan=0.0
             ).clamp_min(0.0)
             weight = design[mask]
             weight_sum = weight.sum()
@@ -351,3 +384,161 @@ def total_loss(
         }
     l_total = (1 - pred_weight) * l_rep + pred_weight * l_pred
     return {"total": l_total, "representation": l_rep, "prediction": l_pred}
+
+
+def soft_causal_anchoring_loss(
+    predictions: dict[str, torch.Tensor],
+    responses: torch.Tensor,
+    response_mask: torch.Tensor,
+    response_weight: torch.Tensor | None = None,
+    delta: float = 1.0,
+    response_offsets: dict[str, tuple[int, int, list[str]]] | None = None,
+) -> torch.Tensor:
+    """Design-weighted Huber loss on causal response trajectory predictions.
+
+    Primary driver (~85%) in multimodal intervention-conditioned representation learning.
+    Huber loss provides outlier resistance against extreme spatial interventions,
+    and weighting by W_design prioritizes high-confidence econometric counterfactuals.
+    """
+    total: torch.Tensor = torch.zeros((), device=responses.device)
+    count = 0
+    if response_offsets is not None:
+        offsets_map = response_offsets
+    elif responses.shape[1] == 27:
+        offsets_map = RESPONSE_OFFSETS
+    elif len(predictions) == 1:
+        fam = next(iter(predictions.keys()))
+        offsets_map = {fam: (0, responses.shape[1], [])}
+    else:
+        offsets_map = {}
+        curr = 0
+        for fam, pred in predictions.items():
+            dim = pred.shape[1]
+            offsets_map[fam] = (curr, curr + dim, [])
+            curr += dim
+
+    for family, (start, end, *_) in offsets_map.items():
+        if family in predictions:
+            pred = predictions[family]
+        elif len(predictions) == 1:
+            only = next(iter(predictions.values()))
+            pred = (
+                only[:, start:end]
+                if only.shape[1] == responses.shape[1]
+                else None
+            )
+        else:
+            pred = None
+        if pred is None:
+            continue
+        target = responses[:, start:end]
+        mask = response_mask[:, start:end]
+        weight_slice = response_weight[:, start:end] if response_weight is not None else None
+
+        if mask.sum() == 0:
+            continue
+
+        diff = pred[mask] - target[mask]
+        abs_diff = torch.abs(diff)
+        huber_element = torch.where(
+            abs_diff <= delta,
+            0.5 * (diff**2),
+            delta * (abs_diff - 0.5 * delta),
+        )
+
+        if response_weight is not None and weight_slice is not None:
+            design = torch.nan_to_num(
+                weight_slice, nan=0.0
+            ).clamp_min(0.0)
+            weight = design[mask]
+            weight_sum = weight.sum()
+            if weight_sum <= 0:
+                continue
+            total += (weight * huber_element).sum() / weight_sum
+        else:
+            total += huber_element.mean()
+        count += 1
+
+    if count == 0:
+        return torch.tensor(0.0, device=responses.device, requires_grad=True)
+    return total / count
+
+
+def multimodal_causal_loss(
+    embeddings: torch.Tensor,
+    predictions: dict[str, torch.Tensor],
+    responses: torch.Tensor,
+    response_mask: torch.Tensor,
+    response_weight: torch.Tensor | None = None,
+    response_se: torch.Tensor | None = None,
+    anchor_weight: float = 0.85,
+    align_weight: float = 0.15,
+    temperature: float | torch.Tensor = 0.07,
+    delta: float = 1.0,
+    log_var_rep: torch.Tensor | None = None,
+    log_var_pred: torch.Tensor | None = None,
+    response_offsets: dict[str, tuple[int, int, list[str]]] | None = None,
+    queue_embeddings: torch.Tensor | None = None,
+    queue_responses: torch.Tensor | None = None,
+    queue_response_mask: torch.Tensor | None = None,
+    queue_response_se: torch.Tensor | None = None,
+    anchor_ids: torch.Tensor | None = None,
+    queue_ids: torch.Tensor | None = None,
+    queue_response_weight: torch.Tensor | None = None,
+) -> dict[str, torch.Tensor]:
+    """Unified loss function for multimodal intervention-conditioned representations.
+
+    L_total = 0.85 * L_anchor (Huber) + 0.15 * L_align (Soft-InfoNCE)
+    Optionally supports Kendall et al. (2018) uncertainty weighting.
+
+    ``response_se`` is used only by the representation alignment term.  The
+    prediction anchor deliberately keeps the design-only ``response_weight`` so
+    sampling precision does not determine which causal trajectories the
+    supervised head learns.
+    """
+    l_anchor = soft_causal_anchoring_loss(
+        predictions=predictions,
+        responses=responses,
+        response_mask=response_mask,
+        response_weight=response_weight,
+        delta=delta,
+        response_offsets=response_offsets,
+    )
+    l_align = response_alignment_loss(
+        embeddings=embeddings,
+        responses=responses,
+        response_mask=response_mask,
+        temperature=temperature,
+        response_se=response_se,
+        response_weight=response_weight,
+        queue_embeddings=queue_embeddings,
+        queue_responses=queue_responses,
+        queue_response_mask=queue_response_mask,
+        queue_response_se=queue_response_se,
+        anchor_ids=anchor_ids,
+        queue_ids=queue_ids,
+        queue_response_weight=queue_response_weight,
+    )
+
+    if log_var_rep is not None and log_var_pred is not None:
+        prec_align = 0.5 * torch.exp(-log_var_rep)
+        prec_anchor = 0.5 * torch.exp(-log_var_pred)
+        l_total = prec_align * l_align + prec_anchor * l_anchor + 0.5 * (log_var_rep + log_var_pred)
+        return {
+            "total": l_total,
+            "anchor_loss": l_anchor,
+            "align_loss": l_align,
+            "anchor_weight": prec_anchor.detach(),
+            "align_weight": prec_align.detach(),
+            "rep_weight": prec_align.detach(),
+            "pred_weight": prec_anchor.detach(),
+        }
+
+    l_total = anchor_weight * l_anchor + align_weight * l_align
+    return {
+        "total": l_total,
+        "anchor_loss": l_anchor,
+        "align_loss": l_align,
+        "anchor_weight": torch.tensor(anchor_weight, device=embeddings.device),
+        "align_weight": torch.tensor(align_weight, device=embeddings.device),
+    }

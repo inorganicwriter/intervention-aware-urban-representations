@@ -5,6 +5,8 @@
 
 ## 核验与实测更新
 
+2026-10-07：方向 AUC 的逐 cell 截距、站点条件输入版本绑定、轨道球面距离和 cutoff 子图计算已修复。历史邻接表仍缺少有效边日期；轨道快照也被控制匹配读取，已有服务器标签的影响范围须按来源核查。修复与重算范围见 [重算说明](../operations/representation_fix_reprocessing_2026-10-07.md)。下文的“仍未解决”和源码行号属于此前审计状态，不代表本次修复后的实现。
+
 本节由仓库维护者独立复现审计的数值断言（解析解与仓库实现两侧），并记录服务器真实数据实测。
 
 ### 已独立复现（与本文档一致）
@@ -246,6 +248,6 @@ queue 当前保存在线模型产生的旧 detached embedding，没有 momentum 
 
 ## 复现与检查
 
-诊断脚本：`outputs/representation_audit/diagnose_objective.py`；输出：`outputs/representation_audit/numerical_diagnostics.json`。在项目根目录执行 `python outputs/representation_audit/diagnose_objective.py`。脚本只使用人工小型张量，不读取或修改服务器标签；需要项目的 torch/torchvision/pandas 环境。
+上述人工小型张量诊断已完成；一次性诊断脚本已清理，数值记录保留。后续检查使用 `tests/unit/test_representation_training.py`、`tests/unit/test_representation_evaluation.py` 和 `tests/unit/test_representation_weighted_response.py`。
 
 现有检查：`test_representation_training.py`（排除端到端 TestTrainer）、`test_representation_evaluation.py`、`test_representation_weighted_response.py` 共 **51 passed, 7 deselected**。它们确认被覆盖的实现行为，而上述反例说明这些检查不能替代方法有效性审计。

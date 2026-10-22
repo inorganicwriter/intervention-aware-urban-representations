@@ -65,6 +65,10 @@ def write_task(
             raise ValueError("Production Python task lacks formal qualification proof")
         task_details.update(settings.qualification_proof)
     result = pd.concat(frames, ignore_index=True)
+    # The routing-selected method is the authoritative identity for this task;
+    # this also records the cross-city matched variant in the label rows rather
+    # than leaving them indistinguishable from the same-city baseline.
+    result["method"] = method
     result["donor_scope"] = str(task_details.get("donor_scope") or "") or pd.NA
     result["estimator_backend"] = str(
         task_details.get("backend")
@@ -235,6 +239,20 @@ def run_mc_stage(
                     ]
                     atomic_csv(queue, settings.family_queue)
                     return
+                match_details = {
+                    **cross_match_details,
+                    "reason": "cross_city_fixed_control_label_failure",
+                    "label_failure": cross_details,
+                }
+                atomic_json(
+                    {"schema": "cross_city_matching_failure", **match_details},
+                    directory / "cross_city_matching_attempt.json",
+                )
+            else:
+                atomic_json(
+                    {"schema": "cross_city_matching_failure", **cross_match_details},
+                    directory / "cross_city_matching_attempt.json",
+                )
 
     # Round 5: cross-city GSC. The cross-city estimator reads VIIRS
     # partitions for every donor city, so materialise the window across all

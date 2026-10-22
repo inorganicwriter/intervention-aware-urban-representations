@@ -12,7 +12,10 @@ from urban_intervention.representation.dataset import RESPONSE_CONFIG
 
 
 def build_synthetic_model_inputs(
-    tmp_path: Path, n_grids: int = 12, n_cities: int = 4
+    tmp_path: Path,
+    n_grids: int = 12,
+    n_cities: int = 4,
+    include_satellite: bool = False,
 ) -> tuple[Path, int]:
     """Create a synthetic pretraining dataset on disk; return (dir, n_grids).
 
@@ -68,6 +71,18 @@ def build_synthetic_model_inputs(
     units["streetview_assets"] = "[]"
     units["available_modality_count"] = 5
     units["feature_training_mask"] = True
+
+    if include_satellite:
+        rng_sat = np.random.RandomState(888)
+        opening_years = [2016 if i % 2 == 0 else 2020 for i in range(n_grids)]
+        units["opening_year"] = opening_years
+        units["satellite_target_year"] = [2017 if yr <= 2017 else yr - 1 for yr in opening_years]
+        units["satellite_is_temporal_proxy"] = [yr <= 2017 for yr in opening_years]
+        units["satellite_temporal_valid"] = [yr > 2017 for yr in opening_years]
+        units["satellite_available"] = True
+        units["alphaearth_available"] = True
+        for b in range(64):
+            units[f"A{b:02d}"] = rng_sat.normal(0, 1, n_grids)
 
     units.to_parquet(output / "unit_features.parquet", index=False)
 
@@ -166,6 +181,13 @@ def build_synthetic_model_inputs(
             "normalization.json": "dddd",
         },
     }
+    if include_satellite:
+        manifest["satellite_audit"] = {
+            "total_units": n_grids,
+            "temporal_valid_count": int(sum(units["satellite_temporal_valid"])),
+            "temporal_proxy_count": int(sum(units["satellite_is_temporal_proxy"])),
+            "strict_pretreatment": True,
+        }
     (output / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
     )

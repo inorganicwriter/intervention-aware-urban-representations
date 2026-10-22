@@ -47,6 +47,9 @@ working copy，本地冻结目录保持只读。
 | 轨道快照 | 482 快照 × 3.84M 网格 | 同上（方案 A 按开通月） | 同上 |
 | Wikidata adjacency | 19,602 边（44 城） | Wikidata SPARQL（P197） | https://query.wikidata.org |
 | 中心注册表 | 392 中心（44 城 main + 348 subcenter） | McMillen (2001) LWR | 无 |
+| 因果响应生产发布包 | 136,296 单元-变量响应行（已封版冻结） | Python/GPU 估计器（Matching + GSC） | 本地 `data/active/causal/releases/production/` |
+| Google AlphaEarth 嵌入 | 44 城固定 500m 网格；5,048 事件保留，3,297 个合法开通前 64-d 向量、1,751 个缺失 | Google DeepMind / GEE (`GOOGLE/SATELLITE_EMBEDDING/V1/ANNUAL`) | https://developers.google.com/earth-engine/datasets/catalog/GOOGLE_SATELLITE_EMBEDDING_V1_ANNUAL |
+| 街景全景图（360°） | 44 城固定正式网格；3,778 个事件有 7,543 张核验通过的开通前精选图片 | 原始百度全景档案重新绑定实际拍摄位置 | 服务器 `/home/nas/lsr/MIT_summer/data/active/streetview_grid_v2/` |
 
 ## 1. 核心协变量与结果数据（`data/active/curated/`）
 
@@ -70,6 +73,16 @@ working copy，本地冻结目录保持只读。
 | 轨道可达性（处理网格） | `causal/accessibility_features/` | 5,048 处理网格 | 最近站距离/站数/线路数/closeness + 站点属性 |
 | 轨道快照（含 donor） | `causal/transit_snapshots/` | 482 快照 × 全网格 | 按处理时点对齐的 donor 轨道特征（方案 A） |
 | Wikidata 相邻关系 | `reference/transit/wikidata_adjacency.parquet` | 44 城 19,602 边 | P197 拓扑（网络构建/终点站） |
+| Google AlphaEarth 网格嵌入 | `data/active/alphaearth_grid_v2/` | 5,048 处理事件；3,297 个合法开通前向量、1,751 个缺失 | 2026-10-13 按冻结网格多边形重提取，保存几何哈希；完整 64 维作为背景。旧 `alphaearth/` 为站点窗口历史对照 |
+| 独立卫星年度影像 | `data/active/satellite_event_sequences_v2/`，六波段反射率 TIFF、mask 与观测数 | 每事件 −6 至 +3 年 50,480 条；48,465 张可用、5 张低覆盖、2,010 条未结束年度；48,470 张实际影像逐张审计错误 0 | 状态仅使用前六年，30,288 条中 30,283 条可用；后三年及开通当年只归档 |
+| 七字段干预输入 | `data/active/intervention_grid_v1/` | 5,048 处理事件、7 字段和 masks | 2026-10-13 发布；身份与日期匹配冻结清单；未知终点和异常线路数保留 mask，历史来源审阅状态单独记录 |
+| 状态/背景/干预原始输入表 | 本地及服务器项目 `data/active/multimodal_inputs_v1/` | 5,048 事件、44 城 | POI/VIIRS 与房价/人口精确年度 lag1/2/3；AlphaEarth 仅进入背景；城市统计代理来自全体源网格；服务器已绑定完整街景和实际卫星路径，本地保留北京试验计数，模型接口尚待迁移 |
+| 街景全景图（360°） | 服务器 `/home/nas/lsr/MIT_summer/data/active/streetview_grid_v2/` | 5,048 事件全部保留，3,778 个可用、1,270 个缺失；7,543 张实际精选图片 | 实际拍摄位置唯一入正式网格，`capture_month < opening_month`；2,531,781 条候选另外归档，不能当作已确认图片数 |
+| 开通后街景年度档案 | 同一服务器目录的 `streetview_post_assets.parquet`、`streetview_post_event_coverage.parquet` | 0 至 +3 年共 20,192 条事件年度记录；5,489 条有核验通过的图片，共 10,854 张；2,914 个事件至少一年可用 | `capture_month > opening_month`；开通当月不确定，记录全部缺失原因，`state_allowed=false`；复制完成以 `post_manifest.json` 为准 |
+
+2026-10-13 存储核对：完整街景按照用户要求直接复制到服务器项目，Windows 只保留先前 380 张北京试验图片。本地新 AlphaEarth、独立年度卫星及 S/T/C 的 269,738 个文件已全部落盘到服务器正式 NAS 项目并通过 SHA256 校验。服务器输入绑定 37 项、运行路径验证 17 项均通过，44 城实际图片及来源文件抽查可读取；完整状态序列的路径与年度索引一致。传输、绑定及运行验证回执已保存，详见 [输入同步记录](../operations/input_server_sync_2026-10-13.md)。已有完整街景保持原发布清单不变，详见 [街景服务器重建报告](../operations/streetview_server_alignment_2026-10-13.md)。
+
+同日缓存清理：删除服务器传输包和重复解包、街景重建暂存，以及本地传输包、试采图像载荷和代码字节缓存。服务器约释放 8.60 GB、本地约释放 1.59 GB。正式 `data/active/` 数据、原始街景档案、卫星基线复用资产、VIIRS 缓存、审计回执和原始角色备份均保留；移除的目录及保留证据见同步记录中的清理回执。
 
 方法依据：`docs/research/transit_accessibility_method.md`、`docs/research/related_work_literature.md`。
 
@@ -100,7 +113,7 @@ working copy，本地冻结目录保持只读。
 
 ## 3b. 注册表（`data/active/catalog/`）
 
-`datasets.yaml`（32 数据集注册表）、`sources.yaml`、`housing_acquisition_sources.yaml`、
+`datasets.yaml`（39 数据集注册表）、`sources.yaml`、`housing_acquisition_sources.yaml`、
 schemas/（3）、mappings/（4）、inventories/（2）、quality/（2，人工决议）、
 migrations/（2）、snapshots/（11，布局迁移前快照）。
 
@@ -126,10 +139,13 @@ migrations/（2）、snapshots/（11，布局迁移前快照）。
 
 ## 6. 数据流（当前）
 
-```
-raw/staging → curated → 新变量 → feature_store / transit_snapshots
-                                    → 6 轮匹配路由 → 标签 → Response Artifact
-                                                          → 表示学习（独立管线）
+```text
+raw/staging → curated → 协变量 / transit_snapshots
+                          → 6 轮因果估计路由 → Response Release (136,296 行, 冻结)
+                                               ↓ 严格计量筛选 (outputs/event_study_final/family_selection.md)
+                                               ↓ 仅 VIIRS (6-d) & POI (12-d) 同城 Matching + GSC
+                                               ↓
+多模态感知输入 (街景全景图 + AlphaEarth 64-d + 表格先验) → VIGOR 表征学习 → 迁移与语义验证
 ```
 
 ## 已知且已接受的数据特性（非缺陷）
@@ -138,3 +154,4 @@ raw/staging → curated → 新变量 → feature_store / transit_snapshots
 - S2 2018+ 缺失 ~16% 网格（数据源固有）
 - POI 2018/2019 量级断档
 - Wikidata P197 为当前拓扑（研究窗口 2010-2025 内与当年一致）
+- 下游因果监督范围严格受限：因房价样本稀疏及人口平行趋势未过，这两族被正式排除在表征监督之外；仅接纳 VIIRS 与 POI 同城 Matching 和 GSC 作为因果监督信号。

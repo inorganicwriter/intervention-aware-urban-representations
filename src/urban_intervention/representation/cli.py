@@ -69,17 +69,55 @@ def main() -> None:
         help="Output directory for checkpoints and logs",
     )
     parser.add_argument("--embedding-dim", type=int, default=128)
-    parser.add_argument("--hidden-dims", type=int, nargs="+", default=[256, 128])
+    parser.add_argument("--training-mode", choices=("joint", "viirs_only", "poi_only"),
+                        default=None, help="Shared STC mode; auto-selected for joint STC bundles")
+    parser.add_argument("--max-grad-norm", type=float, default=1.0,
+                        help="Global gradient clip threshold; 0 disables clipping")
+    parser.add_argument("--gradient-diagnostics-interval", type=int, default=1,
+                        help="Record task gradients every N batches; 0 disables diagnostics")
+    parser.add_argument("--prediction-inputs", choices=("full", "tc_only", "z_only"), default="full")
+    parser.add_argument("--hidden-dims", type=int, nargs="+", default=[256, 128], help="Legacy tabular model MLP widths; ignored by STC")
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--temperature", type=float, default=0.07)
     parser.add_argument(
-        "--rep-alpha", type=float, default=0.5, help="InfoNCE vs MSE weight in representation loss"
+        "--rep-alpha", type=float, default=0.5, help="Legacy contrastive_legacy only; ignored by multimodal_causal"
     )
     parser.add_argument(
         "--pred-weight",
         type=float,
         default=0.5,
-        help="Prediction loss weight (0=rep only, 1=pred only)",
+        help="Legacy contrastive_legacy only; use loss-anchor-weight/loss-align-weight for multimodal_causal",
+    )
+    parser.add_argument(
+        "--loss-type",
+        choices=("multimodal_causal", "contrastive_legacy"),
+        default="multimodal_causal",
+        help="Loss objective: multimodal_causal (default, Soft Causal Anchoring Huber + InfoNCE) "
+        "or contrastive_legacy (historical InfoNCE + MSE baseline)",
+    )
+    parser.add_argument(
+        "--loss-anchor-weight",
+        type=float,
+        default=0.85,
+        help="Weight for causal trajectory Huber anchoring loss (default: 0.85)",
+    )
+    parser.add_argument(
+        "--loss-align-weight",
+        type=float,
+        default=0.15,
+        help="Weight for response alignment InfoNCE loss (default: 0.15)",
+    )
+    parser.add_argument(
+        "--loss-huber-delta",
+        type=float,
+        default=1.0,
+        help="Huber delta threshold for outlier resistance (default: 1.0)",
+    )
+    parser.add_argument(
+        "--allow-satellite-proxy",
+        action="store_true",
+        default=False,
+        help="Allow contemporary/post-treatment satellite proxy embeddings (default: False, strict pre-treatment only)",
     )
     parser.add_argument("--lr", type=float, default=1e-3, dest="learning_rate")
     parser.add_argument("--weight-decay", type=float, default=1e-5)
@@ -119,10 +157,56 @@ def main() -> None:
         help="Enable DINOv2 image encoder (requires streetview data)",
     )
     parser.add_argument(
+        "--use-satellite",
+        action="store_true",
+        help="Legacy: AlphaEarth encoder; STC: independent 6-year satellite sequence encoder",
+    )
+    parser.add_argument(
+        "--use-multimodal",
+        action="store_true",
+        default=False,
+        help="Enable full multimodal mode: sets --use-images, --use-satellite, and --use-cross-view-synergy",
+    )
+    parser.add_argument(
+        "--require-multimodal",
+        action="store_true",
+        default=False,
+        help="Enforce mandatory multimodal inputs: require both valid pre-treatment satellite and street-view images for training units",
+    )
+    parser.add_argument(
+        "--require-satellite",
+        action="store_true",
+        default=False,
+        help="Require valid pre-treatment satellite embeddings for training units",
+    )
+    parser.add_argument(
+        "--require-streetview",
+        action="store_true",
+        default=False,
+        help="Require valid pre-treatment street-view images for training units",
+    )
+    parser.add_argument(
+        "--satellite-embeddings",
+        type=Path,
+        default=None,
+        help="Path to AlphaEarth satellite embeddings parquet file",
+    )
+    parser.add_argument(
+        "--use-cross-view-synergy",
+        action="store_true",
+        help="Legacy VIGOR cross-view module only; STC uses StateEncoder fusion",
+    )
+    parser.add_argument(
+        "--synergy-heads",
+        type=int,
+        default=4,
+        help="Number of attention heads in cross-view synergy module (default: 4)",
+    )
+    parser.add_argument(
         "--image-pooling",
         choices=("max", "mean", "meanmax"),
         default="max",
-        help="Street-view pooling across images per grid (default: max)",
+        help="Legacy image pooling only; STC uses time-aware attention",
     )
     parser.add_argument(
         "--conditioning",
@@ -205,10 +289,17 @@ def main() -> None:
         sys.exit(1)
 
     args.data_dir.resolve()
-    args.output.resolve()
+    if args.use_multimodal:
+        args.use_images = True
+        args.use_satellite = True
+        args.use_cross_view_synergy = True
 
     common = dict(
         model_inputs_dir=args.data_dir,
+        training_mode=args.training_mode,
+        max_grad_norm=args.max_grad_norm or None,
+        gradient_diagnostics_interval=args.gradient_diagnostics_interval,
+        prediction_inputs=args.prediction_inputs,
         embedding_dim=args.embedding_dim,
         hidden_dims=tuple(args.hidden_dims),
         dropout=args.dropout,
@@ -222,6 +313,10 @@ def main() -> None:
         use_images=args.use_images,
         max_images_per_grid=args.max_images,
         image_pooling=args.image_pooling,
+        use_satellite=args.use_satellite,
+        satellite_embeddings_path=args.satellite_embeddings,
+        use_cross_view_synergy=args.use_cross_view_synergy,
+        synergy_heads=args.synergy_heads,
         conditioning=args.conditioning if args.conditioning != "none" else None,
         station_attributes_path=args.station_attributes,
         se_shrinkage=args.se_shrinkage,
@@ -237,6 +332,14 @@ def main() -> None:
         run_baselines=args.baselines,
         run_transfer=args.transfer,
         visualize=args.visualize,
+        loss_type=args.loss_type,
+        loss_anchor_weight=args.loss_anchor_weight,
+        loss_align_weight=args.loss_align_weight,
+        loss_huber_delta=args.loss_huber_delta,
+        allow_satellite_proxy=args.allow_satellite_proxy,
+        require_multimodal=args.require_multimodal,
+        require_satellite=args.require_satellite,
+        require_streetview=args.require_streetview,
     )
 
     try:

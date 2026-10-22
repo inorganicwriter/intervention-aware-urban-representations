@@ -13,9 +13,11 @@ from ..evaluation import (
     bootstrap_ci,
     cosine_similarity,
     permutation_test,
+    planning_semantic_classification_metrics,
     probe_rmse,
     response_similarity_with_validity,
     retrieval_metrics,
+    trajectory_prediction_metrics,
 )
 from ..model import ResponseEmbeddingModel
 from ..transfer import predictive_transfer_report, transfer_report
@@ -56,6 +58,10 @@ def build_evaluation_report(
     """
     pools = {name: _collect_pool(model, loader, device) for name, loader in loaders.items()}
     train_pool = pools.get("train")
+    response_offsets = None
+    test_loader = loaders.get("test")
+    if test_loader is not None and hasattr(test_loader.dataset, "response_offsets"):
+        response_offsets = test_loader.dataset.response_offsets()
     report: dict[str, object] = {
         "config": {
             "k": k,
@@ -78,11 +84,17 @@ def build_evaluation_report(
         if pool is not None and pool["embeddings"].shape[0] >= 2:
             emb_cos = cosine_similarity(pool["embeddings"])
             sim_resp, valid_pairs = response_similarity_with_validity(
-                pool["responses"], pool["masks"]
+                pool["responses"],
+                pool["masks"],
+                response_offsets=response_offsets,
             )
             entry["n_units"] = int(pool["embeddings"].shape[0])
             entry["retrieval"] = retrieval_metrics(
-                pool["embeddings"], pool["responses"], pool["masks"], k=k
+                pool["embeddings"],
+                pool["responses"],
+                pool["masks"],
+                k=k,
+                response_offsets=response_offsets,
             )
             entry["bootstrap_ci"] = bootstrap_ci(
                 emb_cos,
@@ -100,10 +112,28 @@ def build_evaluation_report(
                 n_perm=n_perm,
                 seed=seed,
                 max_units=max_perm_units,
+                response_offsets=response_offsets,
             )
             entry["raw_feature_baseline"] = retrieval_metrics(
-                pool["features"], pool["responses"], pool["masks"], k=k
+                pool["features"],
+                pool["responses"],
+                pool["masks"],
+                k=k,
+                response_offsets=response_offsets,
             )
+            if pool.get("predictions"):
+                entry["trajectory_prediction"] = trajectory_prediction_metrics(
+                    predictions=pool["predictions"],
+                    responses=pool["responses"],
+                    response_mask=pool["masks"],
+                    response_offsets=response_offsets,
+                )
+                entry["semantic_classification"] = planning_semantic_classification_metrics(
+                    predictions=pool["predictions"],
+                    responses=pool["responses"],
+                    response_mask=pool["masks"],
+                    response_offsets=response_offsets,
+                )
             if train_pool is not None and train_pool["embeddings"].shape[0] >= 2:
                 entry["probe"] = {
                     "embeddings": probe_rmse(
@@ -115,6 +145,7 @@ def build_evaluation_report(
                         pool["masks"],
                         ridge=ridge,
                         min_obs=probe_min_obs,
+                        response_offsets=response_offsets,
                     ),
                     "raw_features": probe_rmse(
                         train_pool["features"],
@@ -125,6 +156,7 @@ def build_evaluation_report(
                         pool["masks"],
                         ridge=ridge,
                         min_obs=probe_min_obs,
+                        response_offsets=response_offsets,
                     ),
                 }
             if run_transfer:
@@ -139,6 +171,7 @@ def build_evaluation_report(
                     ridge=ridge,
                     probe_min_obs=probe_min_obs,
                     n_seeds=transfer_n_seeds,
+                    response_offsets=response_offsets,
                 )
             if run_transfer and train_pool is not None and train_pool["embeddings"].shape[0] >= 2:
                 entry["predictive_transfer"] = predictive_transfer_report(
@@ -152,6 +185,7 @@ def build_evaluation_report(
                     pool["masks"],
                     ridge=ridge,
                     min_obs=probe_min_obs,
+                    response_offsets=response_offsets,
                 )
             if visualize:
                 plot_dir = visualization_dir or Path.cwd() / "outputs" / "representation"
@@ -182,9 +216,10 @@ def build_evaluation_report(
                 fit_features=(
                     train_pool_for_baselines["features"]
                     if train_pool_for_baselines is not None
-                    and train_pool_for_baselines["features"].shape[0] >= 2
+                    and                     train_pool_for_baselines["features"].shape[0] >= 2
                     else None
                 ),
+                response_offsets=response_offsets,
             )
             if (
                 train_pool_for_baselines is not None
@@ -198,13 +233,14 @@ def build_evaluation_report(
                     test_pool["responses"],
                     test_pool["masks"],
                     epochs=baseline_ae_epochs,
-                    hidden_dims=model.hidden_dims,
-                    embedding_dim=model.embedding_dim,
+                    hidden_dims=getattr(model, "hidden_dims", (128,)),
+                    embedding_dim=getattr(model, "embedding_dim", getattr(model, "z_dim", 128)),
                     device=device,
                     k=k,
                     n_perm=n_perm,
                     n_boot=n_boot,
                     seed=seed,
+                    response_offsets=response_offsets,
                 )
         else:
             baselines["test"] = {"note": "pool empty or smaller than 2 units"}

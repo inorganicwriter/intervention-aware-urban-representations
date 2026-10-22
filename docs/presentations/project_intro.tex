@@ -1,9 +1,7 @@
-% 编译：xelatex project_intro.tex （需 ctex；Windows 下 fontset=windows）
+% English, 15-minute seminar; edit this source in the existing document editor.
 \documentclass[aspectratio=169,11pt]{beamer}
-\usepackage[fontset=windows]{ctex}
-\usepackage{amsmath,amssymb}
-\usepackage{booktabs}
-\usepackage{array}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,booktabs,array,graphicx}
 \usetheme{Madrid}
 \setbeamertemplate{navigation symbols}{}
 \setbeamertemplate{itemize items}[circle]
@@ -11,538 +9,325 @@
 \setbeamerfont{block title}{size=\small}
 \setbeamersize{text margin left=6mm,text margin right=6mm}
 \setlength{\tabcolsep}{4pt}
-\usepackage{graphicx}
-\graphicspath{{./}{figures/}{docs/presentations/figures/}}
-
+\graphicspath{{docs/presentations/figures/en/}}
 \newcommand{\key}[1]{\textbf{\color{blue!55!black}#1}}
-
-\title{因果响应标签与干预条件化城市表示学习}
-\subtitle{项目介绍}
-\author{}
-\institute{}
-\date{}
-
+\newcommand{\flowfigure}[1]{\includegraphics[width=.97\textwidth,height=.62\textheight,keepaspectratio]{#1.pdf}}
+\newcommand{\chartfigure}[1]{\includegraphics[width=.98\textwidth,height=.69\textheight,keepaspectratio]{#1.pdf}}
+\title[Learning How Cities Respond]{Learning How Cities Respond}
+\subtitle{Intervention-Conditioned Urban Representations\\[.6em]\small Dynamic responses to rail station openings}
+\author{}\institute{}\date{}
 \begin{document}
+\section{Introduction}
+\begin{frame}[plain]\titlepage\end{frame}
 
-\begin{frame}[plain]
-  \titlepage
-\end{frame}
-
-\section{Background}
-
-\begin{frame}{现实背景：轨道扩张与站点开发}
-  \small
-  \begin{itemize}
-    \item 过去二十年，中国城市轨道交通快速扩张：开通城市数量与运营里程持续增长，
-      多个城市进入网络化运营阶段
-    \item 站点开通是典型的城市干预：同时改变可达性、土地价值、商业集聚与人口分布，
-      也是 TOD 与站点综合开发政策的落点
-    \item 房价挂牌、POI、夜间灯光、人口与卫星遥感等多源数据覆盖度提升，
-      使站点级、多结果、跨城市的量化评估成为可能
-    \item 决策需求超出"平均效应"：需要知道哪些站点、在什么条件下、对哪些结果
-      响应更强
-  \end{itemize}
-\end{frame}
-
-\begin{frame}{中国轨道扩张的政策背景}
-  \small
-  \begin{itemize}
-    \item 2008--2015 年间，中国城市轨道交通经历快速扩张与网络化运营阶段，
-      开通城市与运营里程持续增长（Lu et al., 2016）
-    \item 国家新型城镇化规划与五年规划将城市轨道交通列为重点方向（Bao, 2018）
-    \item 站点综合开发与 TOD 逐步成为轨道建设的主流模式，站点成为土地、
-      商业与人口政策的作用点（Wang \& Xia, 2024）
-    \item 早期证据表明，轨道投资会重塑沿线土地与住房市场（Zheng \& Kahn, 2008）
-  \end{itemize}
-\end{frame}
-
-\begin{frame}{站点影响的经济机制}
-  \small
-  \begin{itemize}
-    \item 可达性：轨道改善通勤与就业可达范围，改变出行与选址行为
-      （Cervero \& Kockelman, 1997; Baum-Snow \& Kahn, 2000）
-    \item 资本化：站点邻近性反映在住房与商业物业价格中
-      （Gibbons \& Machin, 2005; Debrezion et al., 2007）
-    \item 集聚与增长：地铁网络与城市空间扩张、人口与经济活动的再分布相关
-      （Gonzalez-Navarro \& Turner, 2018）
-    \item 分配与公平：轨道诱导的绅士化与 TOD 可负担性张力（Dong, 2017）
-  \end{itemize}
-  \medskip
-  \begin{block}{含义}
-    机制的方向与强度依赖本地条件，这正是响应异质性与跨城市迁移必要性的来源。
-  \end{block}
-\end{frame}
-
-\begin{frame}{本样本的时空覆盖}
-  \begin{center}
-    \includegraphics[width=0.92\textwidth]{intro_sample_years.pdf}
-  \end{center}
-  \vspace{-0.3em}
-  \footnotesize 冻结处理清单：5{,}048 个站点开通事件，覆盖 2010--2025 年，
-  为标签构建提供跨年份、跨城市的处理变异。
-\end{frame}
-
-\begin{frame}{研究问题}
-  \small
-  \begin{itemize}
-    \item 轨道交通站点开通如何改变周边：住房价格、POI（数量/熵/商业占比/交通可达）、
-      夜间灯光、人口
-    \item 关注动态路径：开通后逐期效应（月频 1--24，年频 1--3）
-    \item 关注异质性：谁受益、受益多少、持续多久，以及不同城市之间能否比较
-  \end{itemize}
-  \medskip
-  \begin{block}{研究意义}
-    轨道投资规模大、周期长。理解响应异质性是选址、时序与配套政策的前提；
-    若能学习"响应相似"的城市表示，可把已有评估迁移到未开通或待评估城市。
-  \end{block}
-\end{frame}
-
-\begin{frame}{响应为什么异质}
-  \small
-  \begin{itemize}
-    \item 可达性改善：通勤时间、换乘便利、就业与活动可达范围
-    \item 集聚与商业重组：新商业进入、既有商业挤出、业态结构变化
-    \item 分流与替代：与既有站点、公交与道路网络的竞争关系
-    \item 预期与资本化：开通前的价格预期、开发时序与土地供给响应
-    \item 调节变量：站点类型（新线/延伸/换乘/终点）、网络位置、城市规模、
-      周边人口与配套
-  \end{itemize}
-  \medskip
-  \begin{block}{含义}
-    同一干预在不同地点可正可负、可快可慢，单一平均效应不足以支持选址与配套决策。
-  \end{block}
-\end{frame}
-
-\begin{frame}{从单案例到跨城市}
-  \small
-  \begin{itemize}
-    \item 传统评估回答"这个城市或线路发生了什么"，结论常受本地条件约束
-    \item 规划与投资决策更关心"哪些地方与已知案例相似、可能产生类似响应"
-    \item 这要求把每个事件的响应路径变成可比较、可检索、可迁移的对象，
-      而不只是若干回归系数
-    \item 迁移的三个层次：同结果跨城市、同城市跨结果、新城市零样本或少样本
-  \end{itemize}
-\end{frame}
-
-\begin{frame}{主要困难}
-  \small
-  \begin{itemize}
-    \item 无实验：每城市开通站点有限、时点不同，选址与开通时点内生
-    \item 多期多结果：单一 DiD 系数刻画不了完整响应路径，更无法跨结果比较
-    \item 样本异质：城市规模、网络形态、站点类型差异大，处理前特征维度高
-    \item 逐案重跑：每评估一个城市或线路都要重新构造对照与估计
-    \item 缺少可迁移表示：既有研究多为单城市或单线路结论，难以直接外推
-  \end{itemize}
-\end{frame}
-
-\begin{frame}{传统工具与局限}
-  \small
-  \begin{tabular}{p{0.24\textwidth}p{0.34\textwidth}p{0.34\textwidth}}
-    \toprule
-    工具 & 作用 & 局限 \\
-    \midrule
-    DiD / TWFE 事件研究 & 动态处理效应、可加固定效应 & 平行趋势敏感；逐案重估 \\
-    合成控制（SCM） & 单处理单元的反事实路径 & 一次一个处理单元，难规模化 \\
-    广义合成控制（GSC） & 交互固定效应、可处理多个处理单元 & 依赖线性因子结构 \\
-    矩阵补全 & 面板反事实填充、不确定性完整 & 结果逐网格独立，不做响应相似性 \\
-    匹配/合成对照 & 控制处理前差异 & 匹配协变量与设计诊断决定可信度 \\
-    \bottomrule
-  \end{tabular}
-  \medskip
-  \begin{block}{现有工具的不足}
-    这些工具产出逐任务的响应估计，但不产出"任务之间响应是否相似"的可迁移表示，
-    也没有把估计质量显式带入下游学习。
-  \end{block}
-\end{frame}
-
-\begin{frame}{项目核心思路}
-  \small
-  \begin{block}{把因果估计本身当作监督}
-    对每个处理事件 $i$ 得到响应路径 $r_i$（跨 horizon 与结果的效应向量）；学习
-    $f:\text{处理前特征}\to\mathbb{R}^d$，使
-    $\mathrm{sim}_{\text{emb}}(f_i,f_j)$ 与 $\mathrm{sim}_{\text{resp}}(r_i,r_j)$ 一致。
-  \end{block}
-  \begin{itemize}
-    \item 标签不是人工标注，而是设计型因果估计：matched 事件研究、GSC、矩阵补全
-    \item 估计质量显式进入下游：预趋势、holdout、CV MSPE 等诊断决定监督资格与
-      逐标签可靠性权重
-    \item 产出两层资产：可审计的因果响应标签库与响应对齐的城市表示
-  \end{itemize}
-\end{frame}
-
-\begin{frame}{从政策问题到学习任务}
-  \small
-  \begin{itemize}
-    \item 事件 $i$：处理前特征 $x_i$（多模态，lag 1--3）、响应路径 $r_i$
-      （跨 horizon 与结果的效应向量）
-    \item 目标：学习 $f$，使嵌入相似度与响应相似度一致，并迁移到训练未见城市
-    \item 标签来自设计型因果估计而非人工标注；识别诊断决定标签资格与可靠性权重
-    \item 两个评价维度：检索（近邻是否共享响应）与迁移（新城市的方向、幅度、
-      形状预测）
-  \end{itemize}
-\end{frame}
-
-\begin{frame}{项目流程}
-  \begin{center}
-    \includegraphics[width=\textwidth]{intro_pipeline.pdf}
-  \end{center}
-\end{frame}
-
-\begin{frame}{项目目标与贡献}
-  \small
-  \begin{itemize}
-    \item 资产：覆盖 5{,}048 个站点事件的响应标签库（多估计量、多结果、可审计）
-    \item 方法：因果响应监督的表示学习框架（软标签对比、预测头、可靠性权重）
-    \item 评估：以响应几何为准的检索与迁移协议，含外观/机会基线与城市级交叉验证
-    \item 边界：系统检验因果监督何时有效、何时失效，给出可迁移性边界
-  \end{itemize}
+\begin{frame}{Why do places respond differently?}
+\small
+\begin{itemize}
+ \item Rail expansion and transit-oriented development (TOD) connect station openings with land use, businesses and population change.
+ \item Access, price capitalization and agglomeration vary with network position, land supply and local demand.
+ \item Richer urban data support dynamic comparisons across places and outcomes.
+\end{itemize}
+\begin{block}{The planning question}
+Can past station-opening responses help us compare potential responses in held-out cities?
+\end{block}
+\footnotesize Lu et al. (2016); Wang \& Xia (2024); Cervero \& Kockelman (1997);
+Gonzalez-Navarro \& Turner (2018).
 \end{frame}
 
 \section{Related Work}
 
-\begin{frame}{相关文献（1）：面板因果估计}
-  \small
-  \begin{itemize}
-    \item 双重差分与事件研究：Callaway \& Sant'Anna (2021)；Sun \& Abraham (2021)；
-      Goodman-Bacon (2021)
-    \item 合成控制与广义合成控制：Abadie \& Gardeazabal (2003)；Abadie, Diamond
-      \& Hainmueller (2010)；Xu (2017)
-    \item 矩阵补全：Athey, Bayati, Doudchenko, Imbens \& Khosravi (2021)
-    \item 匹配/合成对照与诊断：Imai, Kim \& Wang (2023)；Roth (2022)；
-      Rambachan \& Roth (2023)
-  \end{itemize}
-  \medskip
-  \begin{block}{本项目的做法}
-    不发明新的估计量：在同一批事件上并行运行三种估计量，用识别诊断决定哪些标签
-    进入监督、以多大权重进入，并把发布冻结成可复现资产。
-  \end{block}
+\begin{frame}{Related Work: transport effects and causal methods}
+\small
+\begin{itemize}
+ \item \key{Transport effects}: rail access, firms, employment and population (Mayer \& Trevien, 2017); subways and urban growth (Gonzalez-Navarro \& Turner, 2018).
+ \item \key{Space and timing}: housing and anticipation (Diao et al., 2017); neighborhood change and spillovers (Bardaka et al., 2018).
+ \item \key{Counterfactuals}: matching (Imai et al., 2023), GSC (Xu, 2017), MC (Athey et al., 2021).
+ \item \key{Dynamic identification}: staggered adoption and heterogeneity (Sun \& Abraham, 2021); pre-trends and sensitivity (Roth, 2022; Rambachan \& Roth, 2023).
+\end{itemize}
+\begin{block}{Our link}
+Organize grid-level dynamic responses, method sources, support and diagnostics into traceable learning targets.
+\end{block}
 \end{frame}
 
-\begin{frame}{相关文献（2）：交通基础设施影响评估}
-  \small
-  \begin{itemize}
-    \item 铁路/轨道开通的局部影响：Gibbons \& Machin (2005)；
-      Gonzalez-Navarro \& Turner (2018)
-    \item 中国城市轨道与土地利用/房价：Zheng \& Kahn (2008) 等
-    \item 共同点：以个别城市或线路为对象，报告若干结果的平均或动态效应
-  \end{itemize}
-  \medskip
-  \begin{block}{现有文献的不足}
-    缺少跨城市、多结果、动态路径的系统性标签库，也缺少把响应形状作为可检索、
-    可迁移对象的表示学习框架。
-  \end{block}
+\begin{frame}{Related Work: urban representations and response learning}
+\small
+\begin{tabular}{p{.24\textwidth}p{.67\textwidth}}
+\toprule
+Research area & Examples and focus\\
+\midrule
+Urban representations & Urban2Vec: street views and POIs; RegionDCL: buildings and POIs\\
+Cross-city transfer & FLORAL: multimodal knowledge for data-limited cities\\
+Causal urban learning & Weather2vec: spatial confounding; CauOD: flow prediction; CGNet-PIE: planning intervention effects\\
+\bottomrule
+\end{tabular}
+\begin{block}{Response supervision}
+Pre-treatment features enter the encoder. Estimated opening responses define the target.
+We test response retrieval and prediction in held-out cities.
+\end{block}
+\footnotesize Wang et al. (2020); Li et al. (2023); Wei et al. (2016);
+Tec et al. (2023); Zeng et al. (2022); Fang et al. (2025).
 \end{frame}
 
-\begin{frame}{相关文献（3）：城市表示学习与遥感表征}
-  \small
-  \begin{itemize}
-    \item 对比/自监督表示：SimCLR（Chen et al., 2020）；MoCo（He et al., 2020）；
-      SupCon（Khosla et al., 2020）；DINOv2（Oquab et al., 2024）
-    \item 卫星影像与城市/贫困制图：Jean et al. (2016)；MOSAIKS（Rolf et al., 2021）
-    \item 监督信号通常来自图像增强、任务标签或下游指标
-  \end{itemize}
-  \medskip
-  \begin{block}{与本项目的区别}
-    本项目使用因果估计的响应路径作为软标签监督，目标是让嵌入几何与干预响应几何
-    一致，而不是图像或外观相似，也不是单一任务精度。
-  \end{block}
+\section{Problem and Data}
+
+\begin{frame}{Problem setup: inputs, targets and tasks}
+\small
+\begin{block}{Each grid-level opening event}
+Pre-treatment features $x_i$; frozen response signature $r_i$; observation mask $m_i$.
+Learn $f:x_i\mapsto e_i$ and evaluate in held-out cities.
+\end{block}
+\begin{tabular}{p{.24\textwidth}p{.43\textwidth}p{.24\textwidth}}
+\toprule
+Task & Question & Metric\\
+\midrule
+Shape retrieval (main) & Do embedding neighbors share response shapes? & $\mathrm{nn\_corr@5}$\\
+Magnitude prediction & How much response value can we recover? & RMSE\\
+Direction prediction & Can we predict the response sign? & Sign accuracy\\
+\bottomrule
+\end{tabular}
+\par\medskip\footnotesize Causal analysis covers housing, VIIRS, POI and population.
+Current learning experiments use VIIRS and POI; masks and support define valid comparisons.
 \end{frame}
 
-\begin{frame}{相关文献（4）：与因果表示学习的边界}
-  \small
-  \begin{itemize}
-    \item 因果表示学习（CRL，Sch\"olkopf et al., 2021）的目标是从观测中学习
-      潜在因果变量与结构
-    \item 本项目不是 CRL：因果结构由设计型估计流程给定并冻结，表示学习只负责把
-      响应相似性迁移到未见城市
-    \item 与因果监督的预测模型的区别：不预测单个效应，而是学习可用于检索、比较
-      与迁移的嵌入空间
-  \end{itemize}
+\begin{frame}{Data: station openings across 44 cities}
+\centering\includegraphics[width=.98\textwidth,height=.47\textheight,keepaspectratio]{intro_sample_years.pdf}
+\par\raggedright\small
+\begin{itemize}
+ \item 5{,}048 events in 2010--2025; fixed $500\,\mathrm m\times500\,\mathrm m$ grids.
+ \item VIIRS: 6 horizons, 1--24 months; POI: 4 outcomes $\times$ 3 years.
+ \item Inputs: annual housing, POI, lights, population and Sentinel-2 features; 1--3 year lags.
+\end{itemize}
+\footnotesize Eligible labels depend on coverage and design support. Preprocessing uses training-side cities.
 \end{frame}
 
-\begin{frame}{定位对照}
-  \small
-  \begin{tabular}{p{0.26\textwidth}p{0.31\textwidth}p{0.35\textwidth}}
-    \toprule
-    维度 & 既有工作 & 本项目 \\
-    \midrule
-    标签来源 & 人工标注/图像增强/单一任务 & 设计型因果估计的响应路径 \\
-    标签质量 & 通常视为等权真值 & 识别诊断决定资格与可靠性权重 \\
-    迁移单位 & 单城市/单线路结论 & 跨城市响应相似性的嵌入检索 \\
-    评估 & 平均效应/拟合精度 & 响应检索、外观/机会基线、城市级 CV \\
-    资产 & 论文表格 & 冻结标签库、可复现流水线与审计 \\
-    \bottomrule
-  \end{tabular}
+\section{Causal Methods}
+
+\begin{frame}{Causal labels: method routing and a frozen dataset}
+\centering\flowfigure{intro_routing}
+\par\raggedright\footnotesize Each grid and outcome family uses one assigned estimator.
+Method panels describe their own supported samples. Responses, masks, method sources and diagnostics are frozen together.
 \end{frame}
 
-\section{方法与资产}
-
-\begin{frame}{数据与事件}
-  \small
-  \begin{itemize}
-    \item 冻结处理清单：5{,}048 个站点开通事件（城市、网络、开通月份）
-    \item 结果族与 horizon：住房价格与夜间灯光（月频 1--24）；POI 四指标与人口
-      （年频 1--3）
-    \item 处理前特征：房价、POI、灯光、人口、Sentinel-2 的 1--3 年 lag；
-      标准化参数只用训练城市拟合
-    \item 可选输入：街景图像（冻结 DINOv2 编码器），默认关闭
-  \end{itemize}
+\begin{frame}{Matching: a grid-level difference-in-differences label}
+\[
+r^{\mathrm{match}}_{i,h}
+=\big(Y^{\mathrm{post}}_{i,h}-\overline Y^{\mathrm{pre}}_i\big)
+-\big(Y^{\mathrm{post}}_{c(i),h}-\overline Y^{\mathrm{pre}}_{c(i)}\big).
+\]
+\begin{itemize}
+ \item $c(i)$ is the fixed matched control. Each grid receives its own response profile.
+ \item Monthly baseline: months $-18$ to $-7$, leaving a six-month anticipation window.
+ \item Annual baseline: the year before opening; post values follow outcome-specific horizon rules.
+ \item Identification relies on comparable untreated trends and suitable controls; anticipation and spillovers shape design choices.
+\end{itemize}
+\footnotesize Imai et al. (2023). Grid labels and pooled event-study coefficients are distinct objects.
 \end{frame}
 
-\begin{frame}{监督规模}
-  \begin{center}
-    \includegraphics[width=0.86\textwidth]{intro_support.pdf}
-  \end{center}
+\begin{frame}{GSC and MC: shared structure for counterfactuals}
+\small
+\begin{columns}[T]
+\begin{column}{.48\textwidth}
+\begin{block}{GSC: common factors}
+\[
+Y_{it}(0)=a_i+b_t+\ell_i^\top f_t+\varepsilon_{it}
+\]
+\begin{itemize}
+ \item Untreated controls estimate time factors.
+ \item Treated pre-periods estimate loadings and intercepts.
+ \item Cross-validation selects rank; project the post-period counterfactual.
+\end{itemize}
+\end{block}
+\end{column}
+\begin{column}{.48\textwidth}
+\begin{block}{MC: low-rank completion}
+\[
+\widehat Y_{it}(0)=\widehat a_i+\widehat b_t+\widehat L_{it}
+\]
+\begin{itemize}
+ \item Fit observed untreated cells.
+ \item A nuclear norm penalty controls the low-rank residual.
+ \item Fill treated post-period counterfactuals.
+\end{itemize}
+\end{block}
+\end{column}
+\end{columns}
+\par\medskip\key{Response}: $r_{i,h}=Y_{i,h}-\widehat Y_{i,h}(0)$.
+Identification relies on stable shared structure and sufficient controls and pre-period support.
+\par\footnotesize Xu (2017); Athey et al. (2021). GSC bootstrap and MC jackknife quantify model-conditional uncertainty.
 \end{frame}
 
-\begin{frame}{因果标签流水线}
-  \small
-  \begin{columns}[T]
-    \begin{column}{0.55\textwidth}
-      \begin{itemize}
-        \item 匹配：同城 donor 选择与 holdout 边界
-        \item 广义合成控制（GSC）：交互固定效应，支持多处理单元
-        \item 矩阵补全（MC）：固定 $\lambda$ 的单元 jackknife 推断
-        \item 诊断门禁：预趋势、holdout 比率、CV MSPE、支持观测数
-        \item 发布：带内容哈希与审计记录的冻结版本
-      \end{itemize}
-    \end{column}
-    \begin{column}{0.45\textwidth}
-      \includegraphics[width=\textwidth]{intro_weight_curve.pdf}\\[0.2em]
-      \footnotesize 可靠性权重
-      $W=A\cdot e^{-\gamma D}\cdot p^{\alpha}$：资格 $A$、设计不可靠度 $D$、
-      精度项 $p$；逐方法与方法内结果族归一化。
-    \end{column}
-  \end{columns}
+\begin{frame}{Event study: pooled dynamics and grid-level labels}
+\[
+Y_{ut}=a_u+b_t+
+\sum_{h\ne-1}\beta_h T_u\,\mathbf 1\{t-E_{s(u)}=h\}+\varepsilon_{ut}.
+\]
+\begin{itemize}
+ \item Unit and time fixed effects absorb stable differences and common changes.
+ \item Matched controls use the treated event's clock $E_{s(u)}$; $h=-1$ is the zero reference.
+ \item $\beta_h$ summarizes pooled dynamics; $r_{i,h}$ provides grid-level learning supervision.
+ \item Released matching curves use TWFE. Staggered openings and heterogeneous effects shape its interpretation.
+\end{itemize}
+\footnotesize Sun \& Abraham (2021); Goodman-Bacon (2021). Heterogeneity-robust specifications are a further comparison.
 \end{frame}
 
-\begin{frame}{公式（1）：事件研究}
-  \small
-  \[
-    Y_{it}=\alpha_i+\gamma_t+\sum_{h\neq -1}\beta_h\,\mathbf{1}\{t-E_i=h\}+\varepsilon_{it}
-  \]
-  \begin{itemize}
-    \item $E_i$：开通期；参考期 $h=-1$；$\beta_h$：相对参考期的动态效应
-    \item 清洁处理前窗口 $h\in\{-6,\dots,-2\}$；联合检验 $H_0:\beta_h=0\ \forall h$，
-      采用 CRV1 与城市聚类
-    \item 估计对象 $\hat\beta_h$ 即"事件研究响应路径"
-  \end{itemize}
+\section{Causal Evidence}
+
+\begin{frame}{Pre-treatment diagnostics: evidence by method}
+\centering\includegraphics[width=.98\textwidth,height=.44\textheight,keepaspectratio]{intro_pretrend.pdf}
+\par\raggedright
+\begin{block}{Within-city controls; city-level inference; 5\% threshold}
+\small
+Matching retains the zero-pre-trend hypothesis for housing / VIIRS / POI count / population:
+$p=0.055/0.063/0.072/0.328$.
+GSC retains the zero-mean-gap hypothesis for VIIRS and POI count;
+MC flags POI count, and GSC/MC flag population.
+\end{block}
+\footnotesize Matching: joint Wald; GSC/MC: city mean pre-gap test.
+Housing, VIIRS and POI count matching reject at 10\%; grid-clustered tests also flag VIIRS and POI count.
+MC housing/VIIRS cover 4/2 cities. Interpret tests alongside pre-fit and support.
 \end{frame}
 
-\begin{frame}{公式（2）：匹配与匹配事件研究}
-  \small
-  \begin{itemize}
-    \item donor 选择：同城内按处理前特征选择对照，holdout 边界
-      $\max\{\mathrm{RMS},\mathrm{max}\}\le 1$
-  \end{itemize}
-  \[
-    \hat\tau^{\text{match}}_{i,h}=\big(Y_{i,E_i+h}-Y_{i,B_i}\big)
-    -\sum_{j\in\mathcal M(i)}w_{ij}\big(Y_{j,E_i+h}-Y_{j,B_i}\big)
-  \]
-  \[
-    Y_{it}=\alpha_i+\gamma_t+\sum_{h\neq-1}\beta_h\,\mathbf{1}\{t-E_i=h\}
-    +\varepsilon_{it}\quad\text{（在匹配样本上估计）}
-  \]
-  \footnotesize $\mathcal M(i)$：匹配 donor 集；$w_{ij}$：匹配权重；
-  基线期 $B_i$ 由预注册规格给定（本管线使用 12 个月基线）。
+\begin{frame}{VIIRS: a sustained positive matched response}
+\centering\includegraphics[width=.98\textwidth,height=.60\textheight,keepaspectratio]{intro_viirs_event_study.pdf}
+\par\raggedright\footnotesize Within-city matching, 43 cities:
+effects at 6/12/18/24 months are 0.0446/0.0500/0.0575/0.0705.
+All four city-level 95\% CIs lie above zero; month 24: [0.0475, 0.0935]. Support: 2{,}255--2{,}264 units.
+Asinh scale; panel axes and samples differ. Crosses mark estimates with fewer than 3 city clusters.
 \end{frame}
 
-\begin{frame}{公式（3）：广义合成控制（GSC）}
-  \small
-  \[
-    Y_{it}=\delta_{it}D_{it}+x_{it}'\beta+\lambda_i'f_t+\varepsilon_{it}
-  \]
-  \[
-    \widehat{Y}_{it}(0)=x_{it}'\hat\beta+\hat\lambda_i'\hat f_t,\qquad
-    \hat\tau^{\text{gsc}}_{it}=Y_{it}-\widehat{Y}_{it}(0)\ \ (D_{it}=1)
-  \]
-  \begin{itemize}
-    \item 交互固定效应：因子 $f_t$ 与载荷 $\lambda_i$ 由处理前样本拟合
-    \item 单元--时间效应聚合到 $\hat\tau^{\text{gsc}}_{i,h}$
-  \end{itemize}
+\begin{frame}{POI count: positive activity responses after opening}
+\centering\includegraphics[width=.98\textwidth,height=.60\textheight,keepaspectratio]{intro_poi_event_study.pdf}
+\par\raggedright\footnotesize Within-city matching, 44 cities:
+effects in years 1/2/3 are 0.0803/0.1063/0.1132.
+All three city-level 95\% CIs lie above zero; year 3: [0.0701, 0.1564]. Support: 2{,}476/2{,}242/1{,}947 units.
+Log count scale; supported samples vary by method and horizon. POI count is an activity proxy.
 \end{frame}
 
-\begin{frame}{公式（4）：矩阵补全（MC）}
-  \small
-  \[
-    Y_{it}=L_{it}+\tau_{it}D_{it}+\varepsilon_{it}
-  \]
-  \[
-    \hat L=\arg\min_{L}\ \sum_{(i,t):\,D_{it}=0}\ (Y_{it}-L_{it})^2+\lambda\|L\|_*
-  \]
-  \[
-    \hat\tau^{\text{mc}}_{it}=Y_{it}-\hat L_{it}\quad(D_{it}=1)
-  \]
-  \begin{itemize}
-    \item 核范数正则捕捉低秩结构；固定 $\lambda$ 的单元 jackknife 给出不确定性
-    \item 处理前交叉验证 MSPE 作为设计诊断，进入标签权重
-  \end{itemize}
+\section{Response Learning and Results}
+
+\begin{frame}{Learning target: response shape and consistency}
+\small
+\[
+s_{ij}=\operatorname{corr}_{w}(r_i,r_j)
+\quad\text{on jointly observed cells within each family.}
+\]
+\begin{itemize}
+ \item Average comparable family similarities. VIIRS has 6 cells; current POI pools 12 cells across 4 outcomes.
+ \item Pearson captures shape; shifts and positive rescaling leave it unchanged. Evaluate magnitude and direction separately.
+\end{itemize}
+\medskip
+\begin{tabular}{p{.49\textwidth}p{.20\textwidth}p{.20\textwidth}}
+\toprule
+Split-half consistency (SB corrected) & VIIRS & POI\\
+\midrule
+Matching / GSC & 0.806 / 0.887 & 0.285 / 0.156\\
+\bottomrule
+\end{tabular}
+\par\medskip\noindent\key{Target evidence}: VIIRS has more consistent similarity structure; POI calls for outcome-level analysis.
+\par\footnotesize Server diagnostic summary. Split consistency measures target structure; causal interpretation comes from design and diagnostics.
 \end{frame}
 
-\begin{frame}{公式（5）：标签抽取}
-  \small
-  \[
-    \hat\tau^{(m)}_{i,o,h},\quad
-    m\in\{\text{match},\text{gsc},\text{mc}\},\ o\in\mathcal O,\ h\in\mathcal H
-  \]
-  \[
-    A^{(m)}_{i,o,h}=
-    \mathbf 1\{\text{收敛}\}\cdot
-    \mathbf 1\{\text{处理前锚点}\neq 0\}\cdot
-    \mathbf 1\{\text{matched: holdout}\le 1\}
-  \]
-  \[
-    r_i=\big(\hat\tau^{(m_i)}_{i,o,h}\big)_{(o,h)\in\mathcal C_i},\qquad
-    m_i=\text{该网格被分配的估计量}
-  \]
-  \footnotesize 只保留 $A=1$ 且满足支持条件的 cell；不可用 cell 以掩码排除；
-  每个网格只使用一种估计量的标签（matched / GSC / MC 互斥）。
+\begin{frame}{Model: response supervision for pre-treatment features}
+\centering\flowfigure{intro_model}
+\par\raggedright\footnotesize Default: tabular MLP and a normalized 128-dimensional embedding.
+Prediction heads read the embedding. Images, station/year conditioning and the FIFO queue are optional;
+historical main comparisons use tabular inputs. The optional image branch uses frozen DINOv2.
 \end{frame}
 
-\begin{frame}{公式（6）：可靠性权重}
-  \small
-  \[
-    W=A\cdot e^{-\gamma D}\cdot p^{\alpha_w}
-  \]
-  \[
-    D=\operatorname{mean}\{\,P(p_{\text{trend}}),\ P(p_{\text{holdout}}),\ P(p_{\text{validation}})\,\}
-  \]
-  \begin{itemize}
-    \item $P(\cdot)$：经验分位，按 $(method,outcome)\to(method,family)\to method\to 全局$
-      逐级上溯至分层样本量 $\ge 30$；无诊断取 0.5
-    \item $p$：精度项（$1/SE^2$ 缩尾并均值归一；无 SE 取 1）
-    \item 最终在 $(method,family)$ 内 1\%/99\% 缩尾并归一化到均值 1；不合格标签恰为 0
-    \item 主训练 $\alpha_w=0$（design-only）；W0 取 $\gamma=0,\alpha_w=0$
-  \end{itemize}
+\begin{frame}{Joint objective: neighbors, similarity and response values}
+\small
+\begin{tabular}{p{.20\textwidth}p{.71\textwidth}}
+\toprule
+Loss & Role\\
+\midrule
+$L_{\rm align}$ & Fit embedding neighbor probabilities with positive response similarity as soft weights\\
+$L_{\rm dist}$ & Fit numerical response similarity with embedding cosine similarity\\
+$L_{\rm pred}$ & Recover response values with masks and label-weighted MSE\\
+\bottomrule
+\end{tabular}
+\[
+L_{\rm dist}=\operatorname{mean}_{(i,j)\in\mathcal V}
+(e_i^\top e_j-\widetilde s_{ij})^2
+\]
+\[
+\boxed{L=0.25L_{\rm align}+0.25L_{\rm dist}+0.50L_{\rm pred}}
+\]
+\key{Empirical question}: does joint supervision improve held-out city retrieval?
+\par\footnotesize Default temperature $\tau=0.07$; $\mathcal V$ excludes self and invalid pairs.
+$\widetilde s$ uses SE shrinkage when enabled. Constant within-grid weights cancel in Pearson but affect prediction.
 \end{frame}
 
-\begin{frame}{标签可用性}
-  \begin{center}
-    \includegraphics[width=\textwidth]{intro_asset_map.pdf}
-  \end{center}
+\begin{frame}{Evaluation: shape, magnitude and direction}
+\small
+\begin{tabular}{p{.21\textwidth}p{.36\textwidth}p{.34\textwidth}}
+\toprule
+Task & Metric & Baselines\\
+\midrule
+Shape retrieval & Mean response similarity of 5 neighbors & Raw features, appearance autoencoder, random neighbors\\
+Magnitude prediction & RMSE & Training mean, ridge, kNN\\
+Direction prediction & Sign accuracy & Training majority sign\\
+\bottomrule
+\end{tabular}
+\begin{itemize}
+ \item Direct controls: fixed 5-fold city CV, fold-specific preprocessing and inner tuning.
+ \item Trained embeddings: earlier city split, 3 seeds and a shared candidate pool.
+ \item Interpret each protocol separately; next, compare paired city-level gains under one CV protocol.
+\end{itemize}
+\footnotesize Main metric: $\mathrm{nn\_corr@5}$. Seed SD measures training variability; city-level intervals measure variation across cities.
 \end{frame}
 
-\begin{frame}{事件研究结果（住房）}
-  \begin{center}
-    \includegraphics[width=0.95\textwidth]{housing_pooled_event_study.pdf}
-  \end{center}
-  \vspace{-0.4em}
-  \footnotesize 同城面板，三方法并列；规范窗口、每面板独立纵轴、清洁 pre 期联合检验。
+\begin{frame}{Result 1: features carry a held-out city response signal}
+\centering\chartfigure{intro_city_controls}
+\par\raggedright\footnotesize Server 5-fold city-CV summary.
+Raw retrieval gains over random: 0.0424/0.0451 (VIIRS/POI).
+Ridge RMSE: 0.3627/0.4442; direction gains over majority sign: 1.2/5.0 percentage points.
+Each metric answers a separate question.
 \end{frame}
 
-\begin{frame}{事件研究结果（夜间灯光 / POI）}
-  \begin{columns}[T]
-    \begin{column}{0.5\textwidth}
-      \includegraphics[width=\textwidth]{viirs_pooled_event_study.pdf}
-    \end{column}
-    \begin{column}{0.5\textwidth}
-      \includegraphics[width=\textwidth]{poi_pooled_event_study.pdf}
-    \end{column}
-  \end{columns}
-  \vspace{-0.2em}
-  \footnotesize 左：VIiRS（月频）；右：POI（年频）。
+\begin{frame}{Result 2: retrieval with trained embeddings}
+\centering\includegraphics[width=.98\textwidth,height=.62\textheight,keepaspectratio]{intro_representation_benchmark.pdf}
+\par\raggedright\footnotesize
+VIIRS: default $0.0150\pm0.0067$, raw $0.0036$; mean gain $+0.0114$.
+POI: default $0.0955\pm0.0025$, raw $0.1089$; mean gain $-0.0134$.
+VIIRS shows an initial gain; POI favors raw geometry. Earlier test pools: 205/220.
+Bars: reported scores. Error bars: 3-seed SD for supervised models; reported range for the appearance AE.
+Panel y-scales differ; each starts at zero.
 \end{frame}
 
-\begin{frame}{预趋势检验}
-  \begin{center}
-    \includegraphics[height=0.66\textheight]{intro_pretrend.pdf}
-  \end{center}
+\begin{frame}{Ablation: gains over raw feature retrieval}
+\centering\includegraphics[width=.98\textwidth,height=.54\textheight,keepaspectratio]{intro_representation_gains.pdf}
+\par\raggedright
+\begin{block}{Initial gains depend on the response family}
+\small VIIRS: default $+0.0114$, queue off $+0.0214$.
+POI favors raw features. Queue removal raises the mean and increases seed variability.
+\end{block}
+\footnotesize Absolute correlation-score change on a shared x-scale.
+Markers: 3-seed mean gains $\pm$ SD (training variability).
+Earlier city split; zero is the fixed raw baseline.
 \end{frame}
 
-\begin{frame}{冻结发布与审计}
-  \small
-  \begin{itemize}
-    \item 冻结发布：事件研究面板、可用性矩阵、预趋势表与结果族选择表，验证通过
-    \item 状态账本与发布解耦：流水线状态不可回滚，可在审计中恢复
-    \item 可追溯：输入哈希、规范化元数据、权重标定标识与审计记录
-  \end{itemize}
-  \medskip
-  \begin{block}{产出}
-    冻结的响应标签发布与封版分析材料（图、源表与清单）。
-  \end{block}
+\section{Conclusion}
+
+\begin{frame}{Takeaways: causal evidence and cross-city learning}
+\small
+\begin{itemize}
+ \item \key{Causal evidence}: positive VIIRS and POI count dynamics in within-city matched samples.
+ \item \key{Feature signal}: small held-out city prediction gains, with ridge as a direct baseline.
+ \item \key{Trained embeddings}: an initial VIIRS retrieval gain; stronger raw geometry for POI.
+\end{itemize}
+\begin{block}{Next test: preserve raw geometry and add predicted responses}
+\[
+z_i(\lambda)=[\sqrt{1-\lambda}\,\bar x_i,\;\sqrt{\lambda}\,\bar h_i]
+\]
+Inner cities select the fusion weight; outer cities measure paired gains.
+$\lambda=0$ recovers raw geometry on the shared support set.
+\end{block}
+\footnotesize Fusion evaluation is implemented; results are pending.
+The goal is to turn traceable local responses into useful comparisons across cities.
 \end{frame}
 
-\begin{frame}{公式（7）：响应相似度与软标签}
-  \small
-  \[
-    s_{ij}=\overline{\operatorname{corr}}\big(r_i,r_j\big)
-    \quad\text{（公共观测 cell，cell 权重 }\sqrt{w_{ik}w_{jk}}\text{）}
-  \]
-  \[
-    \tilde s_{ij}=s_{ij}\sqrt{\rho_i\rho_j},\qquad
-    \rho_i=\operatorname{mean}_{k:m_{ik}=1}\frac{1}{1+SE_{ik}^2}
-  \]
-  \[
-    p_{ij}=\frac{\max(\tilde s_{ij},0)}{\sum_{k\in\mathcal V_i}\max(\tilde s_{ik},0)}
-  \]
-  \footnotesize 结构：表格 MLP（可选街景分支）$\to$ 融合 $\to$ 128 维归一化嵌入
-  $e_i$ $\to$ 每结果族预测头；监督逐结果族独立（VIiRS 6 维 / POI 12 维）。
-  公共可靠 cell 少于 2 或方差退化的 pair 视为无效；自身与重复单元 pair 剔除。
-\end{frame}
-
-\begin{frame}{公式（8）：表示学习目标}
-  \small
-  \[
-    L_{\text{align}}=-\frac{1}{|\mathcal A|}\sum_{i\in\mathcal A}\sum_{j\in\mathcal V_i}
-    p_{ij}\log\frac{e^{e_i^\top e_j/\tau}}{\sum_{k\in\mathcal V_i}e^{e_i^\top e_k/\tau}}
-  \]
-  \[
-    L_{\text{dist}}=\frac{1}{|\mathcal V|}\sum_{(i,j)\in\mathcal V}
-    \big(\cos(e_i,e_j)-\tilde s_{ij}\big)^2
-  \]
-  \[
-    L_{\text{pred}}=\frac{1}{|\mathcal F|}\sum_{f}
-    \frac{\sum_k m_{fk}w_{fk}(\hat r_{fk}-r_{fk})^2}{\sum_k m_{fk}w_{fk}}
-  \]
-  \[
-    L_{\text{rep}}=\rho L_{\text{align}}+(1-\rho)L_{\text{dist}},\qquad
-    L=(1-\lambda)L_{\text{rep}}+\lambda L_{\text{pred}}
-  \]
-  \footnotesize 默认 $\rho=\lambda=\tfrac12$、$\tau=0.07$；队列与 SE 收缩为可选组件。
-\end{frame}
-
-\begin{frame}{评估协议}
-  \small
-  \begin{itemize}
-    \item 检索：近邻响应相似度 \texttt{nn\_corr@k}；含随机近邻基线
-    \item 对照：原始特征检索、PCA、随机投影、冻结 DINOv2、外观自编码器
-    \item 稳健性：置换检验、bootstrap 区间、多 seed
-    \item 迁移：逐城市检索、少样本探针、方向预测 AUC
-    \item 诊断补充：城市级交叉验证（折内隔离预处理与公平基线）、方向/幅度/形状
-      分开报告
-  \end{itemize}
-\end{frame}
-
-\section{现状与发现}
-
-\begin{frame}{评估修正与诊断}
-  \small
-  \begin{itemize}
-    \item 评估流程经三轮独立审阅：probe 含截距与均值基线、折内预处理隔离、
-      公平 refit 基线、条件化规则版本化、城市网格数与 cell 数分离
-    \item 已排除：标签噪声（VIiRS 折半信度约 0.8）、两点支撑问题、float32 消减、
-      整体嵌入塌缩
-    \item 已确认：设计权重在 horizon 恒定，W-design 不重塑成对相似度；
-      对比损失与距离损失存在几何目标冲突（待验证机制）
-    \item 未决：原始特征的城市外可预测性
-  \end{itemize}
-\end{frame}
-
-\begin{frame}{当前证据}
-  \begin{center}
-    \includegraphics[width=0.88\textwidth]{intro_evidence.pdf}
-  \end{center}
-  \vspace{-0.4em}
-  \footnotesize 多 seed 波动大于配置差异；尚未发现监督表示稳定超过原始特征或外观基线。
-\end{frame}
-
-\begin{frame}{下一步}
-  \begin{center}
-    \includegraphics[width=0.98\textwidth]{intro_decision.pdf}
-  \end{center}
-\end{frame}
-
-\begin{frame}[allowframebreaks]{参考文献}
+\section{References}
+\begin{frame}[allowframebreaks]{References}
   \scriptsize
   \begin{thebibliography}{99}
     \setbeamertemplate{bibliography item}[text]
@@ -560,21 +345,31 @@
     \bibitem{baum2000} Baum-Snow, N., \& Kahn, M. E. (2000). The effects of new public projects to expand urban rail transit. Journal of Public Economics.
     \bibitem{gibbons2005} Gibbons, S., \& Machin, S. (2005). Valuing rail access using transport innovations. Journal of Urban Economics.
     \bibitem{debrezion2007} Debrezion, G., Pels, E., \& Rietveld, P. (2007). The impact of railway stations on residential and commercial property value: A meta-analysis. The Journal of Real Estate Finance and Economics.
-    \bibitem{zheng2008} Zheng, S., \& Kahn, M. E. (2008). Land and residential property markets in a booming economy: New evidence from Beijing. Journal of Urban Economics.
-    \bibitem{gonzalez2018} Gonzalez-Navarro, M., \& Turner, M. A. (2018). Subways and urban growth: Evidence from Earth. Journal of Urban Economics.
+    \bibitem{zheng2008} Zheng, S., \& Kahn, M. E. (2008). Land and residential property markets in a booming economy: New evidence from Beijing. Journal of Urban Economics. \href{https://doi.org/10.1016/j.jue.2007.04.010}{[Source]}
+    \bibitem{gonzalez2018} Gonzalez-Navarro, M., \& Turner, M. A. (2018). Subways and urban growth: Evidence from Earth. Journal of Urban Economics. \href{https://www.nber.org/papers/w24996}{[Source]}
     \bibitem{dong2017} Dong, H. (2017). Rail-transit-induced gentrification and the affordability paradox of TOD. Journal of Transport Geography.
     \bibitem{cervero1997} Cervero, R., \& Kockelman, K. (1997). Travel demand and the 3Ds: Density, diversity, and design. Transportation Research Part D.
-    \bibitem{lu2016} Lu, K., Han, B., Lu, F., \& Wang, Z. (2016). Urban rail transit in China: Progress report and analysis (2008--2015). Urban Rail Transit.
-    \bibitem{bao2018} Bao, X. (2018). Urban rail transit present situation and future development trends in China: Overall analysis based on national policies and strategic plans in 2016--2020. Urban Rail Transit.
-    \bibitem{wang2024} Wang, L., \& Xia, H. (2024). A comprehensive review of the development characteristics and future trends of TOD in Chinese urban rail transit. Urban Rail Transit.
+    \bibitem{lu2016} Lu, K., Han, B., Lu, F., \& Wang, Z. (2016). Urban rail transit in China: Progress report and analysis (2008--2015). Urban Rail Transit. \href{https://doi.org/10.1007/s40864-016-0048-7}{[Source]}
+    \bibitem{bao2018} Bao, X. (2018). Urban rail transit present situation and future development trends in China: Overall analysis based on national policies and strategic plans in 2016--2020. Urban Rail Transit. \href{https://doi.org/10.1007/s40864-018-0078-4}{[Source]}
+    \bibitem{wang2024} Wang, L., \& Xia, H. (2024). A comprehensive review of the development characteristics and future trends of TOD in Chinese urban rail transit. Urban Rail Transit. \href{https://doi.org/10.1007/s40864-024-00228-2}{[Source]}
     \bibitem{jean2016} Jean, N., Burke, M., Xie, M., Davis, W. M., Lobell, D. B., \& Ermon, S. (2016). Combining satellite imagery and machine learning to predict poverty. Science.
     \bibitem{rolf2021} Rolf, E., Proctor, J., Carleton, T., Bolliger, I., Shankar, V., Ishihara, M., Recht, B., \& Hsiang, S. (2021). A generalizable and accessible approach to machine learning with global satellite imagery. Nature Communications.
     \bibitem{chen2020} Chen, T., Kornblith, S., Norouzi, M., \& Hinton, G. (2020). A simple framework for contrastive learning of visual representations. International Conference on Machine Learning.
     \bibitem{he2020} He, K., Fan, H., Wu, Y., Xie, S., \& Girshick, R. (2020). Momentum contrast for unsupervised visual representation learning. IEEE/CVF Conference on Computer Vision and Pattern Recognition.
     \bibitem{khosla2020} Khosla, P., Teterwak, P., Wang, C., Sarna, A., Tian, Y., Isola, P., Maschinot, A., Liu, C., \& Krishnan, D. (2020). Supervised contrastive learning. Advances in Neural Information Processing Systems.
     \bibitem{oquab2024} Oquab, M., Darcet, T., Moutakanni, T., et al. (2024). DINOv2: Learning robust visual features without supervision. Transactions on Machine Learning Research.
-    \bibitem{scholkopf2021} Sch\"olkopf, B., Locatello, F., Bauer, S., Ke, N. R., Kalchbrenner, N., Goyal, A., \& Bengio, Y. (2021). Toward causal representation learning. Proceedings of the IEEE.
+    \bibitem{scholkopf2021} Sch\"olkopf, B., Locatello, F., Bauer, S., Ke, N. R., Kalchbrenner, N., Goyal, A., \& Bengio, Y. (2021). Toward causal representation learning. Proceedings of the IEEE. \href{https://arxiv.org/abs/2102.11107}{[Source]}
+
+    \bibitem{mayer2017} Mayer, T., \& Trevien, C. (2017). The impact of urban public transportation: Evidence from the Paris region. Journal of Urban Economics. \href{https://doi.org/10.1016/j.jue.2017.07.003}{[Source]}
+    \bibitem{diao2017} Diao, M., Leonard, D., \& Sing, T. F. (2017). Spatial-difference-in-differences models for impact of new mass rapid transit line on private housing values. Regional Science and Urban Economics. \href{https://doi.org/10.1016/j.regsciurbeco.2017.08.006}{[Source]}
+    \bibitem{bardaka2018} Bardaka, E., Delgado, M. S., \& Florax, R. J. G. M. (2018). Causal identification of transit-induced gentrification and spatial spillover effects: The case of the Denver light rail. Journal of Transport Geography. \href{https://doi.org/10.1016/j.jtrangeo.2018.06.025}{[Source]}
+    \bibitem{urban2vec2020} Wang, Z., Li, H., \& Rajagopal, R. (2020). Urban2Vec: Incorporating street view imagery and POIs for multi-modal urban neighborhood embedding. AAAI. \href{https://ojs.aaai.org/index.php/AAAI/article/view/5450}{[Source]}
+    \bibitem{regiondcl2023} Li, Y., Huang, W., Cong, G., Wang, H., \& Wang, Z. (2023). Urban region representation learning with OpenStreetMap building footprints. KDD. \href{https://doi.org/10.1145/3580305.3599538}{[Source]}
+    \bibitem{wei2016} Wei, Y., Zheng, Y., \& Yang, Q. (2016). Transfer knowledge between cities. KDD. \href{https://doi.org/10.1145/2939672.2939830}{[Source]}
+    \bibitem{weather2023} Tec, M., Scott, J. G., \& Zigler, C. M. (2023). Weather2vec: Representation learning for causal inference with non-local confounding in air pollution and climate studies. AAAI. \href{https://ojs.aaai.org/index.php/AAAI/article/view/26696}{[Source]}
+    \bibitem{cauod2022} Zeng, J., Zhang, G., Rong, C., Ding, J., Yuan, J., \& Li, Y. (2022). Causal learning empowered OD prediction for urban planning. CIKM. \href{https://doi.org/10.1145/3511808.3557255}{[Source]}
+    \bibitem{cgnet2025} Fang, Z., Zheng, Q., Zheng, S., \& Zhao, L. (2025). CGNet-PIE: A causal generative approach for urban planning intervention effect estimation. Transactions in Urban Data, Science, and Technology. \href{https://doi.org/10.1177/27541231251318348}{[Source]}
+    \bibitem{ahuja2023} Ahuja, K., Mahajan, D., Wang, Y., \& Bengio, Y. (2023). Interventional causal representation learning. ICML. \href{https://proceedings.mlr.press/v202/ahuja23a.html}{[Source]}
   \end{thebibliography}
 \end{frame}
-
 \end{document}

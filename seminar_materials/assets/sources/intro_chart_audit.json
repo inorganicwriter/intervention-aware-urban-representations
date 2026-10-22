@@ -1,0 +1,355 @@
+{
+  "intro_pipeline": {
+    "type": "conceptual",
+    "quantitative_experiment": false
+  },
+  "intro_routing": {
+    "type": "conceptual",
+    "quantitative_experiment": false
+  },
+  "intro_model": {
+    "type": "conceptual",
+    "quantitative_experiment": false
+  },
+  "intro_decision": {
+    "type": "conceptual",
+    "quantitative_experiment": false
+  },
+  "intro_asset_map": {
+    "source": "availability.csv",
+    "input_rows": 24,
+    "selected_rows": 24,
+    "missing_cells": 4,
+    "fields": {
+      "matching": "availability_treated_events",
+      "gsc/mc": "max_supported_treated_grids"
+    },
+    "counts_are_final_training_mask": false
+  },
+  "intro_support": {
+    "source": "availability.csv",
+    "input_rows": 24,
+    "selected_rows": 12,
+    "missing": "住房 GSC"
+  },
+  "intro_pretrend": {
+    "source": "pretrend_summary.csv",
+    "input_rows": 64,
+    "selected_rows": 11,
+    "canonical_outcomes": {
+      "housing": "housing_log_price",
+      "viirs": "viirs_avg_asinh",
+      "poi": "poi_count_log",
+      "population": "population_log"
+    },
+    "tests_separated": true,
+    "values": [
+      {
+        "method": "matching",
+        "outcome": "housing_log_price",
+        "p_value": 0.0546320024744624
+      },
+      {
+        "method": "matching",
+        "outcome": "viirs_avg_asinh",
+        "p_value": 0.0630521143185561
+      },
+      {
+        "method": "matching",
+        "outcome": "poi_count_log",
+        "p_value": 0.0716923213598349
+      },
+      {
+        "method": "matching",
+        "outcome": "population_log",
+        "p_value": 0.3281270245027832
+      },
+      {
+        "method": "mc",
+        "outcome": "poi_count_log",
+        "p_value": 5.6672335171479095e-05
+      },
+      {
+        "method": "gsc",
+        "outcome": "poi_count_log",
+        "p_value": 0.2165341133249998
+      },
+      {
+        "method": "mc",
+        "outcome": "population_log",
+        "p_value": 0.0008987020569701
+      },
+      {
+        "method": "gsc",
+        "outcome": "population_log",
+        "p_value": 0.0023073604078066
+      },
+      {
+        "method": "mc",
+        "outcome": "housing_log_price",
+        "p_value": 0.9546531092064248
+      },
+      {
+        "method": "mc",
+        "outcome": "viirs_avg_asinh",
+        "p_value": 0.3644297432001177
+      },
+      {
+        "method": "gsc",
+        "outcome": "viirs_avg_asinh",
+        "p_value": 0.2775488700160621
+      }
+    ]
+  },
+  "intro_pretrend_poi": {
+    "source": "pretrend_summary.csv",
+    "input_rows": 64,
+    "selected_rows": 8,
+    "all_four_outcomes": true
+  },
+  "intro_housing_event_study": {
+    "source": "event_study_panel.csv",
+    "input_rows": 565,
+    "selected_rows": 73,
+    "canonical_outcome": "housing_log_price",
+    "scope": "same_city",
+    "window": [
+      -24,
+      24
+    ],
+    "missing_estimate": 0,
+    "n_less_than_three_city_clusters": 11,
+    "interval_fields": [
+      "ci_lower_city",
+      "ci_upper_city"
+    ],
+    "separate_y_axes": true,
+    "reference_event_time": -1,
+    "reference_source": "manifest.json/windows",
+    "display_reference_rows_added": [
+      "matching"
+    ],
+    "reference_has_ci": false,
+    "true_missing_periods_within_observed_span": {
+      "matching": [],
+      "mc": [
+        13,
+        17,
+        19,
+        20
+      ]
+    },
+    "specifications": [
+      {
+        "method": "matching",
+        "specification": "",
+        "p_value_method": "twfe_cluster_robust"
+      },
+      {
+        "method": "mc",
+        "specification": "main_a6_r1km__a0__w1__price_median__tx1__backend_python-causal__xgsc5000s20260823",
+        "p_value_method": "normal_approximation"
+      }
+    ]
+  },
+  "intro_viirs_event_study": {
+    "source": "event_study_panel.csv",
+    "input_rows": 565,
+    "selected_rows": 125,
+    "canonical_outcome": "viirs_avg_asinh",
+    "scope": "same_city",
+    "window": [
+      -24,
+      24
+    ],
+    "missing_estimate": 0,
+    "n_less_than_three_city_clusters": 28,
+    "interval_fields": [
+      "ci_lower_city",
+      "ci_upper_city"
+    ],
+    "separate_y_axes": true,
+    "reference_event_time": -1,
+    "reference_source": "manifest.json/windows",
+    "display_reference_rows_added": [
+      "matching"
+    ],
+    "reference_has_ci": false,
+    "true_missing_periods_within_observed_span": {
+      "matching": [],
+      "gsc": [],
+      "mc": []
+    },
+    "specifications": [
+      {
+        "method": "matching",
+        "specification": "",
+        "p_value_method": "twfe_cluster_robust"
+      },
+      {
+        "method": "mc",
+        "specification": "main_a6_r1km__a0__w1__price_median__tx1__backend_python-causal__xgsc5000s20260823",
+        "p_value_method": "normal_approximation"
+      },
+      {
+        "method": "gsc",
+        "specification": "main_a6_r1km__a0__w1__price_median__tx1__backend_python-causal__xgsc5000s20260823",
+        "p_value_method": "normal_approximation"
+      }
+    ]
+  },
+  "intro_poi_event_study": {
+    "source": "event_study_panel.csv",
+    "input_rows": 565,
+    "selected_rows": 26,
+    "canonical_outcome": "poi_count_log",
+    "scope": "same_city",
+    "window": [
+      -6,
+      3
+    ],
+    "missing_estimate": 0,
+    "n_less_than_three_city_clusters": 0,
+    "interval_fields": [
+      "ci_lower_city",
+      "ci_upper_city"
+    ],
+    "separate_y_axes": true,
+    "reference_event_time": -1,
+    "reference_source": "manifest.json/windows",
+    "display_reference_rows_added": [
+      "matching"
+    ],
+    "reference_has_ci": false,
+    "true_missing_periods_within_observed_span": {
+      "matching": [],
+      "gsc": [],
+      "mc": []
+    },
+    "specifications": [
+      {
+        "method": "matching",
+        "specification": "",
+        "p_value_method": "twfe_cluster_robust"
+      },
+      {
+        "method": "mc",
+        "specification": "main_a6_r1km__a0__w1__price_median__tx1__backend_python-causal__xgsc5000s20260823",
+        "p_value_method": "normal_approximation"
+      },
+      {
+        "method": "gsc",
+        "specification": "main_a6_r1km__a0__w1__price_median__tx1__backend_python-causal__xgsc5000s20260823",
+        "p_value_method": "normal_approximation"
+      }
+    ]
+  },
+  "intro_population_event_study": {
+    "source": "event_study_panel.csv",
+    "input_rows": 565,
+    "selected_rows": 26,
+    "canonical_outcome": "population_log",
+    "scope": "same_city",
+    "window": [
+      -6,
+      3
+    ],
+    "missing_estimate": 0,
+    "n_less_than_three_city_clusters": 0,
+    "interval_fields": [
+      "ci_lower_city",
+      "ci_upper_city"
+    ],
+    "separate_y_axes": true,
+    "reference_event_time": -1,
+    "reference_source": "manifest.json/windows",
+    "display_reference_rows_added": [
+      "matching"
+    ],
+    "reference_has_ci": false,
+    "true_missing_periods_within_observed_span": {
+      "matching": [],
+      "gsc": [],
+      "mc": []
+    },
+    "specifications": [
+      {
+        "method": "matching",
+        "specification": "",
+        "p_value_method": "twfe_cluster_robust"
+      },
+      {
+        "method": "mc",
+        "specification": "main_a6_r1km__a0__w1__price_median__tx1__backend_python-causal__xgsc5000s20260823",
+        "p_value_method": "normal_approximation"
+      },
+      {
+        "method": "gsc",
+        "specification": "main_a6_r1km__a0__w1__price_median__tx1__backend_python-causal__xgsc5000s20260823",
+        "p_value_method": "normal_approximation"
+      }
+    ]
+  },
+  "intro_evidence": {
+    "source": "docs/presentations/data/representation_history.csv",
+    "input_rows": 10,
+    "selected_rows": 10,
+    "provenance": "Previously reported server summary; not locally re-extracted",
+    "errors": "square: AE reported range; circles: 3-seed mean +/- SD; neither is CI",
+    "corrected_city_cv": false
+  },
+  "intro_city_controls": {
+    "source": "docs/presentations/data/representation_city_controls.csv",
+    "input_rows": 12,
+    "selected_rows": 12,
+    "provenance": "User-reported server 5-fold city-CV summary; no local refit",
+    "statistic": "Reported aggregated means; aggregation retained from supplied summary",
+    "baseline_definitions": {
+      "shape": "random-neighbour response similarity",
+      "amplitude": "refit training-label mean",
+      "direction": "refit training-label majority sign"
+    },
+    "intervals": "Not supplied; no interval inferred",
+    "pairing": "visual comparison of summaries",
+    "claims_excluded": [
+      "formal R-squared",
+      "confidence intervals",
+      "neural city-CV advantage"
+    ]
+  },
+  "intro_sample_years": {
+    "source": "treatment_unit_list.parquet",
+    "input_rows": 5048,
+    "selected_rows": 5048,
+    "grouped_counts": {
+      "2010": 204,
+      "2011": 132,
+      "2012": 165,
+      "2013": 178,
+      "2014": 226,
+      "2015": 170,
+      "2016": 255,
+      "2017": 421,
+      "2018": 293,
+      "2019": 443,
+      "2020": 594,
+      "2021": 561,
+      "2022": 403,
+      "2023": 306,
+      "2024": 387,
+      "2025": 310
+    }
+  },
+  "intro_weight_curve": {
+    "type": "functional illustration",
+    "gamma": [
+      1,
+      0.5
+    ],
+    "alpha": [
+      0,
+      0.5
+    ],
+    "before_final_normalization": true
+  }
+}

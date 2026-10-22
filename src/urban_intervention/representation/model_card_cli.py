@@ -43,6 +43,9 @@ REQUIRED_FILES = (
 
 def _family_rows(evaluation: dict) -> list[dict]:
     rows = []
+    if isinstance(evaluation.get("tasks"), dict):
+        return [{"family": family, **task.get("retrieval", {}).get(family, {})}
+                for family, task in evaluation["tasks"].items()]
     retrieval = evaluation.get("retrieval", {})
     overall = retrieval.get("overall", {})
     if overall:
@@ -58,7 +61,7 @@ def _split_summary(name: str, evaluation: dict) -> dict:
     embeddings_probe = probe.get("embeddings", {}) if isinstance(probe, dict) else {}
     raw_probe = probe.get("raw_features", {}) if isinstance(probe, dict) else {}
     permutation = evaluation.get("permutation", {})
-    return {
+    summary = {
         "split": name,
         "n_units": evaluation.get("n_units", 0),
         "nn_corr@k": (evaluation.get("retrieval", {}).get("overall", {}).get("nn_corr@k")),
@@ -74,6 +77,16 @@ def _split_summary(name: str, evaluation: dict) -> dict:
         "probe_raw_rmse": raw_probe.get("rmse_overall"),
         "families": _family_rows(evaluation),
     }
+    if isinstance(evaluation.get("tasks"), dict):
+        summary["tasks"] = evaluation["tasks"]
+        summary["trajectory_prediction"] = {
+            family: task.get("prediction", {}) for family, task in evaluation["tasks"].items()
+        }
+    if "trajectory_prediction" in evaluation:
+        summary["trajectory_prediction"] = evaluation["trajectory_prediction"]
+    if "semantic_classification" in evaluation:
+        summary["semantic_classification"] = evaluation["semantic_classification"]
+    return summary
 
 
 def _nn_corr_history_key(epoch: dict | None) -> str | None:

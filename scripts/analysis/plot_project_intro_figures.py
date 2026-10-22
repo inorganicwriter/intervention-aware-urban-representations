@@ -1,17 +1,7 @@
-"""Generate the project-introduction figures from local release artifacts.
-
-Outputs (PDF, English labels to avoid CJK font issues):
-  intro_pipeline.pdf      项目流程
-  intro_support.pdf       逐族标签支持规模
-  intro_pretrend.pdf      城市聚类预趋势 p 值
-  intro_asset_map.pdf     availability 状态矩阵
-  intro_weight_curve.pdf  可靠性权重分量示意
-  intro_evidence.pdf      真实数据证据对照
-  intro_decision.pdf      最小对照决策树
+"""Chinese presentation assets from frozen releases; no estimation or training.
+Historical retrieval values are a prior server summary, not a local rerun.
 """
-
-from __future__ import annotations
-
+import json
 from pathlib import Path
 
 import matplotlib
@@ -20,327 +10,338 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.colors import LogNorm
 from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
 
 ROOT = Path(__file__).resolve().parents[2]
-RELEASE = ROOT / "outputs" / "event_study_final"
-OUT = ROOT / "docs" / "presentations" / "figures"
+RELEASE = ROOT / "outputs/event_study_final"
+OUT = ROOT / "docs/presentations/figures"
+FAMILIES = ["housing", "viirs", "poi", "population"]
+LABELS = ["住房", "VIIRS 夜间灯光", "POI", "人口"]
+CANONICAL = dict(zip(FAMILIES, ["housing_log_price", "viirs_avg_asinh", "poi_count_log", "population_log"], strict=False))
+METHODS = {"matching": "匹配", "gsc": "GSC", "mc": "MC"}
+COLORS = {"matching": "#234E70", "gsc": "#168A85", "mc": "#D28436"}
+AUDIT = {}
+plt.rcParams.update({"font.family": "sans-serif", "font.sans-serif": ["Microsoft YaHei", "SimHei", "DejaVu Sans"],
+    "font.size": 12, "axes.titlesize": 14, "axes.spines.top": False, "axes.spines.right": False,
+    "axes.linewidth": .7, "pdf.fonttype": 42, "svg.fonttype": "none", "axes.unicode_minus": False})
 
-plt.rcParams.update(
-    {
-        "font.family": "sans-serif",
-        "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
-        "font.size": 8,
-        "axes.linewidth": 0.8,
-        "pdf.fonttype": 42,
-        "svg.fonttype": "none",
-    }
-)
+def save(fig, name):
+    fig.savefig(OUT / f"{name}.pdf", bbox_inches="tight", facecolor="white")
+    fig.savefig(OUT / f"{name}.svg", bbox_inches="tight", facecolor="white")
+    fig.savefig(OUT / f"{name}.png", dpi=300, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
 
+def record(name, source, data, selected, **details):
+    AUDIT[name] = {"source": source, "input_rows": len(data), "selected_rows": len(selected), **details}
 
-def _save(figure: plt.Figure, name: str) -> None:
-    figure.savefig(OUT / f"{name}.pdf", bbox_inches="tight")
-    plt.close(figure)
+def box(ax, x, y, w, h, label, color="#234E70"):
+    ax.add_patch(FancyBboxPatch((x,y),w,h,boxstyle="round,pad=.025",edgecolor=color,facecolor="#EEF3F7",linewidth=1.2))
+    ax.text(x+w/2,y+h/2,label,ha="center",va="center",fontsize=12,color="#16324A")
 
+def arrow(ax, a, b, label=None):
+    ax.add_patch(FancyArrowPatch(a,b,arrowstyle="-|>",mutation_scale=15,linewidth=1.3,color="#637381"))
+    if label:
+        ax.text((a[0]+b[0])/2,(a[1]+b[1])/2+.12,label,ha="center",fontsize=11,
+                bbox=dict(facecolor="white",edgecolor="none",pad=1))
 
-def pipeline_figure() -> None:
-    figure, axis = plt.subplots(figsize=(12.4, 4.6))
-    axis.set_xlim(0, 12.4)
-    axis.set_ylim(0, 4.6)
-    axis.axis("off")
-    boxes = [
-        ("5,048 station openings\n40+ cities, staggered timing", 0.15, 2.55),
-        ("Pre-treatment features\nhousing / POI / VIIRS / population / S2\nlag 1-3, train-city scaling", 3.25, 2.55),
-        ("Causal estimators\nmatched event study · GSC\nmatrix completion", 6.35, 2.55),
-        ("Identification diagnostics\npre-trend · holdout · CV MSPE\nsupport counts", 9.45, 2.55),
-        ("Reliability weights\nW = A · exp(-gamma D) · precision^alpha\nper method x family", 9.45, 0.35),
-        ("Frozen release\ncontent hash + audit record\ntraceable inputs", 6.35, 0.35),
-        ("Response-aligned representation\nsoft-label contrastive + prediction head\nper outcome family", 3.25, 0.35),
-        ("Retrieval evaluation\nnn_corr@k vs raw / appearance baselines\ncity-level CV", 0.15, 0.35),
-    ]
-    for text, x, y in boxes:
-        box = FancyBboxPatch(
-            (x, y), 2.8, 1.45, boxstyle="round,pad=0.06", linewidth=0.9,
-            edgecolor="#3b6ea5", facecolor="#eaf1f8",
-        )
-        axis.add_patch(box)
-        axis.text(x + 1.4, y + 0.72, text, ha="center", va="center", fontsize=7.6)
-    arrows = [
-        ((2.95, 3.28), (3.25, 3.28)),
-        ((6.05, 3.28), (6.35, 3.28)),
-        ((9.15, 3.28), (9.45, 3.28)),
-        ((10.85, 2.55), (10.85, 1.8)),
-        ((9.45, 1.08), (9.15, 1.08)),
-        ((6.35, 1.08), (6.05, 1.08)),
-        ((3.25, 1.08), (2.95, 1.08)),
-    ]
-    for (x1, y1), (x2, y2) in arrows:
-        axis.add_patch(
-            FancyArrowPatch(
-                (x1, y1), (x2, y2), arrowstyle="-|>", mutation_scale=10,
-                linewidth=0.9, color="#3b6ea5",
-            )
-        )
-    axis.text(6.2, 4.35, "Causal response pipeline and response-aligned representation learning",
-              ha="center", va="center", fontsize=9.5)
-    _save(figure, "intro_pipeline")
+def canvas(h=4.4):
+    fig, ax = plt.subplots(figsize=(12,h))
+    ax.set(xlim=(0,12),ylim=(0,h)); ax.axis("off")
+    return fig, ax
 
+def diagrams():
+    fig, ax = canvas()
+    for x,y,w,label in [
+        (.1,1.75,2.3,"站点开通与网格面板\n5,048 事件 · 44 城市"),
+        (3,3,2.4,"处理前特征 X\n训练城市内标准化"),
+        (3,.3,2.4,"因果响应估计\n诊断 · 权重 · 冻结"),
+        (6,3,2.4,"表格编码器\n归一化嵌入 e"),
+        (6,.3,2.4,"响应监督\n形状相似度 + 预测"),
+        (9.2,1.75,2.6,"未见城市评估\n相对 raw / 外观基线")]:
+        box(ax,x,y,w,1,label)
+    for a,b in [((2.4,2.55),(3,3.4)),((2.4,1.95),(3,.9)),((5.4,3.5),(6,3.5)),
+                ((5.4,.8),(6,.8)),((8.4,3.35),(9.2,2.45))]:
+        arrow(ax,a,b)
+    arrow(ax,(7.2,3),(7.2,1.3),"训练时计算损失")
+    ax.text(10.5,.85,"推断仅需要 X",ha="center",color="#168A85",fontsize=13)
+    save(fig,"intro_pipeline")
+    fig, ax = canvas(3.4)
+    seq = [("同城匹配",.1,2),("同城 GSC",3.1,2),("同城 MC",6.1,2),
+           ("跨城匹配",9.1,2),("跨城 GSC",9.1,.3),("跨城 MC",6.1,.3),("跳过",3.1,.3)]
+    for label,x,y in seq:
+        box(ax,x,y,2.6,.9,label)
+    for a,b in [((2.7,2.45),(3.1,2.45)),((5.7,2.45),(6.1,2.45)),
+                ((8.7,2.45),(9.1,2.45)),((10.4,2),(10.4,1.2)),
+                ((9.1,.75),(8.7,.75)),((6.1,.75),(5.7,.75))]:
+        arrow(ax,a,b)
+    ax.text(.2,.75,"任一步可用即保留\n否则继续下一步",fontsize=12,va="center",color="#168A85")
+    ax.text(6,3.15,"每个网格 × 结果族分配一种方法；不是三方法集成",ha="center",fontsize=13)
+    save(fig,"intro_routing")
+    fig, ax = canvas(4.5)
+    for x,w,label in [(.1,2.25,"处理前表格 X\n年度特征 · 1–3 年 lag"),
+        (2.9,2.2,"MLP 编码器\n256 → 128"),(5.7,2.25,"投影头\n128 维 · L2 归一化"),
+        (8.7,3,"嵌入检索 / 预测头\n按结果族输出")]:
+        box(ax,x,3.1,w,1.1,label)
+    for a,b in [((2.35,3.65),(2.9,3.65)),((5.1,3.65),(5.7,3.65)),((7.95,3.65),(8.7,3.65))]:
+        arrow(ax,a,b)
+    for x,w,label in [(.1,3.5,"冻结响应 r + 掩码\n设计权重 W + 估计 SE"),
+                      (4.5,3.5,"成对响应相似度\n对齐损失 + 距离损失"),
+                      (8.7,3,"逐 cell 预测损失\n使用有效标签及权重")]:
+        box(ax,x,.35,w,1.25,label,"#168A85")
+    for a,b in [((3.6,.98),(4.5,.98)),((7,3.1),(6.4,1.6)),((10.2,3.1),(10.2,1.6))]:
+        arrow(ax,a,b)
+    ax.plot([1.85,1.85,10.2],[.35,.05,.05],color="#637381",linewidth=1.3)
+    arrow(ax,(10.2,.05),(10.2,.35))
+    ax.text(3.15,2.3,"联合训练：0.25 对齐 + 0.25 距离\n+ 0.50 预测",ha="center",fontsize=12)
+    save(fig,"intro_model")
+    fig, ax = canvas(4.5)
+    for x,y,w,label in [(.1,1.8,2.8,"城市 CV 最小对照\nraw → ridge / 小型回归"),
+        (3.5,1.8,2.9,"城市外预测\n是否出现稳定增量？"),
+        (7.25,3,4.5,"有：检查表示是否保留该信号\n直接回归 vs 表示 vs raw+响应块"),
+        (7.25,.5,4.5,"未发现：检查支持、标签与特征\n补充时点安全变量，再评估边界")]:
+        box(ax,x,y,w,1.05,label)
+    arrow(ax,(2.9,2.32),(3.5,2.32))
+    arrow(ax,(6.4,2.6),(7.25,3.5),"有")
+    arrow(ax,(6.4,2.05),(7.25,1),"未发现")
+    ax.text(5.9,.15,"未发现增量 ≠ 已证明无信号；最终结论依据城市外配对比较",ha="center",fontsize=12)
+    save(fig,"intro_decision")
+    for name in ("intro_pipeline","intro_routing","intro_model","intro_decision"):
+        AUDIT[name] = {"type": "conceptual", "quantitative_experiment": False}
 
-def support_figure() -> None:
-    availability = pd.read_csv(RELEASE / "availability.csv", encoding="utf-8-sig")
-    families = ["housing", "viirs", "poi", "population"]
-    series = {
-        "matched same-city": (
-            availability[availability["method"].eq("matching") & availability["donor_scope"].eq("same_city")]
-            .set_index("outcome_family")["availability_treated_events"]
-        ),
-        "matched cross-city": (
-            availability[availability["method"].eq("matching") & availability["donor_scope"].eq("all_city_standardized")]
-            .set_index("outcome_family")["availability_treated_events"]
-        ),
-        "GSC same-city": (
-            availability[availability["method"].eq("gsc") & availability["donor_scope"].eq("same_city")]
-            .set_index("outcome_family")["max_supported_treated_grids"]
-        ),
-        "MC same-city": (
-            availability[availability["method"].eq("mc") & availability["donor_scope"].eq("same_city")]
-            .set_index("outcome_family")["max_supported_treated_grids"]
-        ),
-    }
-    figure, axis = plt.subplots(figsize=(8.2, 3.8))
-    x = np.arange(len(families))
-    width = 0.2
-    colors = ["#3b6ea5", "#8fb4d9", "#e39a4a", "#7a9e6b"]
-    for index, (label, values) in enumerate(series.items()):
-        heights = [float(values.get(family, np.nan)) for family in families]
-        positions = x + (index - 1.5) * width
-        axis.bar(positions, heights, width=width, label=label, color=colors[index], edgecolor="white", linewidth=0.4)
-        for position, height in zip(positions, heights, strict=True):
-            if np.isfinite(height):
-                axis.text(position, height * 1.12, f"{int(height)}", ha="center", va="bottom", fontsize=6.4)
-    axis.set_yscale("log")
-    axis.set_ylim(3, 9000)
-    axis.set_xticks(x)
-    axis.set_xticklabels(["housing", "VIIRS", "POI", "population"])
-    axis.set_ylabel("labeled grids (log scale)")
-    axis.set_title("Same-city supervision scale by estimator", fontsize=9)
-    axis.legend(fontsize=6.6, frameon=False, ncol=4, loc="upper center", bbox_to_anchor=(0.5, -0.12))
-    _save(figure, "intro_support")
+def availability_figures():
+    data = pd.read_csv(RELEASE / "availability.csv")
+    columns = [(m,s) for m in METHODS for s in ("same_city","all_city_standardized")]
+    values = np.full((4,6),np.nan)
+    for i,f in enumerate(FAMILIES):
+        for j,(m,s) in enumerate(columns):
+            rows = data[data.outcome_family.eq(f)&data.method.eq(m)&data.donor_scope.eq(s)]
+            assert len(rows) == 1
+            row = rows.iloc[0]
+            if row.status == "available":
+                values[i,j] = row["availability_treated_events" if m == "matching" else "max_supported_treated_grids"]
+    fig, ax = plt.subplots(figsize=(11,4.1),layout="constrained")
+    cmap = plt.get_cmap("Blues").copy(); cmap.set_bad("#F1F3F5")
+    im = ax.imshow(np.ma.masked_invalid(values),norm=LogNorm(vmin=1,vmax=3000),cmap=cmap,aspect="auto")
+    for (i,j),v in np.ndenumerate(values):
+        ax.text(j,i,f"{int(v):,}" if np.isfinite(v) else "无数据",ha="center",va="center",
+                color="white" if v > 500 else "#263746",fontsize=14)
+    ax.set_xticks(range(6),[f"{METHODS[m]}\n{'同城' if s == 'same_city' else '跨城'}" for m,s in columns])
+    ax.set_yticks(range(4),LABELS)
+    fig.colorbar(im,ax=ax,shrink=.85,label="支持数量（对数色阶）")
+    save(fig,"intro_asset_map")
+    record("intro_asset_map","availability.csv",data,data,missing_cells=int(np.isnan(values).sum()),
+           fields={"matching":"availability_treated_events","gsc/mc":"max_supported_treated_grids"},
+           counts_are_final_training_mask=False)
+    fig, ax = plt.subplots(figsize=(10,4.5),layout="constrained")
+    for j,m in enumerate(METHODS):
+        v = values[:,j*2]; y = np.arange(4)+(j-1)*.19; valid = np.isfinite(v)&(v > 0)
+        ax.scatter(v[valid],y[valid],s=80,color=COLORS[m],label=METHODS[m])
+        for x,yy in zip(v[valid],y[valid],strict=False):
+            ax.annotate(f"{int(x):,}",(x,yy),(6,0),textcoords="offset points",va="center",fontsize=11)
+    ax.set(xscale="log",xlim=(3,6500),xlabel="同城支持数量（对数坐标；不同方法口径见正文）")
+    ax.set_yticks(range(4),LABELS); ax.invert_yaxis(); ax.grid(axis="x",alpha=.15)
+    ax.legend(frameon=False,ncol=3,loc="upper center",bbox_to_anchor=(.5,1.13))
+    save(fig,"intro_support")
+    record("intro_support","availability.csv",data,data[data.donor_scope.eq("same_city")],missing="住房 GSC")
 
+def pformat(p):
+    return f"{p:.1e}" if p < .001 else f"{p:.3f}"
 
-def pretrend_figure() -> None:
-    pretrend = pd.read_csv(RELEASE / "pretrend_summary.csv", encoding="utf-8-sig")
-    city = pretrend[pretrend["cluster"].eq("city") & pretrend["donor_scope"].eq("same_city")].copy()
-    families = ["housing", "viirs", "poi", "population"]
-    methods = [("matching", "#3b6ea5"), ("gsc", "#e39a4a"), ("mc", "#7a9e6b")]
-    figure, axis = plt.subplots(figsize=(8.2, 3.6))
-    x = np.arange(len(families))
-    width = 0.26
-    for index, (method, color) in enumerate(methods):
-        heights = []
-        for family in families:
-            rows = city[city["outcome_family"].eq(family) & city["method"].eq(method)]
-            heights.append(float(rows["p_value"].iloc[0]) if not rows.empty else np.nan)
-        positions = x + (index - 1) * width
-        axis.bar(positions, heights, width=width, color=color, label=method, edgecolor="white", linewidth=0.4)
-        for position, height in zip(positions, heights, strict=True):
-            if np.isfinite(height):
-                axis.text(position, height + 0.012, f"{height:.3f}", ha="center", va="bottom", fontsize=6.2, rotation=90)
-    axis.axhline(0.05, color="#b02a2a", linestyle="--", linewidth=0.9)
-    axis.axhline(0.10, color="#d98a2b", linestyle=":", linewidth=0.9)
-    axis.text(3.42, 0.052, "0.05", fontsize=6.4, color="#b02a2a")
-    axis.text(3.42, 0.102, "0.10", fontsize=6.4, color="#d98a2b")
-    axis.set_ylim(0, 0.55)
-    axis.set_xticks(x)
-    axis.set_xticklabels(["housing", "VIIRS", "POI", "population"])
-    axis.set_ylabel("pre-trend test p-value (city cluster)")
-    axis.set_title("Same-city clean-pre tests by estimator", fontsize=9)
-    axis.legend(fontsize=6.6, frameon=False, ncol=3, loc="upper right")
-    _save(figure, "intro_pretrend")
+def pretrend_figures():
+    data = pd.read_csv(RELEASE / "pretrend_summary.csv")
+    sel = data[data.cluster.eq("city")&data.donor_scope.eq("same_city")
+               &data.apply(lambda r:r.outcome == CANONICAL[r.outcome_family],axis=1)]
+    fig, axes = plt.subplots(1,2,figsize=(11.8,4.2),layout="constrained")
+    for ax,methods,title,test in [(axes[0],["matching"],"匹配：处理前系数联合 Wald","joint_wald_pretrend"),
+        (axes[1],["gsc","mc"],"GSC / MC：城市平均 pre-gap","cluster_mean_pre_gap_zero")]:
+        for j,m in enumerate(methods):
+            for i,f in enumerate(FAMILIES):
+                rows = sel[sel.method.eq(m)&sel.outcome_family.eq(f)]
+                if rows.empty: continue
+                assert len(rows) == 1 and rows.iloc[0].test_type == test
+                p = float(rows.iloc[0].p_value); yy = i+(j-(len(methods)-1)/2)*.2
+                ax.scatter(p,yy,s=65,color=COLORS[m],label=METHODS[m] if i == 1 else None)
+                ax.annotate(pformat(p),(p,yy),(-6 if p > .8 else 6,0),textcoords="offset points",
+                            ha="right" if p > .8 else "left",va="center",fontsize=10)
+        ax.axvline(.05,linestyle="--",color="#B55353",linewidth=1)
+        ax.set(xlim=(-.015,1.04),ylim=(3.6,-.6),xlabel="p 值（0.05 为参考线）",title=title)
+        ax.set_yticks(range(4),[label+("（count）" if f == "poi" else "") for label,f in zip(LABELS,FAMILIES,strict=False)])
+        ax.legend(frameon=False,loc="lower right")
+    save(fig,"intro_pretrend")
+    record("intro_pretrend","pretrend_summary.csv",data,sel,canonical_outcomes=CANONICAL,tests_separated=True,
+           values=sel[["method","outcome","p_value"]].to_dict("records"))
+    poi = data[data.cluster.eq("city")&data.donor_scope.eq("same_city")&data.outcome_family.eq("poi")&data.method.isin(["gsc","mc"])]
+    names = sorted(poi.outcome.unique())
+    preferred = [("count","数量（log）"),("entropy","业态熵"),("commercial","商业占比"),("transport","交通可达")]
+    outcomes = [next(n for n in names if token in n) for token,_ in preferred]
+    fig, ax = plt.subplots(figsize=(10.5,4.3),layout="constrained")
+    for j,m in enumerate(("gsc","mc")):
+        for i,o in enumerate(outcomes):
+            rows = poi[poi.method.eq(m)&poi.outcome.eq(o)]; assert len(rows) == 1
+            p = float(rows.iloc[0].p_value); y = i+(j-.5)*.2
+            ax.scatter(p,y,color=COLORS[m],s=70,label=METHODS[m] if i == 0 else None)
+            ax.annotate(pformat(p),(p,y),(7,0),textcoords="offset points",va="center",fontsize=11)
+    ax.axvline(.05,color="#B55353",linestyle="--",linewidth=1)
+    ax.set(xlim=(-.01,.57),ylim=(3.5,-.5),xlabel="城市平均 pre-gap 检验 p 值")
+    ax.set_yticks(range(4),[label for _,label in preferred]); ax.legend(frameon=False,loc="upper right")
+    save(fig,"intro_pretrend_poi")
+    record("intro_pretrend_poi","pretrend_summary.csv",data,poi,all_four_outcomes=True)
 
-
-def asset_map_figure() -> None:
-    availability = pd.read_csv(RELEASE / "availability.csv", encoding="utf-8-sig")
-    families = ["housing", "viirs", "poi", "population"]
-    columns = [
-        ("matching", "same_city", "matched\nsame"),
-        ("matching", "all_city_standardized", "matched\ncross"),
-        ("gsc", "same_city", "GSC\nsame"),
-        ("gsc", "all_city_standardized", "GSC\ncross"),
-        ("mc", "same_city", "MC\nsame"),
-        ("mc", "all_city_standardized", "MC\ncross"),
-    ]
-    values = np.full((len(families), len(columns)), np.nan)
-    for row_index, family in enumerate(families):
-        for column_index, (method, scope, _) in enumerate(columns):
-            rows = availability[
-                availability["outcome_family"].eq(family)
-                & availability["method"].eq(method)
-                & availability["donor_scope"].eq(scope)
-                & availability["status"].eq("available")
-            ]
+def event_figures():
+    data = pd.read_csv(RELEASE / "event_study_panel.csv")
+    windows = json.loads((RELEASE / "manifest.json").read_text(encoding="utf-8"))["windows"]
+    for f in FAMILIES:
+        window = windows[f]
+        lo, hi = int(window["canonical_pre_min"]), int(window["canonical_post_max"])
+        reference = int(window["reference_event_time"])
+        sel = data[data.outcome_family.eq(f)&data.outcome.eq(CANONICAL[f])&data.donor_scope.eq("same_city")&data.event_time.between(lo,hi)]
+        fig, axes = plt.subplots(1,3,figsize=(12,4.2),layout="constrained")
+        added_references = []
+        missing_periods = {}
+        for ax,m in zip(axes,METHODS,strict=False):
+            rows = sel[sel.method.eq(m)].sort_values("event_time")
+            ax.axhline(0,color="#85909A",linewidth=.8); ax.axvline(0,color="#85909A",linewidth=.9,linestyle="--")
+            ax.axvspan(lo,0,color="#F3F5F7",zorder=-1)
             if rows.empty:
-                continue
-            count = rows["availability_treated_events"].iloc[0]
-            if not np.isfinite(count):
-                count = rows["max_supported_treated_grids"].iloc[0]
-            values[row_index, column_index] = float(count) if np.isfinite(count) else np.nan
-    figure, axis = plt.subplots(figsize=(8.6, 3.4))
-    image = axis.imshow(np.log10(np.nan_to_num(values, nan=0.0) + 1), cmap="Blues", aspect="auto", vmin=0, vmax=3.5)
-    for row_index in range(len(families)):
-        for column_index in range(len(columns)):
-            value = values[row_index, column_index]
-            if not np.isfinite(value):
-                axis.text(column_index, row_index, "no_data", ha="center", va="center",
-                          fontsize=7, color="#8a8a8a")
-                continue
-            axis.text(column_index, row_index, f"{int(value)}", ha="center", va="center",
-                      fontsize=7, color="#333333" if value < 800 else "white")
-    axis.set_xticks(range(len(columns)))
-    axis.set_xticklabels([label for _, _, label in columns], fontsize=7)
-    axis.set_yticks(range(len(families)))
-    axis.set_yticklabels(["housing", "VIIRS", "POI", "population"], fontsize=7.5)
-    axis.set_title("Availability map: labeled treated grids (log color)", fontsize=9)
-    figure.colorbar(image, ax=axis, shrink=0.8, label="log10(grids + 1)")
-    _save(figure, "intro_asset_map")
+                ax.text(.5,.5,"无可用曲线",transform=ax.transAxes,ha="center",fontsize=14)
+            else:
+                assert not rows.event_time.duplicated().any()
+                times = set(rows.event_time.astype(int))
+                missing_periods[m] = [h for h in range(min(times), max(times)+1)
+                                      if h not in times and h != reference]
+                if m == "matching" and reference not in times:
+                    # The released TWFE reference is a known normalization, not missing data.
+                    # Add it only for display; never write it into the frozen release or CI.
+                    rows = pd.concat([rows, pd.DataFrame({"event_time": [reference],
+                        "estimate": [0.0], "event_phase": ["reference"],
+                        "ci_lower_city": [np.nan], "ci_upper_city": [np.nan],
+                        "n_city_clusters": [np.nan]})], ignore_index=True).sort_values("event_time")
+                    added_references.append(m)
+                x=rows.event_time.to_numpy(); y=rows.estimate.to_numpy()
+                is_reference = rows.event_time.eq(reference).to_numpy() & rows.event_phase.eq("reference").to_numpy()
+                assert np.allclose(y[is_reference], 0), "Released reference must be normalized to zero"
+                lower=rows.ci_lower_city.to_numpy(); upper=rows.ci_upper_city.to_numpy()
+                valid=(~is_reference)&(rows.n_city_clusters.to_numpy() >= 3)&np.isfinite(lower)&np.isfinite(upper)
+                assert np.all(lower[valid] <= upper[valid])
+                ax.vlines(x[valid],lower[valid],upper[valid],colors=COLORS[m],linewidth=1,alpha=.5)
+                ax.scatter(x[valid],y[valid],color=COLORS[m],s=18,zorder=3)
+                unsupported = (~valid)&(~is_reference)
+                ax.scatter(x[unsupported],y[unsupported],color=COLORS[m],marker="x",s=35,zorder=3)
+                ax.scatter(x[is_reference],y[is_reference],facecolors="white",edgecolors=COLORS[m],
+                           marker="o",s=42,linewidths=1.4,zorder=4)
+                for segment in np.split(np.arange(len(x)),np.where(np.diff(x) != 1)[0]+1):
+                    ax.plot(x[segment],y[segment],color=COLORS[m],linewidth=1.3)
+                nmin, nmax = int(rows.n_city_clusters.min()), int(rows.n_city_clusters.max())
+                cluster_label = str(nmin) if nmin == nmax else f"{nmin}–{nmax}"
+                ax.text(.03,.97,f"城市簇：{cluster_label}",
+                        transform=ax.transAxes,va="top",fontsize=10,color="#526475")
+            ax.set(title=METHODS[m],xlim=(lo-.5,hi+.5),xlabel="相对开通时间（月）" if hi == 24 else "相对开通时间（年）")
+            ax.set_xticks([-24,-12,0,12,24] if hi == 24 else [-6,-3,0,3]); ax.grid(axis="y",alpha=.13)
+        axes[0].set_ylabel("估计效应（结果变量变换尺度）")
+        fig.suptitle(f"空心点：h={reference} 参考期，归一化为 0（非估计值，无误差条）",
+                     fontsize=11, color="#526475")
+        name=f"intro_{f}_event_study"; save(fig,name)
+        record(name,"event_study_panel.csv",data,sel,canonical_outcome=CANONICAL[f],scope="same_city",window=[lo,hi],
+               missing_estimate=int(sel.estimate.isna().sum()),n_less_than_three_city_clusters=int((sel.n_city_clusters < 3).sum()),
+               interval_fields=["ci_lower_city","ci_upper_city"],separate_y_axes=True,
+               reference_event_time=reference,reference_source="manifest.json/windows",
+               display_reference_rows_added=added_references,reference_has_ci=False,
+               true_missing_periods_within_observed_span=missing_periods,
+               specifications=sel[["method","specification","p_value_method"]].drop_duplicates().fillna("").to_dict("records"))
 
+def history_figure():
+    data=pd.read_csv(ROOT / "docs/presentations/data/representation_history.csv")
+    labels=["原始特征","随机近邻","外观自编码器","监督表示 · 默认","监督表示 · 关闭队列"]
+    models=["raw","chance","autoencoder","supervised","queue_off"]
+    colors=["#657786","#B55353","#D28436","#234E70","#168A85"]
+    fig, axes=plt.subplots(1,2,figsize=(12,4.8),layout="constrained")
+    for ax,f in zip(axes,("viirs","poi"),strict=False):
+        sub=data[data.family.eq(f)].set_index("model")
+        for i,(m,color) in enumerate(zip(models,colors,strict=False)):
+            row=sub.loc[m]; mean=row["mean"]
+            if row.error_kind == "seed_sd": error=[[row.error_low],[row.error_high]]; marker="o"
+            elif row.error_kind == "range": error=[[mean-row.error_low],[row.error_high-mean]]; marker="s"
+            else: error=None; marker="D"
+            ax.errorbar(mean,i,xerr=error,fmt=marker,color=color,markersize=7,capsize=4,linewidth=1.8)
+            ax.annotate(f"{mean:.4f}",(mean,i),(0,12),textcoords="offset points",ha="center",fontsize=11)
+        ax.axvline(sub.loc["raw","mean"],color=colors[0],linestyle=":",linewidth=1)
+        ax.set_yticks(range(5),labels); ax.set_ylim(4.6,-.7)
+        ax.set(title=f"{f.upper()} · test n = {int(sub.test_n.iloc[0])}",xlabel="nn_corr@5（越高越好）")
+        ax.grid(axis="x",alpha=.15)
+    save(fig,"intro_evidence")
+    record("intro_evidence","docs/presentations/data/representation_history.csv",data,data,
+           provenance="Previously reported server summary; not locally re-extracted",
+           errors="square: AE reported range; circles: 3-seed mean +/- SD; neither is CI",corrected_city_cv=False)
 
-def weight_curve_figure() -> None:
-    figure, axes = plt.subplots(1, 2, figsize=(9.2, 3.0))
-    d = np.linspace(0, 1, 200)
-    for gamma, style in ((1.0, "-"), (0.5, "--")):
-        axes[0].plot(d, np.exp(-gamma * d), style, color="#3b6ea5", linewidth=1.2,
-                     label=f"gamma={gamma:g}")
-    axes[0].set_xlabel("design unreliability D (percentile)")
-    axes[0].set_ylabel("exp(-gamma D)")
-    axes[0].set_title("Design decay", fontsize=8.5)
-    axes[0].legend(fontsize=6.5, frameon=False)
-    p = np.linspace(0.05, 2.5, 200)
-    for alpha, style in ((0.0, "--"), (0.5, "-")):
-        axes[1].plot(p, np.power(p, alpha), style, color="#e39a4a", linewidth=1.2,
-                     label=f"alpha={alpha:g}")
-    axes[1].set_xlabel("normalized precision p")
-    axes[1].set_ylabel("p^alpha")
-    axes[1].set_title("Precision tempering", fontsize=8.5)
-    axes[1].legend(fontsize=6.5, frameon=False)
-    _save(figure, "intro_weight_curve")
-
-
-def evidence_figure() -> None:
-    families = ["VIIRS (test, n=205)", "POI (test, n=220)"]
-    raws = [0.0036, 0.1089]
-    chance = [0.0031, 0.0342]
-    autoencoder_mean = [0.0078, 0.1113]
-    autoencoder_low = [0.0041, 0.1072]
-    autoencoder_high = [0.0149, 0.1193]
-    model_mean = [0.0150, 0.0955]
-    model_sd = [0.0067, 0.0025]
-    model_q0_mean = [0.0250, 0.1006]
-    model_q0_sd = [0.0184, 0.0174]
-    figure, axis = plt.subplots(figsize=(7.6, 3.8))
-    x = np.arange(len(families))
-    width = 0.16
-    axis.bar(x - 1.5 * width, raws, width, label="raw features", color="#9aa3ab", edgecolor="white", linewidth=0.4)
-    axis.bar(x - 0.5 * width, autoencoder_mean, width, label="appearance autoencoder",
-             color="#e39a4a", edgecolor="white", linewidth=0.4)
-    axis.errorbar(x - 0.5 * width, autoencoder_mean,
-                  yerr=[np.array(autoencoder_mean) - np.array(autoencoder_low),
-                        np.array(autoencoder_high) - np.array(autoencoder_mean)],
-                  fmt="none", ecolor="#8a5a1f", elinewidth=0.8, capsize=2)
-    axis.bar(x + 0.5 * width, model_mean, width, label="supervised model (3 seeds)",
-             color="#3b6ea5", edgecolor="white", linewidth=0.4)
-    axis.errorbar(x + 0.5 * width, model_mean, yerr=model_sd, fmt="none",
-                  ecolor="#1d3d61", elinewidth=0.8, capsize=2)
-    axis.bar(x + 1.5 * width, model_q0_mean, width, label="supervised model, queue off",
-             color="#6b8fb5", edgecolor="white", linewidth=0.4)
-    axis.errorbar(x + 1.5 * width, model_q0_mean, yerr=model_q0_sd, fmt="none",
-                  ecolor="#345a80", elinewidth=0.8, capsize=2)
-    axis.scatter(x, chance, marker="_", s=120, color="#b02a2a", label="random-neighbour baseline", zorder=5)
-    axis.set_xticks(x)
-    axis.set_xticklabels(families)
-    axis.set_ylabel("nn_corr@k (response retrieval)")
-    axis.set_title("Real-data evidence: no stable gain over raw/appearance", fontsize=9)
-    axis.legend(fontsize=6.4, frameon=False, ncol=2)
-    _save(figure, "intro_evidence")
-
-
-def decision_figure() -> None:
-    figure, axis = plt.subplots(figsize=(10.4, 4.2))
-    axis.set_xlim(0, 10.4)
-    axis.set_ylim(0, 4.2)
-    axis.axis("off")
-    boxes = [
-        ("City-level CV control:\nridge / kNN vs refit mean baseline", 0.15, 1.55, 2.3, 1.0, "#eaf1f8", "#3b6ea5"),
-        ("Stable out-of-city\nprediction gain?", 2.85, 1.55, 2.2, 1.0, "#fdf3e3", "#e39a4a"),
-        ("Representation still\nbelow raw geometry?", 5.85, 2.65, 2.2, 1.0, "#fdf3e3", "#e39a4a"),
-        ("Fix the objective:\nraw geometry + compact\nresponse block (lambda=0 allowed)", 8.5, 2.6, 1.75, 1.1, "#e8f1e8", "#7a9e6b"),
-        ("Run the multi-seed\nmatrix with the\ncurrent recipe", 5.85, 1.05, 2.2, 1.0, "#e8f1e8", "#7a9e6b"),
-        ("Features lack signal:\nadd pre-treatment info\n(station/network, time-safe)\nor reframe the paper", 2.85, 0.2, 2.7, 1.1, "#f3e8ee", "#a05a7a"),
+def city_controls_figure():
+    """Display the supplied server summaries; no new fit or inferred interval."""
+    source = "docs/presentations/data/representation_city_controls.csv"
+    data = pd.read_csv(ROOT / source)
+    assert len(data) == 12 and not data.duplicated(["family", "metric", "method"]).any()
+    assert np.isfinite(data.value).all() and data.fold_count.eq(5).all()
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4.2), layout="constrained")
+    settings = [
+        ("shape", "raw", "chance", "形状检索 ↑\n原始特征 vs 随机近邻", "nn_corr@5", (0, .085)),
+        ("amplitude", "ridge", "train_mean", "幅度误差 ↓\nridge vs 训练均值", "RMSE", (.32, .50)),
+        ("direction", "ridge", "train_majority", "方向准确率 ↑\nridge vs 训练多数符号", "准确率（%）", (45, 65)),
     ]
-    for text, x, y, width, height, face, edge in boxes:
-        axis.add_patch(
-            FancyBboxPatch((x, y), width, height, boxstyle="round,pad=0.06",
-                           linewidth=0.9, edgecolor=edge, facecolor=face)
-        )
-        axis.text(x + width / 2, y + height / 2, text, ha="center", va="center", fontsize=7.4)
-    arrows = [
-        ((2.45, 2.05), (2.85, 2.05)),
-        ((5.05, 2.3), (5.85, 3.1)),
-        ((5.05, 1.8), (5.85, 0.8)),
-        ((8.05, 3.15), (8.5, 3.15)),
-        ((6.95, 2.65), (6.95, 2.05)),
-    ]
-    for (x1, y1), (x2, y2) in arrows:
-        axis.add_patch(
-            FancyArrowPatch((x1, y1), (x2, y2), arrowstyle="-|>", mutation_scale=10,
-                            linewidth=0.9, color="#666666")
-        )
-    axis.text(5.32, 2.72, "yes", fontsize=6.8, color="#555555")
-    axis.text(5.32, 1.28, "no", fontsize=6.8, color="#555555")
-    axis.text(8.22, 3.28, "yes", fontsize=6.8, color="#555555")
-    axis.text(7.04, 2.33, "no", fontsize=6.8, color="#555555")
-    axis.text(5.2, 3.98, "Decision tree after the reviewed control experiment",
-              ha="center", va="center", fontsize=9)
-    _save(figure, "intro_decision")
+    for ax, (metric, model, baseline, title, xlabel, limits) in zip(axes, settings, strict=False):
+        subset = data[data.metric.eq(metric)].set_index(["family", "method"])
+        for family, y in (("viirs", 1), ("poi", 0)):
+            estimate = float(subset.loc[(family, model), "value"])
+            reference = float(subset.loc[(family, baseline), "value"])
+            multiplier = 100 if metric == "direction" else 1
+            a, b = estimate * multiplier, reference * multiplier
+            ax.plot([a, b], [y, y], color="#B5C1CA", linewidth=2.2, zorder=1)
+            ax.scatter(b, y, s=75, marker="s", color="#81919D", zorder=2)
+            ax.scatter(a, y, s=85, marker="o", color="#168A85", zorder=3)
+            fmt = ".1f" if metric == "direction" else ".4f"
+            ax.annotate(format(a, fmt), (a, y), (0, 12), textcoords="offset points",
+                        ha="center", fontsize=12, color="#116A66")
+            ax.annotate(format(b, fmt), (b, y), (0, -23), textcoords="offset points",
+                        ha="center", fontsize=12, color="#526475")
+        ax.set(title=title, xlabel=xlabel, xlim=limits, ylim=(-.55, 1.55))
+        ax.set_yticks([1, 0], ["VIIRS", "POI"] if ax is axes[0] else ["", ""])
+        ax.grid(axis="x", alpha=.15)
+        ax.spines["left"].set_visible(False)
+        ax.tick_params(axis="y", length=0)
+    save(fig, "intro_city_controls")
+    record("intro_city_controls", source, data, data,
+           provenance="User-reported server 5-fold city-CV summary; no local refit",
+           statistic="Reported aggregated means; aggregation retained from supplied summary",
+           baseline_definitions={"shape": "random-neighbour response similarity",
+                                 "amplitude": "refit training-label mean",
+                                 "direction": "refit training-label majority sign"},
+           intervals="Not supplied; no interval inferred", pairing="visual comparison of summaries",
+           claims_excluded=["formal R-squared", "confidence intervals", "neural city-CV advantage"])
 
+def other_figures():
+    data=pd.read_parquet(ROOT / "data/active/causal/treatment_unit_list.parquet",columns=["opening_month"])
+    counts=data.opening_month.astype(str).str[:4].astype(int).value_counts().sort_index()
+    assert counts.sum() == len(data)
+    fig, ax=plt.subplots(figsize=(11,3.9),layout="constrained")
+    ax.bar(counts.index,counts.values,color="#234E70",width=.72)
+    for x,y in counts.items(): ax.text(x,y+8,str(y),ha="center",fontsize=11)
+    ax.set_xticks(counts.index, [str(year) for year in counts.index], rotation=35)
+    ax.set(xlabel="开通年份",ylabel="站点开通事件数",ylim=(0,counts.max()*1.14))
+    ax.grid(axis="y",alpha=.15); ax.set_axisbelow(True); save(fig,"intro_sample_years")
+    record("intro_sample_years","treatment_unit_list.parquet",data,data,grouped_counts={str(k):int(v) for k,v in counts.items()})
+    fig, axes=plt.subplots(1,2,figsize=(11,3.8),layout="constrained")
+    d=np.linspace(0,1,101); p=np.linspace(.05,2.5,101)
+    for gamma,style in [(1,"-"),(.5,"--")]: axes[0].plot(d,np.exp(-gamma*d),style,label=f"γ = {gamma}",color="#234E70",linewidth=2)
+    for alpha,style in [(0,"--"),(.5,"-")]: axes[1].plot(p,p**alpha,style,label=f"α = {alpha}",color="#168A85",linewidth=2)
+    axes[0].set(xlabel="设计不可靠度 D（序数分数）",ylabel="设计分量 exp(−γD)")
+    axes[1].set(xlabel="归一化精度 p",ylabel="精度分量 p^α")
+    for ax in axes: ax.legend(frameon=False); ax.grid(alpha=.15)
+    save(fig,"intro_weight_curve")
+    AUDIT["intro_weight_curve"]={"type":"functional illustration","gamma":[1,.5],"alpha":[0,.5],"before_final_normalization":True}
 
-def sample_years_figure() -> None:
-    treatments = pd.read_parquet(
-        ROOT / "data" / "active" / "causal" / "treatment_unit_list.parquet",
-        columns=["opening_month"],
-    )
-    years = treatments["opening_month"].astype(str).str.slice(0, 4).astype(int)
-    counts = years.value_counts().sort_index()
-    figure, axis = plt.subplots(figsize=(8.6, 3.3))
-    axis.bar(counts.index, counts.values, color="#3b6ea5", edgecolor="white", linewidth=0.4)
-    for year, value in counts.items():
-        axis.text(year, value + 8, str(int(value)), ha="center", va="bottom", fontsize=6.2)
-    axis.set_xlabel("opening year")
-    axis.set_ylabel("station openings")
-    axis.set_title("Frozen treatment list: openings per year (5,048 events, 2010-2025)", fontsize=9)
-    twin = axis.twinx()
-    twin.plot(counts.index, np.cumsum(counts.values), color="#e39a4a", linewidth=1.4)
-    twin.set_ylabel("cumulative", color="#b0721f")
-    twin.tick_params(axis="y", colors="#b0721f")
-    twin.spines["top"].set_visible(False)
-    axis.spines["top"].set_visible(False)
-    axis.set_xticks(range(counts.index.min(), counts.index.max() + 1, 2))
-    _save(figure, "intro_sample_years")
-
-
-def main() -> int:
-    OUT.mkdir(parents=True, exist_ok=True)
-    pipeline_figure()
-    support_figure()
-    pretrend_figure()
-    asset_map_figure()
-    weight_curve_figure()
-    evidence_figure()
-    decision_figure()
-    sample_years_figure()
-    print("Wrote figures to", OUT)
-    return 0
-
+def main():
+    OUT.mkdir(parents=True,exist_ok=True)
+    diagrams(); availability_figures(); pretrend_figures(); event_figures(); history_figure(); city_controls_figure(); other_figures()
+    (OUT / "intro_chart_audit.json").write_text(json.dumps(AUDIT,ensure_ascii=False,indent=2),encoding="utf-8")
+    print(f"Exported {len(AUDIT)} figures in PDF / SVG / 300 dpi PNG to {OUT}")
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

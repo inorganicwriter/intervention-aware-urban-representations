@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader
 
 from ..dataset import RepresentationDataset
 from ..evaluation import retrieval_metrics
-from ..loss import total_loss
+from ..loss import multimodal_causal_loss, total_loss
 from ..model import ResponseEmbeddingModel
 from ..queue import EmbeddingQueue
 
@@ -46,6 +46,10 @@ def _run_epoch(
     se_shrinkage: bool = True,
     learnable_temperature: bool = False,
     eval_k: int = 5,
+    loss_type: str = "multimodal_causal",
+    loss_anchor_weight: float = 0.85,
+    loss_align_weight: float = 0.15,
+    loss_huber_delta: float = 1.0,
 ) -> dict[str, float]:
     if is_training:
         model.train()
@@ -81,44 +85,89 @@ def _run_epoch(
             image_mask = batch.get("image_mask")
             conditioning_tokens = batch.get("conditioning_tokens")
             station_tokens = batch.get("station_tokens")
+            satellite_vectors = batch.get("satellite_vectors")
+            satellite_mask = batch.get("satellite_mask")
             if images is not None:
                 images = images.to(device)
             if image_mask is not None:
                 image_mask = image_mask.to(device)
             if conditioning_tokens is not None:
                 conditioning_tokens = conditioning_tokens.to(device)
+            if satellite_vectors is not None:
+                satellite_vectors = satellite_vectors.to(device)
+            if satellite_mask is not None:
+                satellite_mask = satellite_mask.to(device)
 
-            embedding, predictions = model(
-                features, images, image_mask,
-                conditioning_tokens=conditioning_tokens,
-                station_tokens=station_tokens,
-            )
+            if getattr(model, "is_stc_model", False):
+                device_batch = {
+                    k: v.to(device) if torch.is_tensor(v) else v
+                    for k, v in batch.items()
+                }
+                embedding, predictions, _ = model.forward_batch(device_batch)
+            else:
+                embedding, predictions = model(
+                    features,
+                    images,
+                    image_mask,
+                    conditioning_tokens=conditioning_tokens,
+                    station_tokens=station_tokens,
+                    satellite_vectors=satellite_vectors,
+                    satellite_mask=satellite_mask,
+                )
             temperature_t = model.temperature() if learnable_temperature else temperature
             queue_state = queue.labeled_state() if queue is not None else None
-            losses = total_loss(
-                embedding,
-                predictions,
-                responses,
-                response_mask,
-                response_se,
-                temperature=temperature_t,
-                rep_alpha=rep_alpha,
-                pred_weight=pred_weight,
-                se_shrinkage=se_shrinkage,
-                queue_embeddings=queue_state["embeddings"] if queue_state else None,
-                queue_responses=queue_state["responses"] if queue_state else None,
-                queue_response_mask=queue_state["response_mask"] if queue_state else None,
-                queue_response_se=queue_state["response_se"] if queue_state else None,
-                anchor_ids=treatment_orders,
-                queue_ids=queue_state["ids"] if queue_state else None,
-                log_var_rep=model.log_var_rep if model.uncertainty_weighted else None,
-                log_var_pred=model.log_var_pred if model.uncertainty_weighted else None,
-                response_weight=response_weight,
-                queue_response_weight=(
-                    queue_state.get("response_weight") if queue_state else None
-                ),
-            )
-            loss = losses["total"]
+            if loss_type == "multimodal_causal":
+                losses = multimodal_causal_loss(
+                    embeddings=embedding,
+                    predictions=predictions,
+                    responses=responses,
+                    response_mask=response_mask,
+                    response_weight=response_weight,
+                    response_se=response_se if se_shrinkage else None,
+                    anchor_weight=loss_anchor_weight,
+                    align_weight=loss_align_weight,
+                    temperature=temperature_t,
+                    delta=loss_huber_delta,
+                    log_var_rep=model.log_var_rep if model.uncertainty_weighted else None,
+                    log_var_pred=model.log_var_pred if model.uncertainty_weighted else None,
+                    queue_embeddings=queue_state["embeddings"] if queue_state else None,
+                    queue_responses=queue_state["responses"] if queue_state else None,
+                    queue_response_mask=queue_state["response_mask"] if queue_state else None,
+                    queue_response_se=queue_state["response_se"] if queue_state else None,
+                    anchor_ids=treatment_orders,
+                    queue_ids=queue_state["ids"] if queue_state else None,
+                    queue_response_weight=(
+                        queue_state["response_weight"] if queue_state else None
+                    ),
+                )
+                loss = losses["total"]
+                losses["representation"] = losses["align_loss"]
+                losses["prediction"] = losses["anchor_loss"]
+            else:
+                losses = total_loss(
+                    embedding,
+                    predictions,
+                    responses,
+                    response_mask,
+                    response_se,
+                    temperature=temperature_t,
+                    rep_alpha=rep_alpha,
+                    pred_weight=pred_weight,
+                    se_shrinkage=se_shrinkage,
+                    queue_embeddings=queue_state["embeddings"] if queue_state else None,
+                    queue_responses=queue_state["responses"] if queue_state else None,
+                    queue_response_mask=queue_state["response_mask"] if queue_state else None,
+                    queue_response_se=queue_state["response_se"] if queue_state else None,
+                    anchor_ids=treatment_orders,
+                    queue_ids=queue_state["ids"] if queue_state else None,
+                    log_var_rep=model.log_var_rep if model.uncertainty_weighted else None,
+                    log_var_pred=model.log_var_pred if model.uncertainty_weighted else None,
+                    response_weight=response_weight,
+                    queue_response_weight=(
+                        queue_state.get("response_weight") if queue_state else None
+                    ),
+                )
+                loss = losses["total"]
 
             if is_training and optimizer is not None:
                 optimizer.zero_grad()
@@ -185,27 +234,48 @@ def _run_epoch(
         eval_log_var_pred = (
             model.log_var_pred.detach().cpu() if model.log_var_pred is not None else None
         )
-        full_losses = total_loss(
-            val_emb,
-            val_predictions,
-            val_resp,
-            val_mask,
-            val_se,
-            temperature=full_temperature,
-            rep_alpha=rep_alpha,
-            pred_weight=pred_weight,
-            se_shrinkage=se_shrinkage,
-            log_var_rep=eval_log_var_rep if model.uncertainty_weighted else None,
-            log_var_pred=eval_log_var_pred if model.uncertainty_weighted else None,
-            response_weight=val_weight,
-        )
-        result.update(
-            {
-                "total": float(full_losses["total"].item()),
-                "representation": float(full_losses["representation"].item()),
-                "prediction": float(full_losses["prediction"].item()),
-            }
-        )
+        if loss_type == "multimodal_causal":
+            full_losses = multimodal_causal_loss(
+                embeddings=val_emb,
+                predictions=val_predictions,
+                responses=val_resp,
+                response_mask=val_mask,
+                response_weight=val_weight,
+                response_se=val_se if se_shrinkage else None,
+                anchor_weight=loss_anchor_weight,
+                align_weight=loss_align_weight,
+                temperature=full_temperature,
+                delta=loss_huber_delta,
+            )
+            result.update(
+                {
+                    "total": float(full_losses["total"].item()),
+                    "representation": float(full_losses["align_loss"].item()),
+                    "prediction": float(full_losses["anchor_loss"].item()),
+                }
+            )
+        else:
+            full_losses = total_loss(
+                val_emb,
+                val_predictions,
+                val_resp,
+                val_mask,
+                val_se,
+                temperature=full_temperature,
+                rep_alpha=rep_alpha,
+                pred_weight=pred_weight,
+                se_shrinkage=se_shrinkage,
+                log_var_rep=eval_log_var_rep if model.uncertainty_weighted else None,
+                log_var_pred=eval_log_var_pred if model.uncertainty_weighted else None,
+                response_weight=val_weight,
+            )
+            result.update(
+                {
+                    "total": float(full_losses["total"].item()),
+                    "representation": float(full_losses["representation"].item()),
+                    "prediction": float(full_losses["prediction"].item()),
+                }
+            )
         result.update(_evaluate_retrieval(val_emb, val_resp, val_mask, k=eval_k))
 
     return result

@@ -32,6 +32,7 @@ def response_similarity(
     families: list[str] | None = None,
     weights: torch.Tensor | None = None,
     precision: str = "float32",
+    response_offsets: dict[str, tuple[int, int, list[str]]] | None = None,
 ) -> torch.Tensor:
     """Vectorized pairwise correlation over commonly-observed response cells.
 
@@ -42,12 +43,22 @@ def response_similarity(
     ``(i, j)`` carries weight ``sqrt(w_i w_j)``.  Without weights the plain
     correlation is returned.
 
+    ``response_offsets`` is the dataset-specific family layout.  It is required
+    for per-family releases whose response dimension is not the full 27-cell
+    layout; otherwise ``families`` cannot be resolved without silently using
+    the wrong slices.
+
     ``precision="float64"`` recomputes the covariances in double precision,
     which avoids the cancellation error of the one-pass sum-of-squares formula
     on response paths whose level dominates their variation.
     """
     similarity, _ = response_similarity_with_validity(
-        responses, masks, families, weights, precision=precision
+        responses,
+        masks,
+        families,
+        weights,
+        precision=precision,
+        response_offsets=response_offsets,
     )
     return similarity
 
@@ -58,6 +69,7 @@ def response_similarity_with_validity(
     families: list[str] | None = None,
     weights: torch.Tensor | None = None,
     precision: str = "float32",
+    response_offsets: dict[str, tuple[int, int, list[str]]] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Return response correlation and whether each pair is comparable.
 
@@ -67,7 +79,15 @@ def response_similarity_with_validity(
     zero response similarity.
     """
     return response_similarity_between(
-        responses, masks, responses, masks, families, weights, weights, precision=precision
+        responses,
+        masks,
+        responses,
+        masks,
+        families,
+        weights,
+        weights,
+        precision=precision,
+        response_offsets=response_offsets,
     )
 
 
@@ -80,6 +100,7 @@ def response_similarity_between(
     weights_a: torch.Tensor | None = None,
     weights_b: torch.Tensor | None = None,
     precision: str = "float32",
+    response_offsets: dict[str, tuple[int, int, list[str]]] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Rectangular response similarity without constructing a square joint pool.
 
@@ -123,14 +144,26 @@ def response_similarity_between(
     sim_sum = responses_a.new_zeros(n_a, n_b)
     valid_count = torch.zeros(n_a, n_b, dtype=torch.int32, device=responses_a.device)
 
-    if dim == RESPONSE_DIM:
-        family_names = list(families) if families is not None else list(RESPONSE_OFFSETS)
-        for name in family_names:
-            if name not in RESPONSE_OFFSETS:
-                raise ValueError(f"Unknown outcome family: {name}")
-        segments = [(RESPONSE_OFFSETS[name][0], RESPONSE_OFFSETS[name][1]) for name in family_names]
-    else:
+    offsets = response_offsets if response_offsets is not None else (
+        RESPONSE_OFFSETS if dim == RESPONSE_DIM else None
+    )
+    if offsets is None:
+        if families is not None:
+            raise ValueError(
+                "families requires response_offsets when the response dimension is "
+                "not the full 27-cell layout"
+            )
         segments = [(0, dim)]
+    else:
+        family_names = list(families) if families is not None else list(offsets)
+        for name in family_names:
+            if name not in offsets:
+                raise ValueError(f"Unknown outcome family: {name}")
+        segments = [(offsets[name][0], offsets[name][1]) for name in family_names]
+        if any(end > dim for _, end in segments):
+            raise ValueError(
+                f"response_offsets exceed the response dimension {dim}: {segments}"
+            )
 
     eps = 1e-10
     for start, end in segments:
@@ -207,6 +240,28 @@ def response_similarity_between(
         torch.zeros_like(sim_sum),
     )
     return similarity, valid_pairs
+
+
+def _prediction_slice(
+    predictions: dict[str, torch.Tensor],
+    family: str,
+    start: int,
+    end: int,
+    response_dim: int,
+) -> torch.Tensor | None:
+    """Resolve a family segment from per-family or full-vector predictions."""
+    if family in predictions:
+        prediction = predictions[family]
+        if prediction.shape[1] == end - start:
+            return prediction
+        if prediction.shape[1] == response_dim:
+            return prediction[:, start:end]
+        return None
+    if len(predictions) == 1:
+        only = next(iter(predictions.values()))
+        if only.shape[1] == response_dim:
+            return only[:, start:end]
+    return None
 
 
 def _normalize_rows(vectors: torch.Tensor) -> torch.Tensor:
@@ -300,21 +355,34 @@ def retrieval_metrics(
     responses: torch.Tensor,
     masks: torch.Tensor,
     k: int = 5,
+    response_offsets: dict[str, tuple[int, int, list[str]]] | None = None,
 ) -> dict[str, dict[str, object]]:
     """Retrieval quality overall and per outcome family.
 
     Neighbours are always chosen from embedding cosine similarity; the score is
     the response similarity with those neighbours, evaluated on all families
-    jointly (``overall``) and on each family separately.
+    jointly (``overall``) and on each family separately.  For per-family
+    releases, pass the dataset-specific ``response_offsets`` so each family
+    block is computed from its own response segment.
     """
     emb_cos = cosine_similarity(embeddings)
-    overall_sim, overall_valid = response_similarity_with_validity(responses, masks)
+    overall_sim, overall_valid = response_similarity_with_validity(
+        responses, masks, response_offsets=response_offsets
+    )
     result: dict[str, dict[str, object]] = {
         "overall": _metric_block(emb_cos, overall_sim, overall_valid, k),
     }
-    for family in RESPONSE_OFFSETS:
+    offsets = response_offsets if response_offsets is not None else (
+        RESPONSE_OFFSETS if responses.shape[1] == RESPONSE_DIM else None
+    )
+    if offsets is None:
+        return result
+    for family in offsets:
         family_sim, family_valid = response_similarity_with_validity(
-            responses, masks, families=[family]
+            responses,
+            masks,
+            families=[family],
+            response_offsets=offsets,
         )
         result[family] = _metric_block(
             emb_cos, family_sim, family_valid, k
@@ -361,6 +429,7 @@ def permutation_test(
     seed: int = 42,
     max_units: int = 512,
     families: list[str] | None = None,
+    response_offsets: dict[str, tuple[int, int, list[str]]] | None = None,
 ) -> dict[str, object]:
     """Chance distribution of ``nn_corr@k`` under shuffled response labels.
 
@@ -386,13 +455,15 @@ def permutation_test(
         masks = masks[keep]
         n = max_units
 
-    observed_sim, observed_valid = response_similarity_with_validity(responses, masks, families)
+    observed_sim, observed_valid = response_similarity_with_validity(
+        responses, masks, families, response_offsets=response_offsets
+    )
     observed = nn_corr_at_k(emb_cos, observed_sim, k, observed_valid)
     nulls = np.empty(n_perm, dtype=np.float64)
     for b in range(n_perm):
         idx = rng.permutation(n)
         null_sim, null_valid = response_similarity_with_validity(
-            responses[idx], masks[idx], families
+            responses[idx], masks[idx], families, response_offsets=response_offsets
         )
         nulls[b] = nn_corr_at_k(emb_cos, null_sim, k, null_valid)
     p_value = float((1 + int((nulls >= observed).sum())) / (1 + n_perm))
@@ -417,6 +488,7 @@ def probe_rmse(
     min_obs: int = 16,
     families: list[str] | None = None,
     center: bool = True,
+    response_offsets: dict[str, tuple[int, int, list[str]]] | None = None,
 ) -> dict[str, object]:
     """Linear-probe transfer metric: per-response-cell ridge, fitted on train.
 
@@ -436,17 +508,29 @@ def probe_rmse(
     n_train, dim = y_train.shape
     if x_train.shape[0] != n_train or y_test.shape[1] != dim:
         raise ValueError("Probe inputs have inconsistent shapes")
-    if dim == RESPONSE_DIM:
-        family_names = list(families) if families is not None else list(RESPONSE_OFFSETS)
+    offsets = response_offsets if response_offsets is not None else (
+        RESPONSE_OFFSETS if dim == RESPONSE_DIM else None
+    )
+    if offsets is None:
+        if families is not None:
+            raise ValueError(
+                "families requires response_offsets when the response dimension is "
+                "not the full 27-cell layout"
+            )
+        family_cells = {"raw": list(range(dim))}
+    else:
+        family_names = list(families) if families is not None else list(offsets)
         for name in family_names:
-            if name not in RESPONSE_OFFSETS:
+            if name not in offsets:
                 raise ValueError(f"Unknown outcome family: {name}")
         family_cells = {
-            name: list(range(RESPONSE_OFFSETS[name][0], RESPONSE_OFFSETS[name][1]))
+            name: list(range(offsets[name][0], offsets[name][1]))
             for name in family_names
         }
-    else:
-        family_cells = {"raw": list(range(dim))}
+        if any(cell >= dim for cells in family_cells.values() for cell in cells):
+            raise ValueError(
+                f"response_offsets exceed the response dimension {dim}: {family_cells}"
+            )
     all_cells = [cell for cells in family_cells.values() for cell in cells]
 
     mse_by_cell: dict[int, float] = {}
@@ -525,6 +609,7 @@ def select_probe_ridge(
     candidates: Sequence[float] = (0.01, 0.1, 1.0, 10.0, 100.0),
     min_obs: int = 16,
     families: list[str] | None = None,
+    response_offsets: dict[str, tuple[int, int, list[str]]] | None = None,
 ) -> dict[str, object]:
     """Pick the ridge strength with the lowest validation probe RMSE.
 
@@ -544,6 +629,7 @@ def select_probe_ridge(
             ridge=float(candidate),
             min_obs=min_obs,
             families=families,
+            response_offsets=response_offsets,
         )
         rmse = result["rmse_overall"]
         if isinstance(rmse, (int, float)):
@@ -552,3 +638,273 @@ def select_probe_ridge(
         return {"selected_ridge": None, "validation_rmse": {}}
     selected = min(scores, key=scores.__getitem__)
     return {"selected_ridge": float(selected), "validation_rmse": scores}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Level 1 to Level 4 Evaluation Hierarchy
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def trajectory_prediction_metrics(
+    predictions: dict[str, torch.Tensor],
+    responses: torch.Tensor,
+    response_mask: torch.Tensor,
+    response_weight: torch.Tensor | None = None,
+    delta: float = 1.0,
+    response_offsets: dict[str, tuple[int, int, list[str]]] | None = None,
+) -> dict[str, object]:
+    """Level 1: Continuous causal trajectory prediction and concordance metrics."""
+    results: dict[str, object] = {}
+    overall_huber: list[float] = []
+    overall_mse: list[float] = []
+    overall_mae: list[float] = []
+    overall_pearson: list[float] = []
+    dir_matches: list[int] = []
+    dir_totals: list[int] = []
+
+    if response_offsets is not None:
+        offsets_map = response_offsets
+    elif responses.shape[1] == 27:
+        offsets_map = RESPONSE_OFFSETS
+    elif len(predictions) == 1:
+        fam = next(iter(predictions.keys()))
+        offsets_map = {fam: (0, responses.shape[1], [])}
+    else:
+        offsets_map = {}
+        curr = 0
+        for fam, p in predictions.items():
+            dim = p.shape[1]
+            offsets_map[fam] = (curr, curr + dim, [])
+            curr += dim
+
+    for family, (start, end, *_) in offsets_map.items():
+        pred = _prediction_slice(
+            predictions, family, start, end, responses.shape[1]
+        )
+        if pred is None:
+            continue
+        target = responses[:, start:end]
+        mask = response_mask[:, start:end]
+        weight_slice = response_weight[:, start:end] if response_weight is not None else None
+
+        if mask.sum() == 0:
+            continue
+
+        pred_valid = pred[mask]
+        target_valid = target[mask]
+        diff = pred_valid - target_valid
+        abs_diff = torch.abs(diff)
+
+        huber = torch.where(
+            abs_diff <= delta,
+            0.5 * (diff**2),
+            delta * (abs_diff - 0.5 * delta),
+        )
+
+        if response_weight is not None and weight_slice is not None:
+            w = torch.nan_to_num(weight_slice, nan=0.0).clamp_min(0.0)[mask]
+            w_sum = w.sum().item()
+            if w_sum > 0:
+                huber_val = float((huber * w).sum().item() / w_sum)
+                mse_val = float(((diff**2) * w).sum().item() / w_sum)
+                mae_val = float((abs_diff * w).sum().item() / w_sum)
+            else:
+                huber_val = float(huber.mean().item())
+                mse_val = float((diff**2).mean().item())
+                mae_val = float(abs_diff.mean().item())
+        else:
+            huber_val = float(huber.mean().item())
+            mse_val = float((diff**2).mean().item())
+            mae_val = float(abs_diff.mean().item())
+
+        sign_pred = torch.sign(pred_valid)
+        sign_target = torch.sign(target_valid)
+        sig_mask = abs_diff > 1e-4
+        match = (sign_pred[sig_mask] == sign_target[sig_mask]).sum().item()
+        total_sig = sig_mask.sum().item()
+
+        if len(pred_valid) >= 2 and float(torch.std(pred_valid)) > 1e-6 and float(torch.std(target_valid)) > 1e-6:
+            vx = pred_valid - pred_valid.mean()
+            vy = target_valid - target_valid.mean()
+            denom = float(torch.norm(vx, 2) * torch.norm(vy, 2))
+            pearson_val = float((vx * vy).sum().item() / denom) if denom > 1e-12 else 0.0
+        else:
+            pearson_val = 0.0
+
+        overall_huber.append(huber_val)
+        overall_mse.append(mse_val)
+        overall_mae.append(mae_val)
+        overall_pearson.append(pearson_val)
+        dir_matches.append(int(match))
+        dir_totals.append(int(total_sig))
+
+        results[family] = {
+            "huber_loss": huber_val,
+            "mse": mse_val,
+            "rmse": float(np.sqrt(mse_val)),
+            "mae": mae_val,
+            "pearson_r": pearson_val,
+            "directional_accuracy": float(match / total_sig) if total_sig > 0 else 1.0,
+            "evaluated_cells": int(mask.sum().item()),
+        }
+
+    total_dir_matches = sum(dir_matches)
+    total_dir_cells = sum(dir_totals)
+    results["overall"] = {
+        "mean_huber_loss": float(np.mean(overall_huber)) if overall_huber else 0.0,
+        "mean_mse": float(np.mean(overall_mse)) if overall_mse else 0.0,
+        "mean_rmse": float(np.sqrt(np.mean(overall_mse))) if overall_mse else 0.0,
+        "mean_mae": float(np.mean(overall_mae)) if overall_mae else 0.0,
+        "mean_pearson_r": float(np.mean(overall_pearson)) if overall_pearson else 0.0,
+        "directional_accuracy": (
+            float(total_dir_matches / total_dir_cells) if total_dir_cells > 0 else 1.0
+        ),
+    }
+    return results
+
+
+def planning_semantic_classification_metrics(
+    predictions: dict[str, torch.Tensor],
+    responses: torch.Tensor,
+    response_mask: torch.Tensor,
+    threshold: float = 0.05,
+    response_offsets: dict[str, tuple[int, int, list[str]]] | None = None,
+) -> dict[str, object]:
+    """Level 2: Planning Semantic Classification (Activation, Displacement, No Response).
+
+    Discretizes continuous response trajectories into 3 canonical urban planning regimes:
+    0: Activation (+)      - mean response > threshold
+    1: No Response (0)     - |mean response| <= threshold
+    2: Displacement (-)    - mean response < -threshold
+    """
+    results: dict[str, object] = {}
+
+    if response_offsets is not None:
+        offsets_map = response_offsets
+    elif responses.shape[1] == RESPONSE_DIM:
+        offsets_map = RESPONSE_OFFSETS
+    elif len(predictions) == 1:
+        family = next(iter(predictions))
+        offsets_map = {family: (0, responses.shape[1], [])}
+    else:
+        offsets_map = {}
+        cursor = 0
+        for family, pred in predictions.items():
+            offsets_map[family] = (cursor, cursor + pred.shape[1], [])
+            cursor += pred.shape[1]
+
+    for family, (start, end, *_) in offsets_map.items():
+        pred = _prediction_slice(
+            predictions, family, start, end, responses.shape[1]
+        )
+        if pred is None:
+            continue
+        target = responses[:, start:end]
+        mask = response_mask[:, start:end]
+        if pred.shape[1] != target.shape[1]:
+            raise ValueError(
+                f"Prediction for {family} has {pred.shape[1]} cells but the response "
+                f"target has {target.shape[1]}"
+            )
+
+        valid_units = mask.sum(dim=1) > 0
+        if not valid_units.any():
+            continue
+
+        # Masked response cells are stored as NaN.  Multiply-by-mask leaves
+        # those NaNs in the sum, so zero them explicitly before averaging.
+        zero = torch.zeros_like(target)
+        target = torch.where(mask, target, zero)
+        pred = torch.where(mask, pred, zero)
+        pred_mean = pred.sum(dim=1)[valid_units] / mask.sum(dim=1)[valid_units].clamp_min(1)
+        target_mean = target.sum(dim=1)[valid_units] / mask.sum(dim=1)[valid_units].clamp_min(1)
+
+        y_true = np.where(
+            target_mean.cpu().numpy() > threshold,
+            0,
+            np.where(target_mean.cpu().numpy() < -threshold, 2, 1),
+        )
+        y_pred = np.where(
+            pred_mean.cpu().numpy() > threshold,
+            0,
+            np.where(pred_mean.cpu().numpy() < -threshold, 2, 1),
+        )
+
+        classes = [0, 1, 2]
+        cm = np.zeros((3, 3), dtype=int)
+        for t, p in zip(y_true, y_pred, strict=False):
+            cm[t, p] += 1
+
+        accuracy = float((y_true == y_pred).mean())
+
+        # Per-class F1 & Macro-F1
+        f1_list = []
+        for c in classes:
+            tp = cm[c, c]
+            fp = cm[:, c].sum() - tp
+            fn = cm[c, :].sum() - tp
+            prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+            rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+            f1 = (2 * prec * rec / (prec + rec)) if (prec + rec) > 0 else 0.0
+            f1_list.append(f1)
+
+        macro_f1 = float(np.mean(f1_list))
+
+        # Cohen's Kappa
+        n_samples = len(y_true)
+        p_o = accuracy
+        p_e = float(sum((cm[c, :].sum() * cm[:, c].sum()) for c in classes) / (n_samples**2)) if n_samples > 0 else 0.0
+        kappa = float((p_o - p_e) / (1.0 - p_e)) if (1.0 - p_e) > 1e-12 else 0.0
+
+        results[family] = {
+            "accuracy": accuracy,
+            "macro_f1": macro_f1,
+            "cohens_kappa": kappa,
+            "class_f1": {
+                "positive": float(f1_list[0]),
+                "neutral_or_uncertain": float(f1_list[1]),
+                "negative": float(f1_list[2]),
+                "activation": float(f1_list[0]),
+                "no_response": float(f1_list[1]),
+                "displacement": float(f1_list[2]),
+            },
+            "confusion_matrix": cm.tolist(),
+            "sample_count": int(n_samples),
+        }
+
+    return results
+
+
+def latent_manifold_umap(
+    embeddings: np.ndarray,
+    treatment_orders: list[int],
+    city_keys: list[str],
+    n_neighbors: int = 15,
+    min_dist: float = 0.1,
+    random_state: int = 42,
+) -> dict[str, object]:
+    """Level 4: Dimensionality reduction for latent space manifold visualization."""
+    try:
+        import umap
+
+        reducer = umap.UMAP(
+            n_neighbors=n_neighbors,
+            min_dist=min_dist,
+            n_components=2,
+            random_state=random_state,
+        )
+        proj_2d = reducer.fit_transform(embeddings)
+        method = "umap"
+    except ImportError:
+        # Fallback to pure numpy SVD-based PCA without external dependencies
+        x_centered = embeddings - embeddings.mean(axis=0, keepdims=True)
+        _, _, vt = np.linalg.svd(x_centered, full_matrices=False)
+        proj_2d = x_centered @ vt[:2].T
+        method = "pca_fallback"
+
+    return {
+        "method": method,
+        "treatment_orders": treatment_orders,
+        "city_keys": city_keys,
+        "coords_2d": proj_2d.tolist(),
+    }

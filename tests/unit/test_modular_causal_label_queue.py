@@ -18,7 +18,7 @@ from urban_intervention.causal.label_queue import orchestrator as modular_orches
 ROOT = Path(__file__).resolve().parents[2]
 ORIGINAL_PATH = ROOT / "scripts" / "causal_python" / "run_causal_label_queue.py"
 MODULAR_PATH = ROOT / "scripts" / "causal_python" / "run_causal_label_queue_modular.py"
-ORIGINAL_NORMALIZED_SHA256 = "01a9a2ab3edc4495333a91e9a17dbe9bd93c0f2a5ec975ae53fa746ff5ef2162"
+ORIGINAL_NORMALIZED_SHA256 = "f602e69f2b998ca5ded0bef9ede134b7b24a752910cda2b48a0f5061ffe173e2"
 
 SPEC = importlib.util.spec_from_file_location("frozen_causal_label_queue", ORIGINAL_PATH)
 assert SPEC is not None and SPEC.loader is not None

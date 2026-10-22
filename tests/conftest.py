@@ -4,8 +4,16 @@ Ensures the packaged source tree and compatibility script directories are
 available without requiring an editable install during local tests.
 """
 
+import os
 import sys
 from pathlib import Path
+
+# Windows: torch and numpy both load libiomp5md.dll; whichever is imported first
+# can abort the process when the other is loaded later.  Allow the duplicate
+# OpenMP runtime before any test module imports torch (same workaround as the
+# representation CLI entry points).
+if os.name == "nt":
+    os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))

@@ -63,6 +63,8 @@
 
 ## 3. Python 环境（mit）
 
+下面的建环境命令仅适用于首次部署。S/T/C 真实服务器验收必须复用服务器现有的 `mit` 环境；验收时不要创建、删除或重建环境，也不要默认执行全量依赖升级。先记录 Python/PyTorch/CUDA 与图像、Parquet、TIFF 依赖状态；只有发现本次验收必需的依赖缺失时，才按最小范围修复并记录变更。
+
 ```bash
 conda env create -f environment.yml -n mit        # 或 conda env update -n mit -f environment.yml --prune
 conda activate mit

@@ -9,7 +9,9 @@ import pytest
 
 from urban_intervention.causal.pretraining_dataset import (
     IDENTITY_COLUMNS,
+    STC_CONTEXT_TABULAR_COLUMNS,
     _best_quality_grade,
+    _enforce_production_supervision_scope,
     _task_sampling_weight,
     build_pretreatment_features,
     deterministic_city_splits,
@@ -18,6 +20,23 @@ from urban_intervention.causal.pretraining_dataset import (
     validate_response_treatment_binding,
 )
 from urban_intervention.causal.response_artifact import sha256_file
+
+
+def test_stc_context_excludes_housing_price_fields() -> None:
+    assert not any(
+        "housing" in column or "price" in column
+        for column in STC_CONTEXT_TABULAR_COLUMNS
+    )
+
+
+def test_production_supervision_scope_defaults_and_rejects_excluded_labels() -> None:
+    families, methods = _enforce_production_supervision_scope(None, None)
+    assert families == ("viirs", "poi")
+    assert methods == ("matched", "gsc")
+    with pytest.raises(ValueError, match="excluded families"):
+        _enforce_production_supervision_scope(("viirs", "housing"), None)
+    with pytest.raises(ValueError, match="excluded methods"):
+        _enforce_production_supervision_scope(None, ("matched", "mc"))
 
 
 def test_best_quality_grade_prefers_full_support_mc_and_available_labels() -> None:

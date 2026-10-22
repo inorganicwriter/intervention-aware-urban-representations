@@ -1,0 +1,11 @@
+family,model,mean,error_kind,error_low,error_high,n_seeds,test_n
+viirs,raw,0.0036,none,,,,205
+viirs,chance,0.0031,none,,,,205
+viirs,autoencoder,0.0078,range,0.0041,0.0149,,205
+viirs,supervised,0.0150,seed_sd,0.0067,0.0067,3,205
+viirs,queue_off,0.0250,seed_sd,0.0184,0.0184,3,205
+poi,raw,0.1089,none,,,,220
+poi,chance,0.0342,none,,,,220
+poi,autoencoder,0.1113,range,0.1072,0.1193,,220
+poi,supervised,0.0955,seed_sd,0.0025,0.0025,3,220
+poi,queue_off,0.1006,seed_sd,0.0174,0.0174,3,220

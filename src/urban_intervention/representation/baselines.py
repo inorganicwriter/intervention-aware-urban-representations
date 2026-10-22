@@ -48,16 +48,25 @@ def baseline_metric_entry(
     n_boot: int = 200,
     seed: int = 42,
     max_perm_units: int = 512,
+    response_offsets: dict[str, tuple[int, int, list[str]]] | None = None,
 ) -> dict[str, object]:
     """Standard metric block shared by all baselines (mirrors model entries)."""
     n = embeddings.shape[0]
     if n < 2:
         return {"note": "pool smaller than 2 units", "n_units": n}
     emb_cos = cosine_similarity(embeddings)
-    sim_resp, valid_pairs = response_similarity_with_validity(responses, masks)
+    sim_resp, valid_pairs = response_similarity_with_validity(
+        responses, masks, response_offsets=response_offsets
+    )
     return {
         "n_units": int(n),
-        "retrieval": retrieval_metrics(embeddings, responses, masks, k=k),
+        "retrieval": retrieval_metrics(
+            embeddings,
+            responses,
+            masks,
+            k=k,
+            response_offsets=response_offsets,
+        ),
         "bootstrap_ci": bootstrap_ci(
             emb_cos,
             sim_resp,
@@ -67,7 +76,8 @@ def baseline_metric_entry(
             valid_pairs=valid_pairs,
         ),
         "permutation": permutation_test(
-            emb_cos, responses, masks, k=k, n_perm=n_perm, seed=seed, max_units=max_perm_units
+            emb_cos, responses, masks, k=k, n_perm=n_perm, seed=seed, max_units=max_perm_units,
+            response_offsets=response_offsets,
         ),
     }
 
@@ -82,6 +92,7 @@ def random_projection_baseline(
     seed: int = 42,
     projection_seed: int = 2026,
     projection_dim: int = DEFAULT_PROJECTION_DIM,
+    response_offsets: dict[str, tuple[int, int, list[str]]] | None = None,
 ) -> dict[str, object]:
     """Random Gaussian projection of the raw features (chance level)."""
     n, dim = features.shape
@@ -91,7 +102,16 @@ def random_projection_baseline(
     matrix = torch.from_numpy(rng.randn(dim, projection_dim).astype(np.float32))
     matrix = matrix / matrix.norm(p=2, dim=0, keepdim=True).clamp_min(1e-12)
     embeddings = functional.normalize(features @ matrix, p=2, dim=1)
-    entry = baseline_metric_entry(embeddings, responses, masks, k=k, n_perm=n_perm, n_boot=n_boot, seed=seed)
+    entry = baseline_metric_entry(
+        embeddings,
+        responses,
+        masks,
+        k=k,
+        n_perm=n_perm,
+        n_boot=n_boot,
+        seed=seed,
+        response_offsets=response_offsets,
+    )
     entry["projection"] = {"seed": projection_seed, "dim": projection_dim}
     return entry
 
@@ -106,6 +126,7 @@ def pca_projection_baseline(
     seed: int = 42,
     components: int = DEFAULT_PROJECTION_DIM,
     fit_features: torch.Tensor | None = None,
+    response_offsets: dict[str, tuple[int, int, list[str]]] | None = None,
 ) -> dict[str, object]:
     """Centred SVD projection of the raw features (appearance-only geometry).
 
@@ -126,7 +147,16 @@ def pca_projection_baseline(
     basis = vt[: min(components, vt.shape[0])].T
     centered = features - center
     embeddings = functional.normalize(centered @ basis, p=2, dim=1)
-    entry = baseline_metric_entry(embeddings, responses, masks, k=k, n_perm=n_perm, n_boot=n_boot, seed=seed)
+    entry = baseline_metric_entry(
+        embeddings,
+        responses,
+        masks,
+        k=k,
+        n_perm=n_perm,
+        n_boot=n_boot,
+        seed=seed,
+        response_offsets=response_offsets,
+    )
     entry["components"] = int(basis.shape[1])
     entry["fit_pool"] = "external" if fit_features is not None else "evaluation_pool"
     return entry
@@ -139,6 +169,7 @@ def dinov2_image_baseline(
     n_perm: int = 100,
     n_boot: int = 200,
     seed: int = 42,
+    response_offsets: dict[str, tuple[int, int, list[str]]] | None = None,
 ) -> dict[str, object]:
     """Frozen DINOv2 backbone pooled over street-view images per grid.
 
@@ -158,6 +189,12 @@ def dinov2_image_baseline(
     for batch in batches:
         images = batch.get("images")
         image_mask = batch.get("image_mask")
+        if not isinstance(images, torch.Tensor) or not isinstance(image_mask, torch.Tensor):
+            # STC batches carry the same street-view tensors under a
+            # modality-specific name.  Accept both layouts so the appearance
+            # baseline is not silently skipped for the current model.
+            images = batch.get("streetview_images")
+            image_mask = batch.get("streetview_mask")
         batch_responses = batch.get("responses")
         batch_masks = batch.get("response_mask")
         if not isinstance(images, torch.Tensor) or not isinstance(image_mask, torch.Tensor):
@@ -200,6 +237,7 @@ def dinov2_image_baseline(
         n_perm=n_perm,
         n_boot=n_boot,
         seed=seed,
+        response_offsets=response_offsets,
     )
 
 
@@ -214,6 +252,7 @@ def run_baselines(
     n_boot: int = 200,
     seed: int = 42,
     fit_features: torch.Tensor | None = None,
+    response_offsets: dict[str, tuple[int, int, list[str]]] | None = None,
 ) -> dict[str, object]:
     """Compute all baselines on one pool; returns a report section.
 
@@ -224,7 +263,14 @@ def run_baselines(
     """
     baselines: dict[str, object] = {
         "random_projection": random_projection_baseline(
-            features, responses, masks, k=k, n_perm=n_perm, n_boot=n_boot, seed=seed
+            features,
+            responses,
+            masks,
+            k=k,
+            n_perm=n_perm,
+            n_boot=n_boot,
+            seed=seed,
+            response_offsets=response_offsets,
         ),
         "pca_features": pca_projection_baseline(
             features,
@@ -235,6 +281,7 @@ def run_baselines(
             n_boot=n_boot,
             seed=seed,
             fit_features=fit_features,
+            response_offsets=response_offsets,
         ),
     }
     if image_batches is not None:
@@ -245,6 +292,7 @@ def run_baselines(
             n_perm=n_perm,
             n_boot=n_boot,
             seed=seed,
+            response_offsets=response_offsets,
         )
     return baselines
 
@@ -322,6 +370,7 @@ def appearance_autoencoder_baseline(
     n_perm: int = 100,
     n_boot: int = 200,
     seed: int = 42,
+    response_offsets: dict[str, tuple[int, int, list[str]]] | None = None,
 ) -> dict[str, object]:
     """Train an appearance-only autoencoder on the train pool, evaluate on test.
 
@@ -360,7 +409,14 @@ def appearance_autoencoder_baseline(
         embeddings = model.encoder(test_features.to(dev)).cpu()
     embeddings = functional.normalize(embeddings, p=2, dim=1)
     entry = baseline_metric_entry(
-        embeddings, responses, masks, k=k, n_perm=n_perm, n_boot=n_boot, seed=seed
+        embeddings,
+        responses,
+        masks,
+        k=k,
+        n_perm=n_perm,
+        n_boot=n_boot,
+        seed=seed,
+        response_offsets=response_offsets,
     )
     entry["training"] = {
         "epochs": int(epochs),

@@ -5,6 +5,8 @@
 
 本文是因果流程的单一命令清单。命令均写成单行，不使用反斜杠续行。R 只用于冻结参考和 parity；通过资格后，Phase 1–3 的正式生产只依赖 Python/CUDA。
 
+S/T/C 真实服务器验收遵循 `stc_code_readiness.md` 和本次验收回执：所有候选代码、临时包、日志和结果均放在 `/home/nas/lsr/MIT_summer/outputs/stc_server_acceptance/<RUN_ID>/` 下，使用现有 `mit` 环境。下方覆盖生产因果源码的流程不用于 S/T/C 验收；验收候选不得覆盖正式源码、数据、队列或历史结果。
+
 ## 1. 本地打包（不包含数据、outputs 和打包文件）
 
 在 PowerShell 中运行：
@@ -20,9 +22,9 @@ Get-Item $archive,$sidecar | Select-Object Name,Length,LastWriteTime
 Get-Content $sidecar
 ```
 
-把 `MIT_summer_code.tar.gz` 和 `MIT_summer_code.tar.gz.sha256` 上传到服务器 `/home/lsr/`。不要把压缩包放进项目目录，也不要把它提交到 Git。
+把 `MIT_summer_code.tar.gz` 和 `MIT_summer_code.tar.gz.sha256` 上传到服务器项目内部的 `/home/nas/lsr/MIT_summer/outputs/deployment/staging/`。不要把压缩包提交到 Git。S/T/C 验收改用运行编号下的独立候选目录，不执行本文件的生产覆盖流程。
 
-## 2. 服务器校验并覆盖代码
+## 2. 服务器校验并覆盖代码（仅限因果生产发布）
 
 先确认没有生产进程仍在写任务文件：
 
@@ -33,10 +35,10 @@ pgrep -af 'run_parallel_production.py|run_grid_control_design_queue.py|run_contr
 若该命令没有输出，执行校验和覆盖：
 
 ```bash
-cd /home/lsr
+cd /home/nas/lsr/MIT_summer/outputs/deployment/staging
 sha256sum -c MIT_summer_code.tar.gz.sha256
 tar -tzf MIT_summer_code.tar.gz | grep -E '(^|/)src/urban_intervention/causal/pooled_event_study.py$|(^|/)scripts/causal_python/run_all_method_event_study.py$|(^|/)docs/operations/causal_validation_and_deployment.md$'
-tar --extract --gzip --file /home/lsr/MIT_summer_code.tar.gz --directory /home/nas/lsr/MIT_summer --no-same-owner --no-same-permissions --overwrite
+tar --extract --gzip --file /home/nas/lsr/MIT_summer/outputs/deployment/staging/MIT_summer_code.tar.gz --directory /home/nas/lsr/MIT_summer --no-same-owner --no-same-permissions --overwrite
 conda activate mit
 cd /home/nas/lsr/MIT_summer
 grep -n 'restrict_to_common_event_support' src/urban_intervention/causal/pooled_event_study.py

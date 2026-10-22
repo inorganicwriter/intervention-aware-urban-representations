@@ -11,29 +11,47 @@ response(i, h) = observed_outcome(i, h) - counterfactual_outcome(i, h)
 
 ## Production boundary
 
-The production label backend is `python_gpu`. Matching, GSC and MC run through
-PyTorch implementations under `src/urban_intervention/causal/gpu/`; R
-`PanelMatch`, `Matching`, `gsynth` and `fect` are reference implementations and
-the explicit `r_reference` backend.
+The shared STC joint-training implementation added on 2026-10-22 uses one
+`z128`, `t32`, direct `b96`, a 256-dimensional conditional predictor input,
+and independent VIIRS6 / POI12 heads. Joint STC bundles automatically use this
+architecture; `--training-mode viirs_only`, `poi_only`, and `joint` provide
+same-architecture controls on the same bundle. Engineering smoke validation
+is separate from formal-data performance evaluation. See the
+[joint-training plan and acceptance contract](docs/operations/stc_joint_training_plan.md)
+and [runbook](docs/operations/stc_joint_training_runbook.md).
 
-The production system includes:
+The causal estimation layer (Phase 1 & Phase 2) has completed and the production causal response release
+is frozen under `data/active/causal/releases/production` (136,296 rows).
 
-- a fixed 44-city, 5,048-grid treatment design and 1km donor exclusion;
-- pre-treatment-only six-round routing through same-city and cross-city
-  Matching, GSC and MC;
-- resumable queues with atomic updates, task source records and structured failure
-  reasons;
-- validated Response Artifact and pretraining-dataset publishers;
-- all-method event-study aggregation with pre-trend metadata;
-- intervention-conditioned representation training, evaluation, baselines,
-  transfer analysis and model-card generation.
+The active system status:
 
-Formal production requires three Matching, three GSC and three MC parity tasks on
-the four-card RTX 4090 environment, a qualification receipt, frozen-input source
-records, completion of the 5,048-grid queues, and publication of a validated
-response release. Current queue counts and
-remaining work are maintained in
-[`docs/operations/current_project_status.md`](docs/operations/current_project_status.md).
+- **Causal Counterfactual Layer**: Completed and frozen. 44 cities, 5,048 treated grids, 3.77M donors.
+- **Empirical Supervision Boundary**: Following the four-family event-study audit (`outputs/event_study_final/family_selection.md`),
+  downstream causal supervision is strictly restricted to **VIIRS (6 horizons) and POI (12 horizons: 4 outcomes × 3 years)
+  same-city Matching and GSC**. Housing and population, as well as MC and cross-city estimations, are excluded
+  due to pre-trend failures and data sparsity.
+- **Current Representation Model (S/T/C)**: the production architecture is `STCResponseModel`:
+  - State `S`: 15 pre-treatment POI/VIIRS lag features, all legal pre-opening street-view images with time gaps,
+    and the independent satellite sequence for event years -6 through -1.
+  - Intervention `T`: 7 opening/station fields plus availability masks.
+  - Context `C`: full AlphaEarth64, population lags and city summaries (housing price fields are excluded).
+  - State encoding produces the single embedding `z`; `T` and `C` condition the response predictor
+    `tau_hat = g(z, T, C)`. The objective is **Soft Causal Anchoring (~85%)** plus weak response alignment (~15%).
+  - The earlier VIGOR cross-view AlphaEarth/street-view model remains available as the legacy baseline,
+    not as the current production path.
+
+- **Prepared Inputs (2026-10-13)**: State uses POI, VIIRS, street view and independent satellite images;
+  intervention uses station/opening attributes; context uses all 64 AlphaEarth dimensions,
+  population and city statistics (housing price fields are excluded). The full bundle is published and bound in the server project,
+  with 37 binding checks and 17 runtime path checks passed. Historical gaps retain masks;
+  intervention source review remains pending. Temporary transfer/staging caches were cleaned,
+  while formal inputs and audit evidence remain available. Next: model input integration and
+  a small training/save/export validation run. See
+  [`input publication and cleanup`](docs/operations/input_server_sync_2026-10-13.md).
+
+Current development and queues are tracked in
+[`docs/operations/current_project_status.md`](docs/operations/current_project_status.md) and
+[`docs/PROJECT_GUIDE.md`](docs/PROJECT_GUIDE.md).
 
 ## Frozen research scope
 
@@ -42,12 +60,10 @@ remaining work are maintained in
 - Treatment list: 5,048 treated grids confirmed by station resolution and uniqueness audits.
 - Donors: start from all non-treated grids; the main specification excludes units within 1km of the treated station's grid polygon.
 - Timing: station dates are kept to the day; monthly estimation defines the first complete natural month after opening as event period 1.
-- Outcome families: housing prices, VIIRS, POI, population. Different counterfactuals or missing masks per family are allowed depending on data support.
-- Control selection uses pre-treatment housing, VIIRS, POI, population and their availability; post-treatment outcomes and missingness stay outside this stage.
-- Coverage-priority boundary: at least one complete variable family is sufficient to enter physical matching; MC after GSC failure allows `min.T0=1` and retains the actual number of pre-treatment support periods in the artifact.
-- Routing: a physical control that fails the common-support, holdout or placebo gates enters Xu GSC; MC follows a GSC failure; the queue records `skipped` after all three paths fail.
+- Visual & tabular pre-treatment barrier: all input visual features and covariates must strictly precede the opening month to prevent information leakage.
+- Representation supervision targets: VIIRS (6 horizons) and POI (12 horizons) under same-city Matching and GSC with design reliability weights.
 
-Precise econometric definitions are governed by the [econometric methods manual](docs/research/econometric_methods.md), the [causal response label design](docs/research/counterfactual_response_label_design.md), and the [frozen decisions](docs/research/decisions/README.md). Executable diagnostic outputs are documented in the [DID parallel-trend guide](docs/research/identification_and_diagnostics.md).
+Precise econometric definitions are governed by the [econometric methods manual](docs/research/econometric_methods.md), the [causal response label design](docs/research/counterfactual_response_label_design.md), and the [representation learning specification](docs/research/representation_learning.md). Executable diagnostic outputs are documented in the [DID parallel-trend guide](docs/research/identification_and_diagnostics.md).
 
 ## Repository architecture
 

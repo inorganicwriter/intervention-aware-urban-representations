@@ -27,6 +27,7 @@ urban-run-ablation = "urban_intervention.representation.ablation_cli:main"
 urban-build-model-card = "urban_intervention.representation.model_card_cli:main"
 urban-export-embeddings = "urban_intervention.representation.export:main"
 urban-summarize-runs = "urban_intervention.representation.summarize:main"
+urban-run-joint-experiments = "urban_intervention.representation.joint_experiments:main"
 
 [project.optional-dependencies]
 spatial = ["geopandas>=1.0", "osmnx>=1.9", "pyproj>=3.7", "rasterio>=1.3"]
@@ -85,8 +86,12 @@ ignore = ["E501"]
 [tool.ruff.lint.per-file-ignores]
 "scripts/*" = ["E402", "N806", "N816"]
 "src/*" = ["N806", "N816"]
+# Tensor tests use B/H/W shape constants by convention.
+"tests/*" = ["N806"]
 # Historical one-off collection script with deliberately compact style.
 "scripts/collection/amap_transit_fetcher.py" = ["E701", "E702", "B015", "B018"]
+# Presentation figure script with deliberately compact plotting style.
+"scripts/analysis/plot_project_intro_figures.py" = ["E701", "E702"]
 
 [tool.mypy]
 python_version = "3.11"

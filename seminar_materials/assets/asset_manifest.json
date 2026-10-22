@@ -1,0 +1,933 @@
+{
+  "date": "2026-10-06",
+  "final_presentation": "../project_intro_seminar_final.pptx",
+  "retained_from": "project_intro_seminar_v14.pptx",
+  "presentation_sha256": "16a17de156ca5c3f9cf21b50621daffe931676e326f6ab8aeb96d37b9c4dda7e",
+  "retained_asset_files": 112,
+  "assets": [
+    {
+      "Path": "charts/causal/intro_housing_event_study.pdf",
+      "Hash": "c661fb76613483a81edf9a94865ec737c34a6a02b4acbbf341f98670a550dab2",
+      "Bytes": 38977,
+      "OriginalPath": "figures/pdf/intro_housing_event_study.pdf",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/causal/intro_housing_event_study.png",
+      "Hash": "697719482e816e3fe2f54fb6e484c2e98e7e49d833b11f1ca57b8f31ed34987f",
+      "Bytes": 259037,
+      "OriginalPath": "figures/png/intro_housing_event_study.png",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/causal/intro_housing_event_study.svg",
+      "Hash": "8ca1a49c4aed79cb3c6ca9811193256e199f16494c41758d1f960e461f3b478d",
+      "Bytes": 51315,
+      "OriginalPath": "figures/svg/intro_housing_event_study.svg",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/causal/intro_poi_event_study.pdf",
+      "Hash": "c44585be6f1ac55b9045cdeeb462228fec8faabb1d39617a5b3ff9ed70a6da09",
+      "Bytes": 37422,
+      "OriginalPath": "figures/pdf/intro_poi_event_study.pdf",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/causal/intro_poi_event_study.png",
+      "Hash": "7b8215de9efc7786708719fd580bdffa93fe919fdbef09a9ac343a9d4db73f33",
+      "Bytes": 226485,
+      "OriginalPath": "figures/png/intro_poi_event_study.png",
+      "PptSlides": [
+        12
+      ]
+    },
+    {
+      "Path": "charts/causal/intro_poi_event_study.svg",
+      "Hash": "b5c39b3d6654feddb99eef8a49c8578bdbb60fa37538b8fcf159435353d7520c",
+      "Bytes": 37403,
+      "OriginalPath": "figures/svg/intro_poi_event_study.svg",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/causal/intro_population_event_study.pdf",
+      "Hash": "9144642534cff08911fb9138f99db66801b8fa3b3c7739833038096fa4d98df2",
+      "Bytes": 38189,
+      "OriginalPath": "figures/pdf/intro_population_event_study.pdf",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/causal/intro_population_event_study.png",
+      "Hash": "ad3bb9d33bd627925b31f42083b3de86e9679f79b99ff9a0ba550a750ccd325d",
+      "Bytes": 229200,
+      "OriginalPath": "figures/png/intro_population_event_study.png",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/causal/intro_population_event_study.svg",
+      "Hash": "038a413ad595361fa9662505ce3e7e84a3e0371db9bb4c17f1acaa180be73c4d",
+      "Bytes": 38665,
+      "OriginalPath": "figures/svg/intro_population_event_study.svg",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/causal/intro_pretrend_poi.pdf",
+      "Hash": "0bd601fc0652fa7224b8b586225300db96a14c53a788d4c1834c3acd9c6706be",
+      "Bytes": 33423,
+      "OriginalPath": "figures/pdf/intro_pretrend_poi.pdf",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/causal/intro_pretrend_poi.png",
+      "Hash": "c8d7fece972e19a3680bc19d2c87055218c663e70adbe351c7225daa1e9e2d14",
+      "Bytes": 116546,
+      "OriginalPath": "figures/png/intro_pretrend_poi.png",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/causal/intro_pretrend_poi.svg",
+      "Hash": "fad9b475006459f8bcf8c9d89b5b76c3d6dc03e13a8f45d8c84627f1c556cbb0",
+      "Bytes": 11794,
+      "OriginalPath": "figures/svg/intro_pretrend_poi.svg",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/causal/intro_pretrend.pdf",
+      "Hash": "5cfb1e7104e63fad3e55281729e15888bfd362d823278ea84f068b2160bfaff4",
+      "Bytes": 39513,
+      "OriginalPath": "figures/pdf/intro_pretrend.pdf",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/causal/intro_pretrend.png",
+      "Hash": "2a26330fadf32267c9da1bcdaa4843bc295f20cf52f7f208ae4f9be940fcf422",
+      "Bytes": 159151,
+      "OriginalPath": "figures/png/intro_pretrend.png",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/causal/intro_pretrend.svg",
+      "Hash": "2eb23228ae5eb2989c721a26b2d06e2f6574788d4566433bb3753d487f960c12",
+      "Bytes": 19894,
+      "OriginalPath": "figures/svg/intro_pretrend.svg",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/causal/intro_viirs_event_study.pdf",
+      "Hash": "60636ac0692e810ba822ff388aaf3417dc8b1e87c71071a6dc841027f6c29d4d",
+      "Bytes": 41092,
+      "OriginalPath": "figures/pdf/intro_viirs_event_study.pdf",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/causal/intro_viirs_event_study.png",
+      "Hash": "c5963ba15b992db40ac5698838f06ea0169fb75e183c2e0ebf7bf4bdda732386",
+      "Bytes": 333782,
+      "OriginalPath": "figures/png/intro_viirs_event_study.png",
+      "PptSlides": [
+        11
+      ]
+    },
+    {
+      "Path": "charts/causal/intro_viirs_event_study.svg",
+      "Hash": "6ae59189b3eac660a06e3fda6d95eb1f273a20ad232dad321de680f35e2fe717",
+      "Bytes": 63835,
+      "OriginalPath": "figures/svg/intro_viirs_event_study.svg",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/data/intro_sample_years.pdf",
+      "Hash": "47f1ec6eeb004c3884c479eada3edb79e262bc8eff561ec6fd7168f0d341d245",
+      "Bytes": 27817,
+      "OriginalPath": "figures/pdf/intro_sample_years.pdf",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/data/intro_sample_years.png",
+      "Hash": "05c703d681c7b92d5df13c70c2a2782b1916c869844a5bf4afec8af33626c358",
+      "Bytes": 119136,
+      "OriginalPath": "figures/png/intro_sample_years.png",
+      "PptSlides": [
+        5
+      ]
+    },
+    {
+      "Path": "charts/data/intro_sample_years.svg",
+      "Hash": "e7a8e5a283f10fe0a7c5b19e8874ba69145577c525fb362a05e05b6bb29cbdfa",
+      "Bytes": 19682,
+      "OriginalPath": "figures/svg/intro_sample_years.svg",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/data/intro_support.pdf",
+      "Hash": "868dffb8be34505d8bec0704ff0f5e07be95c24047c2130e33db3c35a1c6ce25",
+      "Bytes": 37436,
+      "OriginalPath": "figures/pdf/intro_support.pdf",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/data/intro_support.png",
+      "Hash": "c9c405927e40d130b398a8bc52f9918e61d41ea934e5a3d964ffed69eb8e8be7",
+      "Bytes": 121273,
+      "OriginalPath": "figures/png/intro_support.png",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/data/intro_support.svg",
+      "Hash": "26984c22eee8630a249c7bec8b059ebc89477a2abc5341e994436430e4e6edde",
+      "Bytes": 19237,
+      "OriginalPath": "figures/svg/intro_support.svg",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/data/intro_weight_curve.pdf",
+      "Hash": "fde29bf158da7cf27139a55380a752074fa41ac50bed4c186bbf80dd964d9c7b",
+      "Bytes": 36171,
+      "OriginalPath": "figures/pdf/intro_weight_curve.pdf",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/data/intro_weight_curve.png",
+      "Hash": "78b2a7a362bfe9708e65b903ce2009b74ef46c6669bc78295e4e26f44acf39b8",
+      "Bytes": 211852,
+      "OriginalPath": "figures/png/intro_weight_curve.png",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/data/intro_weight_curve.svg",
+      "Hash": "0c007d8e259e71c00c94622f01cfabd5d4c8fa778656fdfda9b3aaf9687d616b",
+      "Bytes": 33783,
+      "OriginalPath": "figures/svg/intro_weight_curve.svg",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/representation/intro_city_controls.pdf",
+      "Hash": "57d62cef2f17333a1e588556a0eede78ba3301ebdb97a9169247b711c5254e36",
+      "Bytes": 39251,
+      "OriginalPath": "figures/pdf/intro_city_controls.pdf",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/representation/intro_city_controls.png",
+      "Hash": "79b9de509bbdf975fc620403010a0c0cfd29a6b660c48a7afe161a19789f0d61",
+      "Bytes": 158560,
+      "OriginalPath": "figures/png/intro_city_controls.png",
+      "PptSlides": [
+        17
+      ]
+    },
+    {
+      "Path": "charts/representation/intro_city_controls.svg",
+      "Hash": "3c314dbe270e1e6e15003f7b144e39558b1e4362f184b04982927e7748a182ba",
+      "Bytes": 21484,
+      "OriginalPath": "figures/svg/intro_city_controls.svg",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/representation/intro_evidence.pdf",
+      "Hash": "e3b51dd1a61edb780dd7e66d30caba24628214c7b59fcfef9c0cd0e06bfaf696",
+      "Bytes": 37697,
+      "OriginalPath": "figures/pdf/intro_evidence.pdf",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/representation/intro_evidence.png",
+      "Hash": "93908bbf2c02ad9ced20ea83439bb904d79cbdffa150a1f2847d4fd21bc193ff",
+      "Bytes": 156005,
+      "OriginalPath": "figures/png/intro_evidence.png",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/representation/intro_evidence.svg",
+      "Hash": "bf9ba70844d44544956d4e934d4e88e7550837525e7f31d0995d45cf03a30880",
+      "Bytes": 23678,
+      "OriginalPath": "figures/svg/intro_evidence.svg",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/representation/intro_representation_benchmark.pdf",
+      "Hash": "3339f18e1dbde0002a0bfbc24dfc03d81fb5416c974824d83b6d9da665f98995",
+      "Bytes": 37655,
+      "OriginalPath": "figures/pdf/intro_representation_benchmark.pdf",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/representation/intro_representation_benchmark.png",
+      "Hash": "d1a917d02501864a780b656bb27d0048cbf9c8948a0122b36340cdb5197df039",
+      "Bytes": 211789,
+      "OriginalPath": "figures/png/intro_representation_benchmark.png",
+      "PptSlides": [
+        18
+      ]
+    },
+    {
+      "Path": "charts/representation/intro_representation_benchmark.svg",
+      "Hash": "6f3765eb47ae170b06a701fd9e6d465c78d1ebef856a24f05c47a3b3bbd9605c",
+      "Bytes": 24851,
+      "OriginalPath": "figures/svg/intro_representation_benchmark.svg",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/representation/intro_representation_gains.pdf",
+      "Hash": "81d649d33ea3b68afec90336a9fb791b1ada104c6dfc1aa6ccf86c448404457d",
+      "Bytes": 34459,
+      "OriginalPath": "figures/pdf/intro_representation_gains.pdf",
+      "PptSlides": []
+    },
+    {
+      "Path": "charts/representation/intro_representation_gains.png",
+      "Hash": "56f465e2438674d88e4a99e62e7aed1fa0abfc36656a347580d3fb098cb43630",
+      "Bytes": 137535,
+      "OriginalPath": "figures/png/intro_representation_gains.png",
+      "PptSlides": [
+        19
+      ]
+    },
+    {
+      "Path": "charts/representation/intro_representation_gains.svg",
+      "Hash": "b1eeb7e499c7116d014636a8a97341b255d6f037515bda4e177234a1b623daef",
+      "Bytes": 15916,
+      "OriginalPath": "figures/svg/intro_representation_gains.svg",
+      "PptSlides": []
+    },
+    {
+      "Path": "diagrams/causal_routing.png",
+      "Hash": "7ef4d83d0b19d0f2a7e53ff5140b2da59311c996fedb9dde98fe885ecc7fbc61",
+      "Bytes": 1341544,
+      "OriginalPath": "gpt_image_flowcharts/intro_routing_gpt_icons_v3.png",
+      "PptSlides": [
+        6
+      ]
+    },
+    {
+      "Path": "diagrams/full_pipeline.png",
+      "Hash": "9734a7583b7a596a02d6fd62d07930db7e0f959af413840b7516168cc0436468",
+      "Bytes": 1758066,
+      "OriginalPath": "gpt_image_flowcharts/intro_pipeline_gpt_illustrated_en.png",
+      "PptSlides": []
+    },
+    {
+      "Path": "diagrams/gsc_mc_intuition.png",
+      "Hash": "eb7d03d2b32079c405aeee65064aff5ec05cbdd100643d8accf0925de15d5f98",
+      "Bytes": 1077047,
+      "OriginalPath": "concept_figures_v8/gsc_mc_intuition_v8.png",
+      "PptSlides": [
+        8
+      ]
+    },
+    {
+      "Path": "diagrams/matching_parallel_trends.png",
+      "Hash": "17284ba422449bb97cfd76efd3bf938cd5a89093dc8ab688f89756430f8347c8",
+      "Bytes": 1240767,
+      "OriginalPath": "concept_figures_v9/matching_parallel_trends_v9.png",
+      "PptSlides": [
+        7
+      ]
+    },
+    {
+      "Path": "diagrams/model_architecture.png",
+      "Hash": "da944ce69b086f46ad8b8ada6f8f3881f1c4bc81dbe0576658a64e97bbbbf5f2",
+      "Bytes": 1583094,
+      "OriginalPath": "gpt_image_flowcharts/intro_model_gpt_illustrated_en.png",
+      "PptSlides": [
+        14
+      ]
+    },
+    {
+      "Path": "diagrams/problem_setup.png",
+      "Hash": "0d112fee2858bab193c90d9a79c15622699e81306607286437e4a630b520765c",
+      "Bytes": 1432367,
+      "OriginalPath": "concept_figures_v8/problem_setup_v8_corrected.png",
+      "PptSlides": [
+        4
+      ]
+    },
+    {
+      "Path": "diagrams/related_work.png",
+      "Hash": "9cf7b670cf9d25a00d03da906b0ec457526221a8b4735b523acd7e6ca5220b90",
+      "Bytes": 1908159,
+      "OriginalPath": "concept_figures_v8/related_work_bridge_v8.png",
+      "PptSlides": [
+        3
+      ]
+    },
+    {
+      "Path": "diagrams/takeaways.png",
+      "Hash": "4a5912f340756d089bcf287635f854ae651cceaa597f7288d42baf77f04c6109",
+      "Bytes": 1818356,
+      "OriginalPath": "concept_figures_v8/takeaways_visual_v8.png",
+      "PptSlides": [
+        20
+      ]
+    },
+    {
+      "Path": "diagrams/vector/intro_asset_map.pdf",
+      "Hash": "dcad7faca34868b38c6fd65a51f1ac2dc1f4838260d7cb285074ab94ddb9f939",
+      "Bytes": 40494,
+      "OriginalPath": "figures/pdf/intro_asset_map.pdf",
+      "PptSlides": []
+    },
+    {
+      "Path": "diagrams/vector/intro_asset_map.png",
+      "Hash": "0eb2f3b7bacdcefad0dd99bb3a69867f6f0e96949c15300163daa5a92f30278e",
+      "Bytes": 159304,
+      "OriginalPath": "figures/png/intro_asset_map.png",
+      "PptSlides": []
+    },
+    {
+      "Path": "diagrams/vector/intro_asset_map.svg",
+      "Hash": "1d8859fb3eafffdeaa480d9a14a7d5f448893213141bde0c84b6d54f15cb44c6",
+      "Bytes": 25247,
+      "OriginalPath": "figures/svg/intro_asset_map.svg",
+      "PptSlides": []
+    },
+    {
+      "Path": "diagrams/vector/intro_decision.pdf",
+      "Hash": "fccd90f61fc71aa90c5e3f3f2e42a5155a100d4d7f13a20a05df9991915414d8",
+      "Bytes": 32584,
+      "OriginalPath": "figures/pdf/intro_decision.pdf",
+      "PptSlides": []
+    },
+    {
+      "Path": "diagrams/vector/intro_decision.png",
+      "Hash": "5f2d624918294300af5586cfdec5c7ec4fbcf6fb2781272a9b962ab642f1706d",
+      "Bytes": 171807,
+      "OriginalPath": "figures/png/intro_decision.png",
+      "PptSlides": []
+    },
+    {
+      "Path": "diagrams/vector/intro_decision.svg",
+      "Hash": "ba6560db499d73709453448ae2688b583843e1def0be7de70dd6eff175a48617",
+      "Bytes": 6534,
+      "OriginalPath": "figures/svg/intro_decision.svg",
+      "PptSlides": []
+    },
+    {
+      "Path": "diagrams/vector/intro_model.pdf",
+      "Hash": "d71403c8af416e370dd9bc898695de389a9119380ca29d55c5cd85f72c7f2038",
+      "Bytes": 39965,
+      "OriginalPath": "figures/pdf/intro_model.pdf",
+      "PptSlides": []
+    },
+    {
+      "Path": "diagrams/vector/intro_model.png",
+      "Hash": "51cfb55bbc5cb5095b68c5273a30415c44bb816be7400591b1adcdecd5a2389a",
+      "Bytes": 195508,
+      "OriginalPath": "figures/png/intro_model.png",
+      "PptSlides": []
+    },
+    {
+      "Path": "diagrams/vector/intro_model.svg",
+      "Hash": "aeb78432366ee6eb2d3d85a5ae2234b3d866666e7188ca290d762a9d02b50f3a",
+      "Bytes": 10129,
+      "OriginalPath": "figures/svg/intro_model.svg",
+      "PptSlides": []
+    },
+    {
+      "Path": "diagrams/vector/intro_pipeline.pdf",
+      "Hash": "62802c988339a847e43b50a2ce38f77e0d62802727f2ad3889edebcfb7785507",
+      "Bytes": 34774,
+      "OriginalPath": "figures/pdf/intro_pipeline.pdf",
+      "PptSlides": []
+    },
+    {
+      "Path": "diagrams/vector/intro_pipeline.png",
+      "Hash": "3e90b23e031fc12f7f60a07624b2121125e151f7245a958a30f7a211c516a721",
+      "Bytes": 177564,
+      "OriginalPath": "figures/png/intro_pipeline.png",
+      "PptSlides": []
+    },
+    {
+      "Path": "diagrams/vector/intro_pipeline.svg",
+      "Hash": "9e5f490876c45e025f1f745e4f48a277109622eb9fa09398b9deb978e4afef29",
+      "Bytes": 8785,
+      "OriginalPath": "figures/svg/intro_pipeline.svg",
+      "PptSlides": []
+    },
+    {
+      "Path": "diagrams/vector/intro_routing.pdf",
+      "Hash": "d9ba3041fa0a4ed02bf98b129579d9e6d7a2046eacd6a6876480138eeb525107",
+      "Bytes": 30196,
+      "OriginalPath": "figures/pdf/intro_routing.pdf",
+      "PptSlides": []
+    },
+    {
+      "Path": "diagrams/vector/intro_routing.png",
+      "Hash": "c5fd899b1fa9316c8ce6bad38805069919255336520087f2501436690a9a809e",
+      "Bytes": 104578,
+      "OriginalPath": "figures/png/intro_routing.png",
+      "PptSlides": []
+    },
+    {
+      "Path": "diagrams/vector/intro_routing.svg",
+      "Hash": "e634e05abde3f427132f4fcb7469b409f069ecf8d54f329843e49baa7fb4150f",
+      "Bytes": 8774,
+      "OriginalPath": "figures/svg/intro_routing.svg",
+      "PptSlides": []
+    },
+    {
+      "Path": "equations/align_label.pdf",
+      "Hash": "d1cd348d55acfd0b001c63d9b82ef30296a592ce50bb65fd73f9022515de8680",
+      "Bytes": 79915,
+      "OriginalPath": "equations/align_label.pdf",
+      "PptSlides": []
+    },
+    {
+      "Path": "equations/align_label.png",
+      "Hash": "80df81079307065f94c93a8c918ec3df8d9e341b5ffe4d995bebeea461d04954",
+      "Bytes": 3440,
+      "OriginalPath": "equations/align_label.png",
+      "PptSlides": []
+    },
+    {
+      "Path": "equations/align_label.svg",
+      "Hash": "e4449adaa1d9a25ddd6e8b49b448c122be65f3ad993e97b94d02fddfae2c847a",
+      "Bytes": 157743,
+      "OriginalPath": "equations/align_label.svg",
+      "PptSlides": []
+    },
+    {
+      "Path": "equations/dist_label.pdf",
+      "Hash": "bc4ca792d63910dedb639a1d3fb3ac026aa807591a6d06eff4b119c2998fa2ea",
+      "Bytes": 79915,
+      "OriginalPath": "equations/dist_label.pdf",
+      "PptSlides": []
+    },
+    {
+      "Path": "equations/dist_label.png",
+      "Hash": "adc79b04b78704194459ba9ac50eeb536f76e47271ff013013c8704ca65a967f",
+      "Bytes": 2748,
+      "OriginalPath": "equations/dist_label.png",
+      "PptSlides": []
+    },
+    {
+      "Path": "equations/dist_label.svg",
+      "Hash": "e08ca17ee18055664f81eb7b1df691b82db8ec18bc0b465401bebb782ab960dd",
+      "Bytes": 158146,
+      "OriginalPath": "equations/dist_label.svg",
+      "PptSlides": []
+    },
+    {
+      "Path": "equations/distance.pdf",
+      "Hash": "8cc53a8552ba35c748bea080220c74467aa34cb8806e1e82896ab593102640aa",
+      "Bytes": 79927,
+      "OriginalPath": "equations/distance.pdf",
+      "PptSlides": []
+    },
+    {
+      "Path": "equations/distance.png",
+      "Hash": "cf02469c8c105dae72c1c81ea013414f738374816b1df8596a3ff138064c3c91",
+      "Bytes": 16655,
+      "OriginalPath": "equations/distance.png",
+      "PptSlides": [
+        15
+      ]
+    },
+    {
+      "Path": "equations/distance.svg",
+      "Hash": "de921c49d2e7327494dcd458c0ce1520db45a7850c0c2270467723c699e17784",
+      "Bytes": 159025,
+      "OriginalPath": "equations/distance.svg",
+      "PptSlides": []
+    },
+    {
+      "Path": "equations/event_study.pdf",
+      "Hash": "03ac5e178cd95805e2cd5e75031c1327d2db0f5b348a6516b3718a2e78d62b39",
+      "Bytes": 70944,
+      "OriginalPath": "equations/event_study.pdf",
+      "PptSlides": []
+    },
+    {
+      "Path": "equations/event_study.png",
+      "Hash": "bf57fb8391cf2c849933cf657cbc75757ab9943c1d9092fed2b8b37aa8a3d6f5",
+      "Bytes": 29025,
+      "OriginalPath": "equations/event_study.png",
+      "PptSlides": [
+        9
+      ]
+    },
+    {
+      "Path": "equations/event_study.svg",
+      "Hash": "4f6c852f1aa013d2c3a917974a5f3d6f1954ee6d5430bb03bef186c7df58cd3f",
+      "Bytes": 130650,
+      "OriginalPath": "equations/event_study.svg",
+      "PptSlides": []
+    },
+    {
+      "Path": "equations/fusion.pdf",
+      "Hash": "1d0085c58ae8193727b849fa85bb8440445b1c7a948c290bcd35b622ae87a699",
+      "Bytes": 66327,
+      "OriginalPath": "equations/fusion.pdf",
+      "PptSlides": []
+    },
+    {
+      "Path": "equations/fusion.png",
+      "Hash": "6830733dcfcafe190db9dfbc34cd1b081a09ba102f0329e6167b565c08803f20",
+      "Bytes": 13560,
+      "OriginalPath": "equations/fusion.png",
+      "PptSlides": [
+        20
+      ]
+    },
+    {
+      "Path": "equations/fusion.svg",
+      "Hash": "cae71c8815c2243b216a5caf170d7549a283b3c944bdf72a7aef0e760c4c779b",
+      "Bytes": 138677,
+      "OriginalPath": "equations/fusion.svg",
+      "PptSlides": []
+    },
+    {
+      "Path": "equations/gsc.pdf",
+      "Hash": "de80fc9b62445d81639fb37b85782857d1098d371cebf16888aa1049fc4ea6ec",
+      "Bytes": 70866,
+      "OriginalPath": "equations/gsc.pdf",
+      "PptSlides": []
+    },
+    {
+      "Path": "equations/gsc.png",
+      "Hash": "892475c0cd239d601d767481f8c740b2179646ca39483dc38a7a0150fb3035b5",
+      "Bytes": 13735,
+      "OriginalPath": "equations/gsc.png",
+      "PptSlides": [
+        8
+      ]
+    },
+    {
+      "Path": "equations/gsc.svg",
+      "Hash": "6ba98f6e062add7853b0cebf7e66fc2a0131f31afdb0d4581fee04c0eff43390",
+      "Bytes": 144231,
+      "OriginalPath": "equations/gsc.svg",
+      "PptSlides": []
+    },
+    {
+      "Path": "equations/matching.pdf",
+      "Hash": "cbc988bd5327c5eac07460958bcc52a0243850eb9c87e113369370d00ffd22e0",
+      "Bytes": 67534,
+      "OriginalPath": "equations/matching.pdf",
+      "PptSlides": []
+    },
+    {
+      "Path": "equations/matching.png",
+      "Hash": "90b74556f091496e57532c5936579c87519fff4bafe82f872c4e5f1c692fa462",
+      "Bytes": 33017,
+      "OriginalPath": "equations/matching.png",
+      "PptSlides": [
+        7
+      ]
+    },
+    {
+      "Path": "equations/matching.svg",
+      "Hash": "c8f5848fa25e29143f21b6c75d6d1b2e89c68722eda7b4b345a2d6cd7525cd0a",
+      "Bytes": 126505,
+      "OriginalPath": "equations/matching.svg",
+      "PptSlides": []
+    },
+    {
+      "Path": "equations/mc.pdf",
+      "Hash": "d1ccd27e1d33573b356fe9ab8abcd8c759c06126d98c8827bf9118ad96fcdfe5",
+      "Bytes": 70867,
+      "OriginalPath": "equations/mc.pdf",
+      "PptSlides": []
+    },
+    {
+      "Path": "equations/mc.png",
+      "Hash": "f48fd6b6eaab6c1b6d80830213733b4bec1ada7b774b2c0d237d951ad9959514",
+      "Bytes": 11274,
+      "OriginalPath": "equations/mc.png",
+      "PptSlides": [
+        8
+      ]
+    },
+    {
+      "Path": "equations/mc.svg",
+      "Hash": "879f1210460cc82af9bb061a7192e34cdcd30349c4dc714186f78bad9665b5d3",
+      "Bytes": 144688,
+      "OriginalPath": "equations/mc.svg",
+      "PptSlides": []
+    },
+    {
+      "Path": "equations/pred_label.pdf",
+      "Hash": "21a4ad061e9452b479235b804fd0ef56d16e17727b996be2b89d79d03e49c7eb",
+      "Bytes": 79915,
+      "OriginalPath": "equations/pred_label.pdf",
+      "PptSlides": []
+    },
+    {
+      "Path": "equations/pred_label.png",
+      "Hash": "b60f31629b711e43e97dd9dced5c9de3cf2669a5fb5ab26b060407619d0d37b8",
+      "Bytes": 3156,
+      "OriginalPath": "equations/pred_label.png",
+      "PptSlides": []
+    },
+    {
+      "Path": "equations/pred_label.svg",
+      "Hash": "c23405cb511c6e133ae8d4d9fb1c43192bc860962677946f0f5ca25d60427e17",
+      "Bytes": 157854,
+      "OriginalPath": "equations/pred_label.svg",
+      "PptSlides": []
+    },
+    {
+      "Path": "equations/response.pdf",
+      "Hash": "08f609a09485bcf2116e65247640389f3545f48b4edb867f5ec0394dbe9a66c2",
+      "Bytes": 70870,
+      "OriginalPath": "equations/response.pdf",
+      "PptSlides": []
+    },
+    {
+      "Path": "equations/response.png",
+      "Hash": "dce60aca232a3a87c7196bf3f31df247a147fa3ed72a379981e2ffb34d34723b",
+      "Bytes": 9840,
+      "OriginalPath": "equations/response.png",
+      "PptSlides": []
+    },
+    {
+      "Path": "equations/response.svg",
+      "Hash": "846eba4078b3e14451f154169340e0ec7264a9eaa905520839f10698074c311b",
+      "Bytes": 144572,
+      "OriginalPath": "equations/response.svg",
+      "PptSlides": []
+    },
+    {
+      "Path": "equations/similarity.pdf",
+      "Hash": "ee3d81b6af5f56c7b94f031117808fdb851e7633bb3bda30a76f9d8ebf60e3a3",
+      "Bytes": 65217,
+      "OriginalPath": "equations/similarity.pdf",
+      "PptSlides": []
+    },
+    {
+      "Path": "equations/similarity.png",
+      "Hash": "67488daea6c26917bbc65929177a0bfd568cae5eade3be5129be8c79f1a4461f",
+      "Bytes": 8894,
+      "OriginalPath": "equations/similarity.png",
+      "PptSlides": [
+        13
+      ]
+    },
+    {
+      "Path": "equations/similarity.svg",
+      "Hash": "b3f6f60adc7e1cafe729e3ebc37082b6c7e37a071369de05a9b8c203e670ab3f",
+      "Bytes": 137979,
+      "OriginalPath": "equations/similarity.svg",
+      "PptSlides": []
+    },
+    {
+      "Path": "equations/sources.json",
+      "Hash": "3a167c7d3906b17ca113ff5661aa8ac9ad92d3c4910b1c43927f52fbc17a104e",
+      "Bytes": 1398,
+      "OriginalPath": "equations/sources.json",
+      "PptSlides": []
+    },
+    {
+      "Path": "equations/total_loss.pdf",
+      "Hash": "74c2c2f51b08143aaa6525df0dfe9d9e57f1fa115e5a9a90de0f10d379913634",
+      "Bytes": 79924,
+      "OriginalPath": "equations/total_loss.pdf",
+      "PptSlides": []
+    },
+    {
+      "Path": "equations/total_loss.png",
+      "Hash": "990203889320180bbb7e748e0df0e34ffecdebc437b9f9a81fbefb0179740348",
+      "Bytes": 20929,
+      "OriginalPath": "equations/total_loss.png",
+      "PptSlides": [
+        15
+      ]
+    },
+    {
+      "Path": "equations/total_loss.svg",
+      "Hash": "7e8162c4466de510406b287965f8e2a51ec8213c94266db20c83958df22e4708",
+      "Bytes": 158965,
+      "OriginalPath": "equations/total_loss.svg",
+      "PptSlides": []
+    },
+    {
+      "Path": "illustrations/access_to_jobs_services.png",
+      "Hash": "5aea50477e60844b3ae59b19d0d763ee97441272c4311c9440a863aef07d7e11",
+      "Bytes": 2846525,
+      "OriginalPath": "background_images/access_to_jobs_services.png",
+      "PptSlides": []
+    },
+    {
+      "Path": "illustrations/housing_local_businesses.png",
+      "Hash": "66c9a26dcffd4a9889991fbcfe8fb778b4fdf3f37cfee5b8ad56756d610368cd",
+      "Bytes": 2809238,
+      "OriginalPath": "background_images/housing_local_businesses.png",
+      "PptSlides": []
+    },
+    {
+      "Path": "illustrations/local_conditions_response_paths.png",
+      "Hash": "7bac5360546de50bbc6225be50f97f5e7b522b5a4628c09fb340c2fe9dbe2943",
+      "Bytes": 1432756,
+      "OriginalPath": "background_images/local_conditions_response_paths.png",
+      "PptSlides": [
+        2
+      ]
+    },
+    {
+      "Path": "illustrations/rail_expansion_tod.png",
+      "Hash": "d445d8ada3241d9935e647091e23888445656990de2275cdebeeecfb11a1ff04",
+      "Bytes": 1572298,
+      "OriginalPath": "background_images/rail_expansion_tod.png",
+      "PptSlides": [
+        2
+      ]
+    },
+    {
+      "Path": "illustrations/station_opening.png",
+      "Hash": "03da79417743401cc17d72a05ae5d5c91d9d54769e48f13d59de3fda63ae82cf",
+      "Bytes": 2143498,
+      "OriginalPath": "background_images/station_opening.png",
+      "PptSlides": []
+    },
+    {
+      "Path": "README.md",
+      "Hash": "82130880c323168dc8b8687030ef021a3c9e5b83879c12bdd5d62dfaaee4895c",
+      "Bytes": 3002
+    },
+    {
+      "Path": "sources/image_generation_prompts.md",
+      "Hash": "c5f2d6163b85ec8e2d6a2532e8e6810cb727cda179ca22e5a4d7670f580e1136",
+      "Bytes": 51793
+    },
+    {
+      "Path": "sources/image_generation_record.json",
+      "Hash": "9b2335014e89111a857de1f2c1840fdde723a08c7500cfb41971cceca4e23e66",
+      "Bytes": 1583,
+      "OriginalPath": "gpt_image_flowcharts/generation_record.json",
+      "PptSlides": []
+    },
+    {
+      "Path": "sources/intro_chart_audit.json",
+      "Hash": "73aabf585c09d8e11b93049b4eb920c9ec0502ea289ec41cfc2e8e6584cfce53",
+      "Bytes": 9516,
+      "OriginalPath": "data/intro_chart_audit.json",
+      "PptSlides": []
+    },
+    {
+      "Path": "sources/intro_representation_gains.csv",
+      "Hash": "7e8245a04426098e3ffde990ea0d66f10c61ed7aacab8f6dc00ef0b329f22cca",
+      "Bytes": 251,
+      "OriginalPath": "data/intro_representation_gains.csv",
+      "PptSlides": []
+    },
+    {
+      "Path": "sources/intro_representation_results_audit.json",
+      "Hash": "3c4d84ab824dfc2c0cbc460cdacef640ffcd0e5ae63875d17f923d01605ae661",
+      "Bytes": 818,
+      "OriginalPath": "data/intro_representation_results_audit.json",
+      "PptSlides": []
+    },
+    {
+      "Path": "sources/representation_city_controls.csv",
+      "Hash": "5a6033e6bf219f73c1e6e1d7478ff3030f7056c836a60b3e97d212919d3b979b",
+      "Bytes": 763,
+      "OriginalPath": "data/representation_city_controls.csv",
+      "PptSlides": []
+    },
+    {
+      "Path": "sources/representation_history.csv",
+      "Hash": "341a82cba2690e2aa198445947d4919fd5f51026a58ec1bc5d59804ed4a8904c",
+      "Bytes": 483,
+      "OriginalPath": "data/representation_history.csv",
+      "PptSlides": []
+    }
+  ],
+  "cleanup": [
+    {
+      "Path": "background_images/prompts_and_usage.md",
+      "Hash": "bccb5f1aab17cf4776916cd324d9c2596f2bd952f75d28ecb7560197522db8b0",
+      "Bytes": 6445,
+      "Reason": "Merged into sources/image_generation_prompts.md"
+    },
+    {
+      "Path": "concept_figures_v8/correction_prompts.md",
+      "Hash": "82df1f8f232372a2f6ee68c99718070717aac10a8886efccbc7dd0f7d51fe348",
+      "Bytes": 1389,
+      "Reason": "Merged into sources/image_generation_prompts.md"
+    },
+    {
+      "Path": "concept_figures_v8/matching_groups_v8_corrected.png",
+      "Hash": "81b929933ec661a1b166a1bd395073fe5a372ff01aae24ac782bb146464d7623",
+      "Bytes": 1352760,
+      "Reason": "Superseded illustration"
+    },
+    {
+      "Path": "concept_figures_v8/matching_groups_v8.png",
+      "Hash": "d542f849e1539e652ee38850e724cde498f30f9506a9ceb1984118b136cac273",
+      "Bytes": 1164968,
+      "Reason": "Superseded illustration"
+    },
+    {
+      "Path": "concept_figures_v8/problem_setup_v8.png",
+      "Hash": "8c2a00c9e8e543efda974bd8d9378d9b3838fd96d5a04ab92369587fb0b12fa8",
+      "Bytes": 1200326,
+      "Reason": "Superseded illustration"
+    },
+    {
+      "Path": "concept_figures_v8/prompts_and_usage.md",
+      "Hash": "5a417d50876f6e68d38ac3fd223836e51582023caed000379cb3b276c19499da",
+      "Bytes": 6453,
+      "Reason": "Merged into sources/image_generation_prompts.md"
+    },
+    {
+      "Path": "concept_figures_v9/prompts_and_usage.md",
+      "Hash": "fc579c6f9c9508482dfcb3d200645d52a2c1272ac97bc70e877f54ae4feecfe0",
+      "Bytes": 4331,
+      "Reason": "Merged into sources/image_generation_prompts.md"
+    },
+    {
+      "Path": "data/english_typography_audit.json",
+      "Hash": "a30057bc3d6c037d6761b3a912349a57115c98917c18c166d2e89ad017adeab7",
+      "Bytes": 24310,
+      "Reason": "Obsolete typography audit"
+    },
+    {
+      "Path": "gpt_image_flowcharts/illustrated_prompts_en.md",
+      "Hash": "b4d9ab4fb189e9f614010d21882004b5833af434e898986436d97e8047fb1ada",
+      "Bytes": 18291,
+      "Reason": "Merged into sources/image_generation_prompts.md"
+    },
+    {
+      "Path": "gpt_image_flowcharts/intro_model_gpt_en.png",
+      "Hash": "847371c21bb428dd177dc3738513fb9a156ef40e9d6a3236b85b10618ad5abe3",
+      "Bytes": 1294974,
+      "Reason": "Superseded illustration"
+    },
+    {
+      "Path": "gpt_image_flowcharts/intro_pipeline_gpt_en.png",
+      "Hash": "ae4b7ce0fc4aca96239fe7f7a83b244e49325deb0d6ce98d82105842e65f87d3",
+      "Bytes": 980261,
+      "Reason": "Superseded illustration"
+    },
+    {
+      "Path": "gpt_image_flowcharts/intro_routing_gpt_en.png",
+      "Hash": "1293a44280a87dbfe5977bb01a3596b084aefe671a82105e266c406235bf65f7",
+      "Bytes": 1130300,
+      "Reason": "Superseded illustration"
+    },
+    {
+      "Path": "gpt_image_flowcharts/intro_routing_gpt_illustrated_en.png",
+      "Hash": "cfbe2bf3a5e7efb08cb3a2f45bf640c0e9e2408a8670d50d442fd81227a428e2",
+      "Bytes": 1701895,
+      "Reason": "Superseded illustration"
+    },
+    {
+      "Path": "gpt_image_flowcharts/prompts_en.md",
+      "Hash": "e285a0c3aee2264d14beea5b4966091699e38e83ffecc5228b7e3c618058db55",
+      "Bytes": 8499,
+      "Reason": "Merged into sources/image_generation_prompts.md"
+    },
+    {
+      "Path": "gpt_image_flowcharts/README.md",
+      "Hash": "9a9dee7962886208625c721ff98f073bbbde9cdf0ca812b4e761bf2cda7b633e",
+      "Bytes": 2080,
+      "Reason": "Merged into sources/image_generation_prompts.md"
+    },
+    {
+      "Path": "gpt_image_flowcharts/routing_icons_v3_prompt.md",
+      "Hash": "6ff2e02d141a192359d81f778e29ab6c27f3f82e8a7114e6e02afdef9ad9b012",
+      "Bytes": 2753,
+      "Reason": "Merged into sources/image_generation_prompts.md"
+    }
+  ]
+}

@@ -93,7 +93,7 @@ class TestResponseSimilarity:
 
 class TestRetrievalMetrics:
     def test_structure_overall_and_families(self) -> None:
-        emb, resp = _cluster_pool()
+        emb, resp = _cluster_pool(dims=RESPONSE_DIM)
         mask = torch.ones_like(resp, dtype=torch.bool)
         metrics = evaluation.retrieval_metrics(emb, resp, mask, k=4)
         assert "overall" in metrics
@@ -121,6 +121,22 @@ class TestRetrievalMetrics:
         assert block["baseline_corr"] is None
         assert block["n_comparable_units"] == 0
         assert isinstance(metrics["overall"]["nn_corr@k"], (int, float))
+
+    def test_per_family_offsets_are_not_duplicated(self) -> None:
+        emb, resp = _cluster_pool(dims=6)
+        mask = torch.ones_like(resp, dtype=torch.bool)
+        offsets = {"viirs": (0, 6, [])}
+        metrics = evaluation.retrieval_metrics(
+            emb, resp, mask, k=4, response_offsets=offsets
+        )
+        assert set(metrics) == {"overall", "viirs"}
+        assert metrics["viirs"]["nn_corr@k"] is not None
+
+    def test_unknown_families_without_offsets_raise(self) -> None:
+        emb, resp = _cluster_pool(dims=6)
+        mask = torch.ones_like(resp, dtype=torch.bool)
+        with pytest.raises(ValueError, match="response_offsets"):
+            evaluation.response_similarity(resp, mask, families=["viirs"])
 
     def test_cluster_signal_beats_random_neighbour_baseline(self) -> None:
         emb, resp = _cluster_pool()
@@ -201,6 +217,56 @@ class TestPermutationTest:
             emb_cos, resp, mask, k=5, n_perm=20, seed=1, max_units=32
         )
         assert result["n_units"] == 32
+
+
+class TestPlanningSemanticClassification:
+    def test_per_family_offsets_are_supported(self) -> None:
+        responses = torch.tensor(
+            [
+                [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+                [-1.0, -1.0, -1.0, -1.0, -1.0, -1.0],
+            ]
+        )
+        predictions = {"viirs": responses.clone()}
+        mask = torch.ones_like(responses, dtype=torch.bool)
+        result = evaluation.planning_semantic_classification_metrics(
+            predictions,
+            responses,
+            mask,
+            response_offsets={"viirs": (0, 6, [])},
+        )
+        assert set(result) == {"viirs"}
+        assert result["viirs"]["accuracy"] == 1.0
+
+    def test_full_vector_prediction_is_split_by_offsets(self) -> None:
+        offsets = {"viirs": (0, 2, []), "poi": (2, 4, [])}
+        responses = torch.tensor([[1.0, 1.0, -1.0, -1.0], [-1.0, -1.0, 1.0, 1.0]])
+        predictions = {"response": responses.clone()}
+        mask = torch.ones_like(responses, dtype=torch.bool)
+        result = evaluation.planning_semantic_classification_metrics(
+            predictions,
+            responses,
+            mask,
+            response_offsets=offsets,
+        )
+        assert set(result) == {"viirs", "poi"}
+        assert result["viirs"]["accuracy"] == 1.0
+        assert result["poi"]["accuracy"] == 1.0
+
+    def test_masked_nan_cells_do_not_poison_means(self) -> None:
+        responses = torch.full((2, 6), float("nan"))
+        responses[:, :3] = torch.tensor([[1.0, 1.0, 1.0], [-1.0, -1.0, -1.0]])
+        predictions = responses.clone()
+        predictions = torch.nan_to_num(predictions, nan=0.0)
+        mask = torch.isfinite(responses)
+        result = evaluation.planning_semantic_classification_metrics(
+            {"viirs": predictions},
+            responses,
+            mask,
+            response_offsets={"viirs": (0, 6, [])},
+        )
+        assert result["viirs"]["accuracy"] == 1.0
+        assert result["viirs"]["sample_count"] == 2
 
 
 class TestProbeRmse:

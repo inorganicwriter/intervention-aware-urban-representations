@@ -81,3 +81,13 @@ data/active/catalog/snapshots/
 data/active/catalog/migrations/
 data/active/catalog/inventories/
 data/active/model_inputs/
+data/active/alphaearth/
+data/active/alphaearth_grid_v2/
+data/active/intervention_grid_v1/
+data/active/multimodal_inputs_v1/
+data/active/satellite_event_sequences_v2/
+data/active/satellite_grid_images_v1/
+data/active/streetview_grid_v2/
+
+# Local-only STC asset-transfer checksum files
+.stc_acceptance_transfer_*_SHA256SUMS.local

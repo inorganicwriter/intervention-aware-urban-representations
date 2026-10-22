@@ -11,9 +11,9 @@ Metadata columns (extra columns are ignored)::
 
     province, city, county, wgs_lon, wgs_lat, panoid, capture_date, status
 
-Only successful captures with finite coordinates are kept.  Grid assignment
-is exact for the regular 500m lattice of the reference grids: the latitude
-band selects the row, then a per-row lon searchsorted selects the column.
+Only successful captures with finite coordinates are kept. Grid assignment
+uses the frozen reference polygons. Ambiguous shared-boundary captures are
+left unassigned, matching the causal design's unique-grid requirement.
 
 Usage::
 
@@ -30,6 +30,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import shapely
+from shapely import STRtree
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
@@ -79,7 +81,7 @@ def read_metadata(paths: list[Path], status_value: str) -> pd.DataFrame:
 def assign_grids_bbox(
     longitudes: np.ndarray, latitudes: np.ndarray, grids: pd.DataFrame
 ) -> pd.Series:
-    """Assign each point to its containing grid; NaN when outside the lattice."""
+    """Legacy axis-aligned lookup; not valid for the projected production grids."""
     required = {"grid_id", "lon_min", "lon_max", "lat_min", "lat_max"}
     missing = required - set(grids.columns)
     if missing:
@@ -121,6 +123,36 @@ def assign_grids_bbox(
     return pd.Series(result)
 
 
+def assign_grids_polygon(
+    longitudes: np.ndarray, latitudes: np.ndarray, grids: pd.DataFrame
+) -> pd.Series:
+    """Assign captures by actual polygon containment, never bounding boxes."""
+    if "geometry_wkt" not in grids or "grid_id" not in grids:
+        raise ValueError("Reference grids require grid_id and geometry_wkt")
+    if grids["grid_id"].duplicated().any():
+        raise ValueError("Reference grids have duplicate grid_id")
+    longitudes = np.asarray(longitudes, dtype=float)
+    latitudes = np.asarray(latitudes, dtype=float)
+    if longitudes.ndim != 1 or latitudes.shape != longitudes.shape:
+        raise ValueError("Coordinate arrays must be matching one-dimensional arrays")
+    result = np.full(len(longitudes), None, dtype=object)
+    if grids.empty or not len(result):
+        return pd.Series(result, dtype=object)
+    polygons = shapely.from_wkt(grids["geometry_wkt"].to_numpy())
+    if not np.all(shapely.is_valid(polygons) & ~shapely.is_empty(polygons)):
+        raise ValueError("Reference grids contain invalid polygons")
+    valid = np.isfinite(longitudes) & np.isfinite(latitudes)
+    source_indices = np.flatnonzero(valid)
+    points = shapely.points(longitudes[valid], latitudes[valid])
+    point_indices, grid_indices = STRtree(polygons).query(points, predicate="covered_by")
+    match_counts = np.bincount(point_indices, minlength=len(points))
+    unique = match_counts[point_indices] == 1
+    result[source_indices[point_indices[unique]]] = grids["grid_id"].to_numpy()[
+        grid_indices[unique]
+    ]
+    return pd.Series(result, dtype=object)
+
+
 def resolve_image_path(
     images_dir: Path, panoid: str, extensions: tuple[str, ...] = IMAGE_EXTENSIONS
 ) -> Path | None:
@@ -159,7 +191,7 @@ def build_city_index(
         ), audit
     if limit is not None and len(data) > limit:
         data = data.sample(n=limit, random_state=0).reset_index(drop=True)
-    data["grid_id"] = assign_grids_bbox(
+    data["grid_id"] = assign_grids_polygon(
         data["wgs_lon"].to_numpy(dtype=np.float64),
         data["wgs_lat"].to_numpy(dtype=np.float64),
         grids,
@@ -236,7 +268,7 @@ def main() -> int:
             audits[city] = {"skipped": f"grids not found: {grids_file}"}
             continue
         grids = pd.read_parquet(
-            grids_file, columns=["grid_id", "lon_min", "lon_max", "lat_min", "lat_max"]
+            grids_file, columns=["grid_id", "geometry_wkt"]
         )
         frame, audit = build_city_index(
             city,
@@ -260,6 +292,8 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     index.to_parquet(args.output, index=False, compression="zstd")
     summary = {
+        "spatial_support": "fixed_grid_polygon_v1",
+        "grid_assignment": "unique_point_in_polygon",
         "output": str(args.output),
         "rows": int(len(index)),
         "cities": int(index["city_key"].nunique()) if not index.empty else 0,

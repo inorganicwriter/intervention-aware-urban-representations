@@ -1,0 +1,16 @@
+{
+  "source": "Reported server summaries",
+  "input_rows": 10,
+  "benchmark_rows": 10,
+  "gain_rows": 4,
+  "gain_selection": "Both supervised variants in each family; raw is the fixed reference",
+  "gain_definition": "supervised mean minus raw mean",
+  "uncertainty": "Supervised: three-seed SD; appearance AE: reported range; neither is CI",
+  "gain_sd": "Subtracting fixed raw score leaves reported supervised seed SD unchanged",
+  "benchmark_axes": "Independent y-scales, zero baseline",
+  "gain_axes": "Shared absolute x-scale with zero reference",
+  "font": "Times New Roman",
+  "units": "Correlation score; gains are not percentage points",
+  "protocol": "Earlier city split; VIIRS test n=205, POI test n=220",
+  "embedding_projection": "Unavailable locally; no synthetic embedding points drawn"
+}

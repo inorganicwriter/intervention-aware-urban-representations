@@ -1,0 +1,5 @@
+family,model,raw_mean,mean_gain,seed_sd,n_seeds
+viirs,supervised,0.0036,0.0114,0.0067,3
+viirs,queue_off,0.0036,0.021400000000000002,0.0184,3
+poi,supervised,0.1089,-0.013399999999999995,0.0025,3
+poi,queue_off,0.1089,-0.008300000000000002,0.0174,3

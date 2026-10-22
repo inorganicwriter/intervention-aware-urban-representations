@@ -1,0 +1,52 @@
+{
+  "date": "2026-10-05",
+  "tool": "built-in image_gen",
+  "reference_role": "style and composition only",
+  "images": [
+    {
+      "file": "../diagrams/full_pipeline.png",
+      "size": [
+        1672,
+        941
+      ],
+      "source_file": "exec-bcb60b6c-5aec-42b7-9277-7d3e3bc01232.png",
+      "sha256": "9734a7583b7a596a02d6fd62d07930db7e0f959af413840b7516168cc0436468",
+      "type": "conceptual illustration",
+      "original_file": "intro_pipeline_gpt_illustrated_en.png",
+      "status": "retained"
+    },
+    {
+      "file": null,
+      "size": [
+        1672,
+        941
+      ],
+      "source_file": "exec-32633280-74c1-4f08-83c7-a94e65e960b2.png",
+      "sha256": "cfbe2bf3a5e7efb08cb3a2f45bf640c0e9e2408a8670d50d442fd81227a428e2",
+      "type": "conceptual illustration",
+      "original_file": "intro_routing_gpt_illustrated_en.png",
+      "status": "superseded by ../diagrams/causal_routing.png"
+    },
+    {
+      "file": "../diagrams/model_architecture.png",
+      "size": [
+        1672,
+        941
+      ],
+      "source_file": "exec-26cacbc0-a46c-46b5-8aec-0a106ed4a0a6.png",
+      "sha256": "da944ce69b086f46ad8b8ada6f8f3881f1c4bc81dbe0576658a64e97bbbbf5f2",
+      "type": "conceptual illustration",
+      "original_file": "intro_model_gpt_illustrated_en.png",
+      "status": "retained"
+    }
+  ],
+  "pdf_changed": false,
+  "checks": [
+    "routing order",
+    "opening timeline",
+    "feature/supervision separation",
+    "parallel loss arrows",
+    "loss coefficients",
+    "illustration labels"
+  ]
+}
